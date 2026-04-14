@@ -1,0 +1,12 @@
+{
+  "samples": [
+    {
+      "user_message": "Thank you, that solved my problem!",
+      "is_issue": false
+    },
+    {
+      "user_message": "Sounds good, talk tomorrow.",
+      "is_issue": false
+    }
+  ]
+}

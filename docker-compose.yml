@@ -1,0 +1,61 @@
+# BitBot — frontend, backend, Postgres, Elasticsearch, ModernBERT (BentoML)
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ecom_support}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+
+  modernbert:
+    build: ./services/modernbert_bento
+    environment:
+      MODERNBERT_MODEL_DIR: /models/modernbert_finetuned
+      CLASSIFIER_THRESHOLD: ${CLASSIFIER_THRESHOLD:-0.7}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./training/models/modernbert_finetuned:/models/modernbert_finetuned:ro
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      CLASSIFIER_BENTOML_URL: http://modernbert:3000/classify
+    depends_on:
+      - postgres
+      - elasticsearch
+      - modernbert
+    volumes:
+      - ./backend:/app/backend
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8501:8501"
+    environment:
+      BACKEND_BASE_URL: http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  esdata:

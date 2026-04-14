@@ -134,6 +134,14 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Trained model weights (keep README in training/models/modernbert_finetuned/)
+training/models/modernbert_finetuned/**
+!training/models/modernbert_finetuned/README.md
+
+# Generated dataset artifacts (optional local outputs)
+training/data/bitext/
+training/data/bitext_binary_issue/
+
 # Environments
 .env
 .envrc
