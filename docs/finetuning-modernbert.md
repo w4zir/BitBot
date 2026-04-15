@@ -14,39 +14,61 @@ Install training dependencies from the repo root:
 pip install -r training/requirements-train.txt
 ```
 
-## 1. Multiclass Bitext dataset (`dataset_full.json`)
+## 1. Bitext + synthetic no_issue → train/eval/test (single script)
 
 **Script:** [`training/scripts/create_bitext_dataset.py`](../training/scripts/create_bitext_dataset.py)
 
-Loads **`bitext/Bitext-customer-support-llm-chatbot-training-dataset`** from Hugging Face (`instruction` → `text`, `intent` → `label`) and optionally merges synthetic **no_issue** rows from JSON files matching `no_issue_*.json` under `--synthetic-dir`.
+Loads **`bitext/Bitext-customer-support-llm-chatbot-training-dataset`** from Hugging Face (`instruction` → `text`; `category` and `intent` are used depending on mode) and optionally merges synthetic **no_issue** rows from JSON files matching `no_issue_*.json` under `--input-dir` / `--synthetic-dir` (default: `data/raw/synthetic/no_issue`).
 
-### Option A — Bitext + synthetic no_issue (default)
+Choose a **`--mode`**:
 
-Uses committed samples under `training/data/samples/synthetic_no_issue/`:
+| Mode | Labels |
+|------|--------|
+| `binary` | Bitext → `issue`, synthetic → `no_issue`; JSONL uses `0` / `1` |
+| `category` | Bitext → HF `category`, synthetic → `no_issue`; JSONL uses `label2id.json` |
+| `intent` | Bitext → HF `intent`, synthetic → `no_issue`; JSONL uses `label2id.json` |
+
+Default split: **70% / 15% / 15%** (`--train-ratio`, `--eval-ratio`).
+
+### Examples
+
+**Intent multiclass + synthetic no_issue** (writes `label2id.json`):
 
 ```bash
-python training/scripts/create_bitext_dataset.py --output-dir training/data/bitext
+python training/scripts/create_bitext_dataset.py --mode intent \
+  --input-dir data/raw/synthetic/no_issue \
+  --output-dir training/data/bitext
 ```
 
-### Option B — Bitext only (no synthetic files)
+**Binary issue / no_issue**:
 
 ```bash
-python training/scripts/create_bitext_dataset.py --bitext-only --output-dir training/data/bitext
+python training/scripts/create_bitext_dataset.py --mode binary \
+  --input-dir data/raw/synthetic/no_issue \
+  --output-dir training/data/bitext_binary_issue
 ```
+
+**Bitext only** (no synthetic files):
+
+```bash
+python training/scripts/create_bitext_dataset.py --mode intent --bitext-only --output-dir training/data/bitext
+```
+
+**Optional** `--write-dataset-full` also writes `dataset_full.json` (deduped string labels for the chosen mode).
 
 **Outputs** (under `--output-dir`):
 
 | File | Purpose |
 |------|---------|
-| `dataset_full.json` | `[{ "text", "label" }, ...]` string labels |
-| `label2id.json` | Multiclass label → integer id |
-| `dataset_stats.json` | Build statistics |
+| `train.jsonl`, `eval.jsonl`, `test.jsonl` | Ready for training (`label` int; binary uses 0/1) |
+| `label2id.json` | Present for `category` and `intent` modes |
+| `dataset_stats.json` | Build + split statistics |
 
-## 2. Multiclass train/eval/test JSONL (optional)
+## 2. Multiclass train/eval/test JSONL from `dataset_full.json` (optional two-step)
 
 **Script:** [`training/scripts/build_bitext_training_dataset.py`](../training/scripts/build_bitext_training_dataset.py)
 
-Stratified split of `dataset_full.json` into `train.jsonl` / `eval.jsonl` / `test.jsonl` with **integer** labels from `label2id.json`.
+Use this if you already have `dataset_full.json` + `label2id.json` from another source.
 
 ```bash
 python training/scripts/build_bitext_training_dataset.py \
@@ -55,14 +77,11 @@ python training/scripts/build_bitext_training_dataset.py \
   --output-dir training/data/bitext
 ```
 
-## 3. Binary issue / no_issue JSONL
+## 3. Binary issue / no_issue from `dataset_full.json` (optional two-step)
 
 **Script:** [`training/scripts/build_binary_issue_training_dataset.py`](../training/scripts/build_binary_issue_training_dataset.py)
 
-Maps multiclass string labels to binary:
-
-- `no_issue` → **0**
-- any other intent → **1** (treated as issue-like)
+Maps string labels to binary (`no_issue` → **0**, anything else → **1**). Prefer **`create_bitext_dataset.py --mode binary`** for a single step when building from Bitext + synthetic.
 
 ```bash
 python training/scripts/build_binary_issue_training_dataset.py \
