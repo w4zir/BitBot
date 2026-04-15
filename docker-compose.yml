@@ -27,11 +27,12 @@ services:
   modernbert:
     build: ./services/modernbert_bento
     environment:
-      MODERNBERT_MODEL_DIR: ${MODERNBERT_MODEL_DIR:-/models/modernbert_winner}
+      MODERNBERT_MODEL_DIR: ${MODERNBERT_MODEL_DIR:-/training/models/bitext_multiclass_finetuned_20260415T120000Z/winner}
     ports:
       - "3000:3000"
     volumes:
-      - ${MODERNBERT_MODEL_SOURCE:-./training/models/bitext_multiclass_finetuned/winner}:/models/modernbert_winner:ro
+      - ./training/models:/training/models:ro
+      - ${MODERNBERT_MODEL_SOURCE:-./training/models/bitext_multiclass_finetuned_20260415T120000Z/winner}:${MODERNBERT_MODEL_DIR:-/training/models/bitext_multiclass_finetuned_20260415T120000Z/winner}:ro
 
   backend:
     build: ./backend

@@ -1,19 +1,65 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any, Dict
 
 import bentoml
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, PreTrainedTokenizerFast
 
 MODEL_DIR = os.getenv("MODERNBERT_MODEL_DIR", "/models/modernbert_winner")
 
 
+def _resolve_model_dir() -> str:
+    primary = Path(MODEL_DIR)
+    fallback_dirs = sorted(
+        Path("/training/models").glob("*/winner"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+    candidates = [primary, *fallback_dirs, Path("/models/modernbert_winner")]
+
+    for candidate in candidates:
+        if (candidate / "config.json").exists() and (candidate / "model.safetensors").exists():
+            return str(candidate)
+    raise FileNotFoundError(
+        "No valid ModernBERT model directory found. "
+        f"Checked primary path '{MODEL_DIR}' and fallback paths under /training/models."
+    )
+
+
+def _load_tokenizer(model_dir: str) -> Any:
+    try:
+        return AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+    except Exception:
+        tokenizer_json = Path(model_dir) / "tokenizer.json"
+        tokenizer_config = Path(model_dir) / "tokenizer_config.json"
+        if not tokenizer_json.exists():
+            raise
+
+        tokenizer_kwargs: Dict[str, Any] = {}
+        if tokenizer_config.exists():
+            with tokenizer_config.open("r", encoding="utf-8") as fp:
+                cfg = json.load(fp)
+            for key in ("unk_token", "pad_token", "cls_token", "sep_token", "mask_token"):
+                value = cfg.get(key)
+                if value:
+                    tokenizer_kwargs[key] = value
+
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=str(tokenizer_json),
+            **tokenizer_kwargs,
+        )
+        return tokenizer
+
+
 def _load_model_artifacts() -> tuple[Any, Any]:
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR, trust_remote_code=True)
+    model_dir = _resolve_model_dir()
+    tokenizer = _load_tokenizer(model_dir)
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_DIR,
+        model_dir,
         trust_remote_code=True,
     )
     model.eval()
