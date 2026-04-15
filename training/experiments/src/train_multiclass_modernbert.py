@@ -13,6 +13,10 @@ JSONL schema (one object per line):
 The base checkpoint is stored at ``training/models/modernbert-base-zeroshot-v2.0``;
 if missing, it is downloaded from Hugging Face ``MoritzLaurer/ModernBERT-base-zeroshot-v2.0``.
 
+Checkpoints and logs go under a timestamped directory by default, for example
+``training/models/bitext_multiclass_finetuned_<UTC_TIMESTAMP>/``. The best model
+(by eval ``f1_macro``) is written to ``.../winner/`` after training.
+
 Local (from repo root)::
 
     pip install -r training/requirements-train.txt
@@ -209,7 +213,15 @@ def _parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=_DEFAULT_OUTPUT_DIR,
-        help=f"Run output directory for checkpoints and exported model (default: {_DEFAULT_OUTPUT_DIR}).",
+        help=(
+            "Base directory name for this run; a UTC timestamp is appended by default "
+            f"(e.g. {_DEFAULT_OUTPUT_DIR}_20250415T120000Z) so each finetuning run has its own folder."
+        ),
+    )
+    p.add_argument(
+        "--no-output-timestamp",
+        action="store_true",
+        help="Use --output-dir exactly as given (no UTC timestamp suffix on the folder name).",
     )
     p.add_argument(
         "--results-dir",
@@ -440,7 +452,12 @@ def main() -> int:
     num_labels, id2label, label2id = load_label_maps(label2id_path)
     valid_ids = set(label2id.values())
 
-    output_dir = args.output_dir.resolve()
+    output_base = args.output_dir.resolve()
+    if args.no_output_timestamp:
+        output_dir = output_base
+    else:
+        run_ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        output_dir = output_base.parent / f"{output_base.name}_{run_ts}"
     output_dir.mkdir(parents=True, exist_ok=True)
     results_dir = args.results_dir.resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -554,7 +571,8 @@ def main() -> int:
         **_trainer_tokenizer_kwargs(tokenizer),
     )
 
-    _LOG.info("Training; artifacts -> %s", output_dir)
+    winner_dir = output_dir / "winner"
+    _LOG.info("Training; artifacts -> %s (best model will be saved under %s)", output_dir, winner_dir)
     _LOG.info("Eval every %s steps on %s", eval_steps, eval_path)
     train_result = trainer.train()
     _LOG.info("Train loss=%s", getattr(train_result, "training_loss", None))
@@ -585,8 +603,11 @@ def main() -> int:
     print("\n=== Final test (test.jsonl) ===")
     print(json.dumps(test_metrics, indent=2))
 
-    trainer.save_model(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    # load_best_model_at_end=True ensures the in-memory model is the eval-f1_macro winner.
+    winner_dir.mkdir(parents=True, exist_ok=True)
+    trainer.save_model(str(winner_dir))
+    tokenizer.save_pretrained(str(winner_dir))
+    _LOG.info("Saved final winner (best checkpoint) to %s", winner_dir)
 
     train_out_metrics = getattr(train_result, "metrics", None)
     finished_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -606,6 +627,7 @@ def main() -> int:
         "hub_model_id": args.hub_model_id,
         "local_base_model_dir": str(local_base),
         "model_load_path": model_load_path,
+        "finetuned_winner_dir": str(winner_dir),
         "label2id_file": str(label2id_path),
         "label2id": label2id,
         "num_labels": num_labels,
@@ -645,6 +667,7 @@ def main() -> int:
             "hub_model_id": args.hub_model_id,
             "local_base_model_dir": str(local_base),
             "finetuned_output_dir": str(output_dir),
+            "finetuned_winner_dir": str(winner_dir),
         },
         "data": {
             "dataset_dir": str(dataset_dir),
