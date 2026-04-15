@@ -1,0 +1,138 @@
+{
+  "issue_categories": {
+    "order": {
+      "display_name": "Order Issue",
+      "required_fields": [
+        {
+          "name": "order_id",
+          "prompt": "Please provide your order number (e.g. ORD-12345).",
+          "validation": "^ORD-\\d+$"
+        },
+        {
+          "name": "email",
+          "prompt": "What email address is associated with your account?",
+          "validation": "email"
+        }
+      ],
+      "optional_fields": [
+        {
+          "name": "item_name",
+          "prompt": "Which specific item is affected?"
+        }
+      ]
+    },
+    "payment": {
+      "display_name": "Payment Issue",
+      "required_fields": [
+        {
+          "name": "transaction_id",
+          "prompt": "Please share your transaction ID from your receipt (e.g. TXN-12345).",
+          "validation": "^TXN-\\d+$"
+        },
+        {
+          "name": "amount",
+          "prompt": "What was the charge amount?"
+        }
+      ]
+    },
+    "account": {
+      "display_name": "Account Issue",
+      "required_fields": [
+        {
+          "name": "email",
+          "prompt": "What email is on the account?",
+          "validation": "email"
+        },
+        {
+          "name": "account_type",
+          "prompt": "Is this a personal or business account?",
+          "validation": ["personal", "business"]
+        }
+      ]
+    },
+    "delivery": {
+      "display_name": "Delivery Issue",
+      "required_fields": [
+        {
+          "name": "order_or_tracking",
+          "prompt": "Please share your order number or tracking ID."
+        },
+        {
+          "name": "issue_summary",
+          "prompt": "What delivery problem are you seeing (late, wrong address, damaged)?"
+        }
+      ]
+    },
+    "shipping": {
+      "display_name": "Shipping Issue",
+      "required_fields": [
+        {
+          "name": "order_or_tracking",
+          "prompt": "Please share your order number or tracking ID."
+        }
+      ]
+    },
+    "refund": {
+      "display_name": "Refund Issue",
+      "required_fields": [
+        {
+          "name": "order_id",
+          "prompt": "Please provide the order number related to the refund (e.g. ORD-12345)."
+        },
+        {
+          "name": "reason",
+          "prompt": "Why are you requesting a refund?"
+        }
+      ]
+    },
+    "cancel": {
+      "display_name": "Cancellation",
+      "required_fields": [
+        {
+          "name": "order_id",
+          "prompt": "Which order would you like to cancel (order number)?"
+        }
+      ]
+    },
+    "contact": {
+      "display_name": "Contact / Other",
+      "required_fields": [
+        {
+          "name": "reason",
+          "prompt": "What do you need help with?"
+        }
+      ]
+    },
+    "feedback": {
+      "display_name": "Feedback",
+      "required_fields": [
+        {
+          "name": "feedback",
+          "prompt": "Please share your feedback in a sentence or two."
+        }
+      ]
+    },
+    "invoice": {
+      "display_name": "Invoice",
+      "required_fields": [
+        {
+          "name": "invoice_id",
+          "prompt": "Please provide the invoice number or ID."
+        }
+      ]
+    },
+    "subscription": {
+      "display_name": "Subscription",
+      "required_fields": [
+        {
+          "name": "account_email",
+          "prompt": "What email is tied to the subscription?"
+        },
+        {
+          "name": "subscription_issue",
+          "prompt": "What subscription issue are you seeing?"
+        }
+      ]
+    }
+  }
+}

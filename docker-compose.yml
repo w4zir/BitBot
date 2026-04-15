@@ -39,6 +39,16 @@ services:
       - "8000:8000"
     environment:
       CLASSIFIER_BENTOML_URL: http://modernbert:3000/classify
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-ecom_support}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      NO_ISSUE_MODEL_PROVIDER: ${NO_ISSUE_MODEL_PROVIDER:-ollama}
+      NO_ISSUE_MODEL: ${NO_ISSUE_MODEL:-llama3.2}
+      VALIDATION_MODEL_PROVIDER: ${VALIDATION_MODEL_PROVIDER:-ollama}
+      VALIDATION_MODEL: ${VALIDATION_MODEL:-llama3.2}
     depends_on:
       - postgres
       - elasticsearch

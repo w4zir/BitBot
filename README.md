@@ -7,16 +7,17 @@ Agentic bot for any business — **BitBot** bootstrap with **issue / no_issue** 
 ```mermaid
 flowchart LR
   fe[Streamlit_frontend] --> be[FastAPI_backend]
-  be --> lg[LangGraph_classify_flow]
+  be --> lg[LangGraph_routing]
   lg --> bento[ModernBERT_Bento]
+  lg --> llm[Ollama_or_Cerebras]
   be --> pg[(Postgres)]
   be --> es[(Elasticsearch)]
   train[Dataset_and_finetune_scripts] --> artifacts[Local_model_dir]
   artifacts --> bento
 ```
 
-- **Frontend** (`frontend/`): Streamlit UI calling `POST /classify`.
-- **Backend** (`backend/`): FastAPI + minimal **LangGraph** graph (`backend/agent/issue_graph.py`) that classifies via HTTP to the Bento service (`backend/rag/query_classifier.py`).
+- **Frontend** (`frontend/`): Streamlit chat UI calling `POST /classify` with `full_flow` for session + LangGraph + LLM branches.
+- **Backend** (`backend/`): FastAPI + **LangGraph** (`backend/agent/issue_graph.py`): Bento classification → `no_issue` (LLM reply) or **validation** (LLM + `backend/config/issue_required_fields.json`), with hybrid session history in Postgres (`sessions` / `messages`).
 - **ModernBERT** (`services/modernbert_bento/`): BentoML service loading a local fine-tuned checkpoint.
 - **Data stores**: Postgres (pgvector-ready schema in `infra/postgres/init.sql`) and Elasticsearch for future RAG; not required for the classification demo alone.
 
@@ -46,10 +47,16 @@ flowchart LR
 
 4. Open the UI at **http://localhost:8501** (backend API: **http://localhost:8000**).
 
-5. Try classification:
+5. Try classification (Bento only, no Postgres/LLM):
 
    ```bash
-   curl -s -X POST http://localhost:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\"}"
+   curl -s -X POST http://localhost:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\",\"full_flow\":false}"
+   ```
+
+6. Full conversation flow (Postgres + LangGraph + local Ollama): set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `OLLAMA_BASE_URL` in `.env` (see `.env.example`). Ensure Postgres is up and Ollama is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). Then:
+
+   ```bash
+   curl -s -X POST http://localhost:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"
    ```
 
 ## Repository layout
