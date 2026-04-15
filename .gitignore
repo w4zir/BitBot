@@ -134,23 +134,35 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Trained model weights (keep README in training/models/modernbert_finetuned/)
-training/models/modernbert_finetuned/**
-!training/models/modernbert_finetuned/README.md
+# ML / training outputs & local model trees
+training/models/
+training/**/checkpoints/
+training/**/wandb/
+training/**/outputs/
+training/**/lightning_logs/
+runs/
+mlruns/
 
 # Generated dataset artifacts (optional local outputs)
 training/data/bitext/
 training/data/bitext_binary_issue/
 
-# Environments
+# Virtual environments & local Python installs
 .env
 .envrc
-.venv
-env/
+.venv/
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
+.pvenv/
+.python-env/
+.virtualenv/
+virtualenv/
+# Conda/pixi local env dirs sometimes created inside a project tree
+.conda/
+conda-env/
 
 # Spyder project settings
 .spyderproject
