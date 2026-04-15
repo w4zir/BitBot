@@ -42,11 +42,6 @@
           "name": "email",
           "prompt": "What email is on the account?",
           "validation": "email"
-        },
-        {
-          "name": "account_type",
-          "prompt": "Is this a personal or business account?",
-          "validation": ["personal", "business"]
         }
       ]
     },

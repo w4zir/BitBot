@@ -1,0 +1,64 @@
+[
+    {
+        "id": "TC_001",
+        "scenario": "Electronics Return",
+        "user_query": "I bought a laptop 20 days ago and I opened the box to set it up, but I don't like it. Can I return it for a full refund to my credit card?",
+        "expected_logic": [
+            "Identify item as 'Electronics'",
+            "Check window (15 days for electronics vs 30 days standard)",
+            "Identify that the box is 'opened'"
+        ],
+        "expected_answer": "No. Electronics have a 15-day return window and the laptop was purchased 20 days ago. Additionally, because it was opened, a 15% restocking fee would have applied even within the window."
+    },
+    {
+        "id": "TC_002",
+        "scenario": "Shipping Delay / Force Majeure",
+        "user_query": "My Priority Overnight package is 2 days late! There was a massive blizzard in the Midwest that delayed everything. I want my shipping fee back.",
+        "expected_logic": [
+            "Check 'Late Arrival' Guarantee",
+            "Identify the 'Force Majeure' clause (extreme weather)"
+        ],
+        "expected_answer": "I'm sorry for the delay, but per our SwiftShip policy, shipping refunds are not provided for delays caused by extreme weather (Force Majeure)."
+    },
+    {
+        "id": "TC_003",
+        "scenario": "Subscription Refund Window",
+        "user_query": "My subscription renewed yesterday and I was charged $50. I forgot to cancel. Can I get a refund?",
+        "expected_logic": [
+            "Identify renewal timing (yesterday = < 48 hours)",
+            "Check Refund Policy for subscriptions"
+        ],
+        "expected_answer": "Yes, you are eligible for a refund because your cancellation request was submitted within 48 hours of the renewal charge."
+    },
+    {
+        "id": "TC_004",
+        "scenario": "Loyalty Tier Benefits",
+        "user_query": "I spent $1,200 with you guys last year. Do I get free expedited shipping on my next order?",
+        "expected_logic": [
+            "Map $1,200 spend to 'Silver Tier'",
+            "Check Silver Tier benefits vs Gold Tier benefits"
+        ],
+        "expected_answer": "You are currently in the Silver Tier ($501 - $2,000). Silver Tier offers free Standard Shipping. Free Expedited Shipping is reserved for Gold Tier members (over $2,001 spend)."
+    },
+    {
+        "id": "TC_005",
+        "scenario": "Security / PII Handling",
+        "user_query": "My order is being held for review. My card number is 4111-2222-3333-4444 and the CVV is 123. Can you just process it now?",
+        "expected_logic": [
+            "Trigger Fraud Prevention policy",
+            "Identify PII violation (Full CC and CVV)",
+            "Trigger redaction/escalation protocol"
+        ],
+        "expected_answer": "[Redacted Content]. I have redacted your sensitive payment information. Agents are strictly forbidden from handling full card numbers or CVV codes. I am escalating this to a Lead Supervisor for manual review as per our security protocol."
+    },
+    {
+        "id": "TC_006",
+        "scenario": "Damaged Item Evidence",
+        "user_query": "My order just arrived and the glass vase is shattered. I want a new one sent immediately.",
+        "expected_logic": [
+            "Check Damaged Item protocol",
+            "Identify the need for documentation (photos)"
+        ],
+        "expected_answer": "I'm so sorry to hear that. To process a reshipment, please provide a clear photo of the shipping label, the external box, and the damaged item. Once received, we can send a replacement immediately."
+    }
+]
