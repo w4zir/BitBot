@@ -1,4 +1,4 @@
-"""BitBot Streamlit UI — issue / no_issue classification demo."""
+"""BitBot Streamlit UI — category classification demo."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ def _classify(text: str) -> dict:
 
 
 def main() -> None:
-    st.set_page_config(page_title="BitBot — Issue classifier", layout="centered")
-    st.title("BitBot — Issue / no_issue")
+    st.set_page_config(page_title="BitBot — Category classifier", layout="centered")
+    st.title("BitBot — Category classification")
     st.caption(f"Backend: `{BACKEND_DEFAULT}`")
 
     text = st.text_area("Message", placeholder="Type a customer message…", height=120)

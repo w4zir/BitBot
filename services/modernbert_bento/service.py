@@ -7,21 +7,7 @@ import bentoml
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-MODEL_DIR = os.getenv("MODERNBERT_MODEL_DIR", "/models/modernbert_finetuned")
-DEFAULT_THRESHOLD = 0.7
-
-
-def _get_threshold() -> float:
-    raw = os.getenv("CLASSIFIER_THRESHOLD", str(DEFAULT_THRESHOLD))
-    try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_THRESHOLD
-    if value < 0.0:
-        return 0.0
-    if value > 1.0:
-        return 1.0
-    return value
+MODEL_DIR = os.getenv("MODERNBERT_MODEL_DIR", "/models/modernbert_winner")
 
 
 def _load_model_artifacts() -> tuple[Any, Any]:
@@ -35,7 +21,12 @@ def _load_model_artifacts() -> tuple[Any, Any]:
 
 
 TOKENIZER, MODEL = _load_model_artifacts()
-THRESHOLD = _get_threshold()
+
+
+def _resolve_label(idx: int) -> str:
+    id2label = getattr(MODEL.config, "id2label", {}) or {}
+    raw = id2label.get(idx, str(idx))
+    return str(raw)
 
 
 @bentoml.service
@@ -45,9 +36,8 @@ class ModernBertClassifier:
         text = (text or "").strip()
         if not text:
             return {
-                "is_issue": False,
+                "category": "unknown",
                 "confidence": 0.0,
-                "label": "no_issue",
             }
 
         encoded = TOKENIZER(
@@ -60,18 +50,13 @@ class ModernBertClassifier:
             logits = MODEL(**encoded).logits
             probs = torch.softmax(logits, dim=-1)[0]
 
-        issue_idx = int(MODEL.config.label2id.get("issue", 1))
-        no_issue_idx = int(MODEL.config.label2id.get("no_issue", 0))
-        issue_score = float(probs[issue_idx].item())
-        no_issue_score = float(probs[no_issue_idx].item())
-        is_issue = issue_score >= THRESHOLD
-        label = "issue" if is_issue else "no_issue"
-        confidence = issue_score if is_issue else no_issue_score
+        predicted_idx = int(torch.argmax(probs).item())
+        confidence = float(probs[predicted_idx].item())
+        category = _resolve_label(predicted_idx)
 
         return {
-            "is_issue": is_issue,
+            "category": category,
             "confidence": confidence,
-            "label": label,
         }
 
     @bentoml.api(route="/health")

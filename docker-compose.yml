@@ -27,12 +27,11 @@ services:
   modernbert:
     build: ./services/modernbert_bento
     environment:
-      MODERNBERT_MODEL_DIR: /models/modernbert_finetuned
-      CLASSIFIER_THRESHOLD: ${CLASSIFIER_THRESHOLD:-0.7}
+      MODERNBERT_MODEL_DIR: ${MODERNBERT_MODEL_DIR:-/models/modernbert_winner}
     ports:
       - "3000:3000"
     volumes:
-      - ./training/models/modernbert_finetuned:/models/modernbert_finetuned:ro
+      - ${MODERNBERT_MODEL_SOURCE:-./training/models/bitext_multiclass_finetuned/winner}:/models/modernbert_winner:ro
 
   backend:
     build: ./backend

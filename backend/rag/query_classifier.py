@@ -9,9 +9,8 @@ import httpx
 
 @dataclass(frozen=True)
 class ClassificationResult:
-    is_issue: bool
+    category: str
     confidence: float
-    label: str
 
 
 class QueryClassifier:
@@ -34,18 +33,15 @@ class QueryClassifier:
 
     def classify(self, text: str) -> ClassificationResult:
         if not text or not text.strip():
-            return ClassificationResult(
-                is_issue=False, confidence=0.0, label="no_issue"
-            )
+            return ClassificationResult(category="unknown", confidence=0.0)
         with httpx.Client(timeout=self._timeout) as client:
             resp = client.post(self._endpoint, json={"text": text})
             resp.raise_for_status()
             payload = resp.json() or {}
 
         return ClassificationResult(
-            is_issue=bool(payload.get("is_issue", False)),
+            category=str(payload.get("category", "unknown")),
             confidence=float(payload.get("confidence", 0.0) or 0.0),
-            label=str(payload.get("label", "no_issue")),
         )
 
 

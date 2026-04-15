@@ -15,13 +15,12 @@ class ClassifyRequest(BaseModel):
 
 class ClassifyResponse(BaseModel):
     text: str
-    is_issue: bool
+    category: str
     confidence: float
-    label: str
 
 
 @router.post("/classify", response_model=ClassifyResponse)
 async def classify(req: ClassifyRequest) -> ClassifyResponse:
-    """Run LangGraph issue/no_issue flow (ModernBERT via Bento)."""
+    """Run LangGraph category flow (ModernBERT via Bento)."""
     result = run_issue_classification(req.text)
     return ClassifyResponse(**result)
