@@ -1,25 +1,29 @@
 # BitBot
 
-Agentic bot for any business — **BitBot** bootstrap with **issue / no_issue** classification using **ModernBERT** (fine-tuned `MoritzLaurer/ModernBERT-base-zeroshot-v2.0`), a **LangGraph**-based API flow, and **Docker Compose** for **frontend** (Streamlit), **backend** (FastAPI), **PostgreSQL**, **Elasticsearch**, and a **BentoML** classifier service.
+Agentic bot for any business — **BitBot** bootstrap with **category classification** using **ModernBERT** (fine-tuned `MoritzLaurer/ModernBERT-base-zeroshot-v2.0`), a **procedure-driven LangGraph** API flow, and **Docker Compose** for **frontend** (Streamlit), **backend** (FastAPI), **PostgreSQL**, **Elasticsearch**, and a **BentoML** classifier service.
 
 ## Architecture (overview)
 
 ```mermaid
 flowchart LR
   fe[Streamlit_frontend] --> be[FastAPI_backend]
-  be --> lg[LangGraph_routing]
+  be --> lg[LangGraph_procedure_executor]
   lg --> bento[ModernBERT_Bento]
+  lg --> intent[IntentClassifierScopedByCategory]
+  lg --> yaml[ProcedureYAMLLibrary]
   lg --> llm[Ollama_or_Cerebras]
+  lg --> es[(ElasticsearchPolicyDocs)]
   be --> pg[(Postgres)]
-  be --> es[(Elasticsearch)]
   train[Dataset_and_finetune_scripts] --> artifacts[Local_model_dir]
   artifacts --> bento
 ```
 
 - **Frontend** (`frontend/`): Streamlit chat UI calling `POST /classify` with `full_flow` for session + LangGraph + LLM branches.
-- **Backend** (`backend/`): FastAPI + **LangGraph** (`backend/agent/issue_graph.py`): Bento classification → `no_issue` (LLM reply) or **validation** (LLM + `backend/config/issue_required_fields.json`), with hybrid session history in Postgres (`sessions` / `messages`).
+- **Backend** (`backend/`): FastAPI + **LangGraph** (`backend/agent/issue_graph.py`): Bento category classification → intent classification (scoped to that category) → YAML procedure load (`backend/procedures/*.yaml`) → hybrid required-data validation → structured step execution.
+- **Procedures** (`backend/procedures/`): One YAML blueprint per intent. Blueprints define `required_data` and ordered steps (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) used to enforce deterministic control flow.
 - **ModernBERT** (`services/modernbert_bento/`): BentoML service loading a local fine-tuned checkpoint.
-- **Data stores**: Postgres (pgvector-ready schema in `infra/postgres/init.sql`) and Elasticsearch for future RAG; not required for the classification demo alone.
+- **Policy source**: Policy constraints/content remain external to procedures and come from Elasticsearch-backed policy documents through retrieval steps.
+- **Data stores**: Postgres (pgvector-ready schema in `infra/postgres/init.sql`) plus Elasticsearch for policy retrieval.
 
 ## Documentation
 

@@ -33,7 +33,9 @@ class ClassifyResponse(BaseModel):
     session_id: Optional[str] = None
     text: str
     category: str
+    intent: str = ""
     confidence: float
+    procedure_id: str = ""
     validation_ok: Optional[bool] = None
     validation_missing: list[str] = Field(default_factory=list)
     assistant_reply: Optional[str] = None
@@ -71,7 +73,9 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             session_id=None,
             text=text,
             category=result.category,
+            intent="",
             confidence=result.confidence,
+            procedure_id="",
             validation_ok=None,
             validation_missing=[],
             assistant_reply=None,
@@ -106,6 +110,8 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
 
     cat = graph_out.get("category") or "unknown"
     conf = float(graph_out.get("confidence") or 0.0)
+    intent = str(graph_out.get("intent") or "")
+    procedure_id = str(graph_out.get("procedure_id") or "")
     val_ok = graph_out.get("validation_ok")
     val_missing = list(graph_out.get("validation_missing") or [])
     assistant = graph_out.get("assistant_reply")
@@ -113,6 +119,8 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
 
     assistant_meta: dict[str, Any] = {
         "category": cat,
+        "intent": intent,
+        "procedure_id": procedure_id,
         "confidence": conf,
         **(meta if isinstance(meta, dict) else {}),
     }
@@ -133,7 +141,9 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         session_id=session_id,
         text=text,
         category=str(cat),
+        intent=intent,
         confidence=conf,
+        procedure_id=procedure_id,
         validation_ok=val_ok if isinstance(val_ok, bool) else None,
         validation_missing=val_missing,
         assistant_reply=assistant,

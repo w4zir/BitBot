@@ -1,0 +1,12 @@
+id: generic_support
+category: unknown
+intent: general_research
+keywords: []
+required_data: []
+steps:
+  - id: retrieve_policy
+    type: retrieval
+    tool: policy_general_search
+  - id: draft_response
+    type: llm_response
+fallback_response: I can help with that. Please share more detail so I can search the relevant policy.

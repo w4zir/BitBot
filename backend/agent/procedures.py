@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from pydantic import BaseModel, Field
+
+
+StepType = Literal[
+    "validate_required_data",
+    "retrieval",
+    "tool_call",
+    "logic_gate",
+    "interrupt",
+    "llm_response",
+]
+
+
+class RequiredDataField(BaseModel):
+    name: str
+    prompt: str
+    validation: str | None = None
+
+
+class ProcedureStep(BaseModel):
+    id: str
+    type: StepType
+    tool: str | None = None
+    required_data: list[str] = Field(default_factory=list)
+    condition: str | None = None
+    on_true: str | None = None
+    on_false: str | None = None
+    message: str | None = None
+
+
+class ProcedureBlueprint(BaseModel):
+    id: str
+    category: str
+    intent: str
+    keywords: list[str] = Field(default_factory=list)
+    required_data: list[RequiredDataField] = Field(default_factory=list)
+    steps: list[ProcedureStep]
+    fallback_response: str | None = None
+
+
+def procedures_dir() -> Path:
+    raw = os.getenv("PROCEDURES_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    root = Path(__file__).resolve().parents[1]
+    return root / "procedures"
+
+
+@lru_cache(maxsize=1)
+def load_blueprints() -> dict[str, ProcedureBlueprint]:
+    out: dict[str, ProcedureBlueprint] = {}
+    base = procedures_dir()
+    if not base.is_dir():
+        return out
+    for path in sorted(base.glob("*.yaml")):
+        with path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        bp = ProcedureBlueprint.model_validate(data)
+        out[bp.id] = bp
+    return out
+
+
+def get_blueprint_by_category_intent(category: str, intent: str) -> ProcedureBlueprint | None:
+    cat = (category or "").strip().lower()
+    it = (intent or "").strip().lower()
+    for bp in load_blueprints().values():
+        if bp.category.lower() == cat and bp.intent.lower() == it:
+            return bp
+    return None
+
+
+def get_fallback_blueprint(category: str) -> ProcedureBlueprint | None:
+    cat = (category or "").strip().lower()
+    for bp in load_blueprints().values():
+        if bp.category.lower() == cat and bp.intent.lower().endswith("_general"):
+            return bp
+    for bp in load_blueprints().values():
+        if bp.id == "general_research":
+            return bp
+    return None
+
+
+def get_category_intents(category: str) -> list[ProcedureBlueprint]:
+    cat = (category or "").strip().lower()
+    return [bp for bp in load_blueprints().values() if bp.category.lower() == cat]
+
+
+def infer_intent_from_text(*, category: str, text: str) -> str:
+    choices = get_category_intents(category)
+    t = (text or "").strip().lower()
+    if not choices:
+        return f"{(category or 'unknown').lower()}_general"
+    for bp in choices:
+        for kw in bp.keywords:
+            if kw.strip().lower() and kw.strip().lower() in t:
+                return bp.intent
+    return choices[0].intent
+
+
+def validate_blueprints() -> list[str]:
+    errors: list[str] = []
+    blueprints = load_blueprints()
+    for bp in blueprints.values():
+        step_ids = {s.id for s in bp.steps}
+        for step in bp.steps:
+            if step.type == "logic_gate":
+                if not step.on_true or not step.on_false:
+                    errors.append(f"{bp.id}:{step.id} missing on_true/on_false")
+                    continue
+                if step.on_true not in step_ids:
+                    errors.append(f"{bp.id}:{step.id} on_true={step.on_true} unknown")
+                if step.on_false not in step_ids:
+                    errors.append(f"{bp.id}:{step.id} on_false={step.on_false} unknown")
+    return errors
+
+
+def as_dict(obj: BaseModel) -> dict[str, Any]:
+    return obj.model_dump()

@@ -1,0 +1,24 @@
+id: order_cancel
+category: order
+intent: cancel_order
+keywords:
+  - cancel
+  - do not want
+  - dont want
+required_data:
+  - name: order_id
+    prompt: Please provide your order number (e.g. ORD-12345).
+steps:
+  - id: retrieve_policy
+    type: retrieval
+    tool: order_policy_search
+  - id: check_policy
+    type: logic_gate
+    condition: "policy_found == True"
+    on_true: draft_response
+    on_false: fallback_response
+  - id: draft_response
+    type: llm_response
+  - id: fallback_response
+    type: llm_response
+fallback_response: I can help with cancellation once I verify the order details.

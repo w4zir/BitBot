@@ -1,0 +1,15 @@
+id: account_general
+category: account
+intent: account_general
+keywords:
+  - account
+  - login
+required_data:
+  - name: email
+    prompt: What email is on the account?
+steps:
+  - id: retrieve_policy
+    type: retrieval
+    tool: account_policy_search
+  - id: reply
+    type: llm_response

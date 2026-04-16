@@ -1,0 +1,17 @@
+id: order_status
+category: order
+intent: order_status
+keywords:
+  - status
+  - track
+  - where is
+required_data:
+  - name: order_id
+    prompt: Please share your order number so I can check the status.
+steps:
+  - id: retrieve_policy
+    type: retrieval
+    tool: order_policy_search
+  - id: draft_response
+    type: llm_response
+fallback_response: I can help track the order once I have your order number.

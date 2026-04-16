@@ -26,6 +26,8 @@ def test_classify_simple_bento_only(client: TestClient, monkeypatch: pytest.Monk
     assert data["confidence"] == pytest.approx(0.91)
     assert data["session_id"] is None
     assert data["messages"] == []
+    assert data["intent"] == ""
+    assert data["procedure_id"] == ""
 
 
 def test_classify_full_flow_no_issue(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,6 +72,8 @@ def test_classify_full_flow_no_issue(client: TestClient, monkeypatch: pytest.Mon
     data = r.json()
     assert data["session_id"] == "00000000-0000-0000-0000-000000000001"
     assert data["category"] == "no_issue"
+    assert data["intent"] == "no_issue_chat"
+    assert data["procedure_id"] == "no_issue_chat"
     assert data["assistant_reply"] == "Hello! How can I help?"
     assert len(data["messages"]) >= 2
 
@@ -110,18 +114,6 @@ def test_classify_full_flow_validation_missing(client: TestClient, monkeypatch: 
     assert r.status_code == 200
     data = r.json()
     assert data["validation_ok"] is False
+    assert data["intent"] in ("cancel_order", "order_status")
     assert "order_id" in (data.get("validation_missing") or [])
     assert data.get("assistant_reply")
-
-
-def test_required_fields_missing_prompts() -> None:
-    from backend.rag.required_fields import build_missing_prompts
-
-    spec = {
-        "required_fields": [
-            {"name": "order_id", "prompt": "Give order id"},
-            {"name": "email", "prompt": "Give email"},
-        ]
-    }
-    text = build_missing_prompts(spec, ["order_id"])
-    assert "Give order id" in text
