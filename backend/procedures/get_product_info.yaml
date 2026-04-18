@@ -1,0 +1,19 @@
+id: get_product_info
+category: product
+intent: get_product_info
+keywords:
+  - price
+  - in stock
+  - availability
+  - product info
+  - how much
+  - do you have
+required_data:
+  - name: product_name
+    prompt: Which product would you like information about (name or SKU)?
+steps:
+  - id: draft_response
+    type: llm_response
+    message: >-
+      Summarize product details briefly. Always include a price (or say if unknown) and state availability as clearly in stock / out of stock (or yes/no).
+fallback_response: Tell me which product you mean and I will share price and whether it is available.

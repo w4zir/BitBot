@@ -128,6 +128,15 @@
           "prompt": "What subscription issue are you seeing?"
         }
       ]
+    },
+    "product": {
+      "display_name": "Product",
+      "required_fields": [
+        {
+          "name": "product_name",
+          "prompt": "Which product would you like information about (name or SKU)?"
+        }
+      ]
     }
   }
 }

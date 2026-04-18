@@ -1,0 +1,23 @@
+id: check_refund_policy
+category: refund
+intent: check_refund_policy
+keywords:
+  - refund policy
+  - return policy
+  - how do refunds work
+  - eligible for a refund
+required_data: []
+steps:
+  - id: retrieve_policy
+    type: retrieval
+    tool: order_policy_search
+  - id: check_policy
+    type: logic_gate
+    condition: "policy_found == True"
+    on_true: draft_response
+    on_false: fallback_response
+  - id: draft_response
+    type: llm_response
+  - id: fallback_response
+    type: llm_response
+fallback_response: Here is our refund policy in brief — most items can be returned within the stated window for a full refund; contact support with your order number to start a return.

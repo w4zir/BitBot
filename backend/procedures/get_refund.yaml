@@ -1,0 +1,19 @@
+id: get_refund
+category: refund
+intent: get_refund
+keywords:
+  - refund
+  - damaged
+  - wrong item
+  - defective
+  - not what i ordered
+  - money back
+required_data:
+  - name: order_id
+    prompt: Please provide the order number for this refund (e.g. ORD-12345).
+  - name: reason
+    prompt: Briefly describe the issue (e.g. wrong item, damaged in shipping).
+steps:
+  - id: draft_response
+    type: llm_response
+fallback_response: I can help you start a refund request once I have your order number and a short reason.

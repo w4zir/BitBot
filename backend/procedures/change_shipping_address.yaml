@@ -1,0 +1,18 @@
+id: change_shipping_address
+category: shipping
+intent: change_shipping_address
+keywords:
+  - change address
+  - shipping address
+  - update address
+  - wrong address
+  - ship to
+required_data:
+  - name: order_id
+    prompt: Please share your order number (e.g. ORD-12345) so we can update the shipment.
+  - name: new_address
+    prompt: Please provide the full new shipping address (street, city, postal code, country).
+steps:
+  - id: draft_response
+    type: llm_response
+fallback_response: I can update your shipping address once I have your order number and the complete new address.
