@@ -10,10 +10,10 @@ keywords:
   - do you have
 required_data:
   - name: product_name
-    prompt: Which product would you like information about (name or SKU)?
+    prompt: What is the name of the product?
 steps:
   - id: draft_response
     type: llm_response
     message: >-
-      Summarize product details briefly. Always include a price (or say if unknown) and state availability as clearly in stock / out of stock (or yes/no).
+      Search the product catalog using the provided product name with flexible name matching; spelling and exact wording may differ. If a match is found, share the product information including price and availability as binary yes/no. If no match is found, state that the product is not in catalog.
 fallback_response: Tell me which product you mean and I will share price and whether it is available.

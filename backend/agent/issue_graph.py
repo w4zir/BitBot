@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -180,6 +181,37 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
     return out
 
 
+_ORDER_NUMBER_RE = re.compile(r"\b(ORD-[A-Z0-9]+)\b", re.IGNORECASE)
+
+
+def _extract_order_number_from_messages(messages: list[dict[str, Any]]) -> str | None:
+    for m in reversed(messages or []):
+        if str(m.get("role")) != "user":
+            continue
+        text = str(m.get("content") or "")
+        mo = _ORDER_NUMBER_RE.search(text)
+        if mo:
+            return mo.group(1).upper()
+    return None
+
+
+def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    """Populate context for order_status procedure (stub lookup until DB wiring exists)."""
+    oid = _extract_order_number_from_messages(state.get("messages") or [])
+    tool_name = str(step.get("tool") or "check_order_status")
+    base: dict[str, Any] = {
+        "order_lookup_tool": tool_name,
+        "order_id_extracted": oid,
+    }
+    if not oid or oid == "ORD-00000":
+        return {**base, "order_found": False, "order_status": None}
+    return {
+        **base,
+        "order_found": True,
+        "order_status": "Shipped — on the way (check tracking in your confirmation email).",
+    }
+
+
 def _retrieve_policy(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     tool_name = str(step.get("tool") or "policy_search")
     query = state.get("text") or ""
@@ -243,7 +275,10 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
     if step_type == "retrieval":
         context.update(_retrieve_policy(step, state))
     elif step_type == "tool_call":
-        context["tool_call"] = str(step.get("tool") or "unknown_tool")
+        tool_name = str(step.get("tool") or "unknown_tool")
+        context["tool_call"] = tool_name
+        if tool_name == "check_order_status":
+            context.update(_check_order_status(step, state))
     elif step_type == "logic_gate":
         cond = str(step.get("condition") or "False")
         branch = _evaluate_condition(cond, context)

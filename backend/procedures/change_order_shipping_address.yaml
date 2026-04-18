@@ -1,0 +1,45 @@
+id: change_order_shipping_address
+category: shipping
+intent: change_order_shipping_address
+keywords:
+  - change address
+  - shipping address
+  - update address
+  - wrong address
+  - ship to
+required_data:
+  - name: order_id
+    prompt: Please share your order number (e.g. ORD-12345).
+  - name: new_address
+    prompt: Please provide the full new shipping address (street, city, postal code, country).
+# Order ID is collected via required-data validation before steps run — if missing, the user is asked.
+steps:
+  - id: lookup_order
+    type: tool_call
+    tool: check_order_status
+  - id: branch_order_found
+    type: logic_gate
+    condition: "order_found == True"
+    on_true: branch_order_delivered
+    on_false: order_not_found
+  - id: order_not_found
+    type: llm_response
+    message: >
+      The order was not found (order_found is false). Tell the customer we could not find this
+      order in our system, and ask them to validate the order ID and share it again.
+  - id: branch_order_delivered
+    type: logic_gate
+    condition: "order_status != 'delivered'"
+    on_true: change_shipping_address
+    on_false: already_delivered
+  - id: change_shipping_address
+    type: llm_response
+    message: >
+      The order was found and is not delivered yet. Confirm that the shipping address has been
+      changed to new_address and briefly share what happens next.
+  - id: already_delivered
+    type: llm_response
+    message: >
+      The order was found but is already delivered. Tell the customer the order has already been
+      delivered, so the shipping address cannot be changed.
+fallback_response: I can change your order shipping address once you share your order number and new address.

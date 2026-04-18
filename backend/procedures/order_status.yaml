@@ -7,11 +7,25 @@ keywords:
   - where is
 required_data:
   - name: order_id
-    prompt: Please share your order number so I can check the status.
+    prompt: Please share your order number (for example ORD-12345) so I can check the status.
+# Order ID is collected via required-data validation before steps run — if missing, the user is asked.
 steps:
-  - id: retrieve_policy
-    type: retrieval
-    tool: order_policy_search
-  - id: draft_response
+  - id: lookup_order
+    type: tool_call
+    tool: check_order_status
+  - id: branch_lookup
+    type: logic_gate
+    condition: "order_found == True"
+    on_true: share_status
+    on_false: order_not_found
+  - id: share_status
     type: llm_response
-fallback_response: I can help track the order once I have your order number.
+    message: >
+      The order was found (order_found is true). Use order_status and order_id_extracted from
+      procedure context to state the current order status clearly and briefly for the customer.
+  - id: order_not_found
+    type: llm_response
+    message: >
+      The order was not found (order_found is false). Tell the customer we could not find this
+      order in our system, and ask them to verify their order ID and try again.
+fallback_response: I can track your order once you share your order number.
