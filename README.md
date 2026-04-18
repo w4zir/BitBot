@@ -20,10 +20,13 @@ flowchart LR
 
 - **Frontend** (`frontend/`): Streamlit chat UI calling `POST /classify` with `full_flow` for session + LangGraph + LLM branches.
 - **Backend** (`backend/`): FastAPI + **LangGraph** (`backend/agent/issue_graph.py`): Bento category classification → intent classification (scoped to that category) → YAML procedure load (`backend/procedures/*.yaml`) → hybrid required-data validation → structured step execution.
+- **Tool APIs** (`backend/api/routes/tools.py`): DB-backed tool endpoints used by procedures (`/tools/order-status`, `/tools/product-lookup`, `/tools/refund-context`).
+- **Escalation API** (`backend/api/routes/escalations.py`): in-chat escalation decision endpoint (`/escalations/decision`) for accept/reject UX.
 - **Procedures** (`backend/procedures/`): One YAML blueprint per intent. Blueprints define `required_data` and ordered steps (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) used to enforce deterministic control flow.
 - **ModernBERT** (`services/modernbert_bento/`): BentoML service loading a local fine-tuned checkpoint.
 - **Policy source**: Policy constraints/content remain external to procedures and come from Elasticsearch-backed policy documents through retrieval steps.
 - **Data stores**: Postgres (pgvector-ready schema in `infra/postgres/init.sql`) plus Elasticsearch for policy retrieval.
+- **Product catalog**: `products` table in Postgres backs `get_product_info` tool-calling.
 
 ## Documentation
 
@@ -62,6 +65,20 @@ flowchart LR
    ```bash
    curl -s -X POST http://localhost:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"
    ```
+
+7. Escalation decision action (for pending `interrupt` steps in procedures):
+
+   ```bash
+   curl -s -X POST http://localhost:8000/escalations/decision -H "Content-Type: application/json" -d "{\"session_id\":\"<session-uuid>\",\"action_id\":\"<action-id>\",\"decision\":\"accept\"}"
+   ```
+
+## API Surface (Core)
+
+- `POST /classify`: classification-only (`full_flow=false`) or full LangGraph orchestration (`full_flow=true`).
+- `POST /tools/order-status`: DB-backed order lookup tool.
+- `POST /tools/product-lookup`: DB-backed product catalog lookup tool.
+- `POST /tools/refund-context`: DB-backed refund context lookup tool.
+- `POST /escalations/decision`: accept/reject a pending escalation action for a session.
 
 ## Repository layout
 

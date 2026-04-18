@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -16,6 +17,9 @@ from backend.agent.procedures import (
     get_fallback_blueprint,
     infer_intent_from_text,
 )
+from backend.db.orders_repo import get_order_status
+from backend.db.products_repo import lookup_product
+from backend.db.refunds_repo import get_refund_context
 from backend.llm.providers import chat_completion, extract_json_object
 from backend.rag.policy_retriever import search_policy_docs
 from backend.rag.query_classifier import ClassificationResult, get_query_classifier
@@ -182,6 +186,7 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
 
 
 _ORDER_NUMBER_RE = re.compile(r"\b(ORD-[A-Z0-9]+)\b", re.IGNORECASE)
+_ESCALATION_DECISION_RE = re.compile(r"\b(accept|reject)\b", re.IGNORECASE)
 
 
 def _extract_order_number_from_messages(messages: list[dict[str, Any]]) -> str | None:
@@ -195,20 +200,46 @@ def _extract_order_number_from_messages(messages: list[dict[str, Any]]) -> str |
     return None
 
 
+def _extract_product_name_from_messages(messages: list[dict[str, Any]]) -> str | None:
+    for m in reversed(messages or []):
+        if str(m.get("role")) != "user":
+            continue
+        text = str(m.get("content") or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_escalation_decision(messages: list[dict[str, Any]]) -> str | None:
+    for m in reversed(messages or []):
+        if str(m.get("role")) != "user":
+            continue
+        text = str(m.get("content") or "")
+        mo = _ESCALATION_DECISION_RE.search(text)
+        if mo:
+            return mo.group(1).lower()
+    return None
+
+
 def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
-    """Populate context for order_status procedure (stub lookup until DB wiring exists)."""
+    """Populate context for order status from DB-backed repository."""
     oid = _extract_order_number_from_messages(state.get("messages") or [])
     tool_name = str(step.get("tool") or "check_order_status")
     base: dict[str, Any] = {
         "order_lookup_tool": tool_name,
         "order_id_extracted": oid,
     }
-    if not oid or oid == "ORD-00000":
+    if not oid:
+        return {**base, "order_found": False, "order_status": None}
+    row = get_order_status(oid)
+    if not row:
         return {**base, "order_found": False, "order_status": None}
     return {
         **base,
         "order_found": True,
-        "order_status": "Shipped — on the way (check tracking in your confirmation email).",
+        "order_status": row.get("status"),
+        "order_total_amount": row.get("total_amount"),
+        "order_data": row,
     }
 
 
@@ -222,6 +253,73 @@ def _retrieve_policy(step: dict[str, Any], state: IssueGraphState) -> dict[str, 
         "policy_query": query,
         "retrieved_docs": docs,
     }
+
+
+def _lookup_product_info(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "product_catalog_lookup")
+    product_name = _extract_product_name_from_messages(state.get("messages") or [])
+    base: dict[str, Any] = {"tool_call": tool_name, "product_name_extracted": product_name}
+    if not product_name:
+        return {**base, "product_found": False, "product": None}
+    product = lookup_product(product_name)
+    if not product:
+        return {**base, "product_found": False, "product": None}
+    return {**base, "product_found": True, "product": product}
+
+
+def _lookup_refund_context(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "refund_context_lookup")
+    oid = _extract_order_number_from_messages(state.get("messages") or [])
+    base: dict[str, Any] = {"tool_call": tool_name, "order_id_extracted": oid}
+    if not oid:
+        return {**base, "refund_context_found": False}
+    payload = get_refund_context(oid)
+    if not payload:
+        return {**base, "refund_context_found": False}
+    return {**base, "refund_context_found": True, **payload}
+
+
+def _handle_interrupt_step(step: dict[str, Any], state: IssueGraphState, idx: int, todo: list[dict[str, Any]]) -> IssueGraphState:
+    msg = str(step.get("message") or "Human approval required.")
+    decision = _extract_escalation_decision(state.get("messages") or [])
+    action_id = str(step.get("action_id") or f"{state.get('session_id', '')}:{step.get('id', idx)}:{uuid.uuid4().hex[:8]}")
+    if decision == "accept":
+        accept_msg = str(step.get("on_accept_message") or "Thanks. We have escalated your case to a human agent.")
+        return {
+            **state,
+            "assistant_metadata": {
+                **dict(state.get("assistant_metadata") or {}),
+                "escalation_decision": "accept",
+                "action_id": action_id,
+                "step_id": step.get("id"),
+            },
+            "final_response": accept_msg,
+            "current_step_index": len(todo),
+        }
+    if decision == "reject":
+        reject_msg = str(step.get("on_reject_message") or "Understood. We will not escalate this request.")
+        return {
+            **state,
+            "assistant_metadata": {
+                **dict(state.get("assistant_metadata") or {}),
+                "escalation_decision": "reject",
+                "action_id": action_id,
+                "step_id": step.get("id"),
+            },
+            "final_response": reject_msg,
+            "current_step_index": len(todo),
+        }
+    meta = dict(state.get("assistant_metadata") or {})
+    meta.update(
+        {
+            "pending_human_action": True,
+            "action_type": str(step.get("action_type") or "escalation"),
+            "action_id": action_id,
+            "decision_required": ["accept", "reject"],
+            "step_id": step.get("id"),
+        }
+    )
+    return {**state, "assistant_metadata": meta, "final_response": msg, "current_step_index": len(todo)}
 
 
 def _evaluate_condition(condition: str, context_data: dict[str, Any]) -> bool:
@@ -271,22 +369,38 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
     step = todo[idx]
     context = dict(state.get("context_data") or {})
     step_type = str(step.get("type") or "")
+    tool_dispatch = {
+        "check_order_status": _check_order_status,
+        "product_catalog_lookup": _lookup_product_info,
+        "refund_context_lookup": _lookup_refund_context,
+    }
 
     if step_type == "retrieval":
         context.update(_retrieve_policy(step, state))
+    elif step_type == "validate_required_data":
+        # Required-data validation is already handled by graph node; keep compatibility if present in YAML.
+        context["validate_required_data"] = True
     elif step_type == "tool_call":
         tool_name = str(step.get("tool") or "unknown_tool")
         context["tool_call"] = tool_name
-        if tool_name == "check_order_status":
-            context.update(_check_order_status(step, state))
+        runner = tool_dispatch.get(tool_name)
+        if not runner:
+            meta = dict(state.get("assistant_metadata") or {})
+            meta["tool_error"] = f"Unknown tool '{tool_name}'"
+            return {
+                **state,
+                "assistant_metadata": meta,
+                "final_response": "I could not run a required backend tool for this request.",
+                "current_step_index": len(todo),
+            }
+        context.update(runner(step, state))
     elif step_type == "logic_gate":
         cond = str(step.get("condition") or "False")
         branch = _evaluate_condition(cond, context)
         target = str(step.get("on_true") if branch else step.get("on_false") or "")
         return _jump_to_step({**state, "context_data": context}, target)
     elif step_type == "interrupt":
-        msg = str(step.get("message") or "Human approval required.")
-        return {**state, "final_response": msg, "current_step_index": len(todo)}
+        return _handle_interrupt_step(step, {**state, "context_data": context}, idx, todo)
     elif step_type == "llm_response":
         reply = _draft_response(state, step)
         return {
@@ -295,12 +409,18 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             "final_response": reply,
             "current_step_index": idx + 1,
         }
+    else:
+        meta = dict(state.get("assistant_metadata") or {})
+        meta["step_error"] = f"Unknown step type '{step_type}'"
+        return {
+            **state,
+            "context_data": context,
+            "assistant_metadata": meta,
+            "final_response": "I hit an unsupported procedure step and cannot continue safely.",
+            "current_step_index": len(todo),
+        }
 
-    return {
-        **state,
-        "context_data": context,
-        "current_step_index": idx + 1,
-    }
+    return {**state, "context_data": context, "current_step_index": idx + 1}
 
 
 def _should_continue(state: IssueGraphState) -> Literal["continue", "end"]:

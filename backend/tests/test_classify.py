@@ -117,3 +117,112 @@ def test_classify_full_flow_validation_missing(client: TestClient, monkeypatch: 
     assert data["intent"] in ("cancel_order", "order_status")
     assert "order_id" in (data.get("validation_missing") or [])
     assert data.get("assistant_reply")
+
+
+def test_classify_full_flow_interrupt_sets_pending_action(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    messages_store: list[dict] = []
+
+    monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
+    monkeypatch.setattr(
+        "backend.api.routes.classify.create_session",
+        lambda: "00000000-0000-0000-0000-000000000003",
+    )
+    monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_order_status",
+        lambda order_id: {"order_number": order_id, "status": "shipped", "total_amount": 120.0},
+    )
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_refund_context",
+        lambda order_id: {"refund_order_status": "shipped", "refund_order_total_amount": 120.0},
+    )
+    monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
+
+    def append_message(sid: str, role: str, content: str, metadata=None):
+        messages_store.append(
+            {"role": role, "content": content, "metadata": metadata or {}}
+        )
+
+    monkeypatch.setattr("backend.api.routes.classify.append_message", append_message)
+    monkeypatch.setattr("backend.api.routes.classify.list_messages", lambda _sid: list(messages_store))
+
+    qc = MagicMock()
+    qc.classify.return_value = ClassificationResult(category="refund", confidence=0.91)
+    monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
+    monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
+
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.chat_completion",
+        lambda **kwargs: '{"valid": true, "missing_field_names": [], "notes": "ok"}',
+    )
+
+    r = client.post(
+        "/classify",
+        json={"text": "I want a refund for ORD-12345", "full_flow": True},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["assistant_reply"]
+    assert data["assistant_metadata"].get("pending_human_action") is True
+    assert data["assistant_metadata"].get("action_type") == "refund_escalation"
+
+
+def test_escalation_decision_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("backend.api.routes.escalations.get_session", lambda sid: {"id": sid})
+    monkeypatch.setattr(
+        "backend.api.routes.escalations.list_messages",
+        lambda _sid: [
+            {
+                "role": "assistant",
+                "content": "Escalate?",
+                "metadata": {
+                    "pending_human_action": True,
+                    "action_id": "act-1",
+                },
+            }
+        ],
+    )
+    inserted: list[dict] = []
+
+    def append_message(sid: str, role: str, content: str, metadata=None):
+        inserted.append({"sid": sid, "role": role, "content": content, "metadata": metadata or {}})
+
+    monkeypatch.setattr("backend.api.routes.escalations.append_message", append_message)
+
+    class _DummyCursor:
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _DummyConn:
+        def cursor(self):
+            return _DummyCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr("backend.api.routes.escalations.get_connection", lambda: _DummyConn())
+
+    r = client.post(
+        "/escalations/decision",
+        json={
+            "session_id": "00000000-0000-0000-0000-000000000003",
+            "action_id": "act-1",
+            "decision": "accept",
+        },
+    )
+    assert r.status_code == 200
+    out = r.json()
+    assert out["ok"] is True
+    assert out["decision"] == "accept"
+    assert inserted and inserted[0]["metadata"]["pending_human_action"] is False

@@ -33,9 +33,14 @@ steps:
     on_false: escalate_no_cancel_policy
   - id: escalate_no_cancel_policy
     type: interrupt
+    action_type: cancel_escalation
     message: >
       No cancellation policy could be retrieved for this request. Escalate to a human agent so
       they can confirm cancellation rules and assist the customer.
+    on_accept_message: >
+      Thanks for confirming. I have escalated this cancellation case to a human support agent.
+    on_reject_message: >
+      Understood. I will not escalate this cancellation case right now.
   - id: apply_policy_and_cancel_or_decline
     type: llm_response
     message: >

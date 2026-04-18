@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from typing import Any
+
+from backend.db.orders_repo import get_order_status
+from backend.db.postgres import get_connection
+
+
+def get_refund_context(order_number: str) -> dict[str, Any] | None:
+    order = get_order_status(order_number)
+    if not order:
+        return None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT decision, decision_reason
+                FROM refund_requests
+                WHERE order_id = %s
+                ORDER BY requested_at DESC NULLS LAST, refund_id DESC
+                LIMIT 1
+                """,
+                (order_number.upper(),),
+            )
+            row = cur.fetchone()
+    return {
+        "refund_last_decision": row[0] if row else None,
+        "refund_last_decision_reason": row[1] if row else None,
+        "refund_order_status": order.get("status"),
+        "refund_order_total_amount": order.get("total_amount"),
+    }

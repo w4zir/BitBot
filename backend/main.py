@@ -11,7 +11,9 @@ load_dotenv()
 
 import backend.config  # noqa: F401 — configure logging
 from backend.api.routes.classify import router as classify_router
+from backend.api.routes.escalations import router as escalations_router
 from backend.api.routes.health import router as health_router
+from backend.api.routes.tools import router as tools_router
 
 
 def create_app() -> FastAPI:
@@ -38,6 +40,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(classify_router)
+    app.include_router(tools_router)
+    app.include_router(escalations_router)
     return app
 
 

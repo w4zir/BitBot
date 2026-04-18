@@ -16,6 +16,9 @@ steps:
   - id: lookup_order
     type: tool_call
     tool: check_order_status
+  - id: lookup_refund_context
+    type: tool_call
+    tool: refund_context_lookup
   - id: branch_order_found
     type: logic_gate
     condition: "order_found == True"
@@ -36,9 +39,14 @@ steps:
     on_false: escalate_no_refund_policy
   - id: escalate_no_refund_policy
     type: interrupt
+    action_type: refund_escalation
     message: >
       No refund policy could be retrieved for this request. Escalate to a human agent so they
       can confirm refund rules and assist the customer.
+    on_accept_message: >
+      Thanks for confirming. I have escalated your refund request to a human support agent.
+    on_reject_message: >
+      Understood. I will not escalate this refund request right now.
   - id: assess_eligibility_and_refund
     type: llm_response
     message: >

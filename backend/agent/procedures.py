@@ -34,6 +34,10 @@ class ProcedureStep(BaseModel):
     on_true: str | None = None
     on_false: str | None = None
     message: str | None = None
+    action_type: str | None = None
+    action_id: str | None = None
+    on_accept_message: str | None = None
+    on_reject_message: str | None = None
 
 
 class ProcedureBlueprint(BaseModel):

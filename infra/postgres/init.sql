@@ -50,6 +50,18 @@ CREATE TABLE orders (
     estimated_delivery TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS products (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sku             VARCHAR(80) UNIQUE NOT NULL,
+    name            VARCHAR(255) NOT NULL,
+    price           DECIMAL(10,2) NOT NULL,
+    is_available    BOOLEAN NOT NULL DEFAULT TRUE,
+    metadata        JSONB,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_products_name ON products (name);
+CREATE INDEX IF NOT EXISTS idx_products_lower_name ON products ((lower(name)));
+
 CREATE TABLE tickets (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id  UUID REFERENCES sessions(id),

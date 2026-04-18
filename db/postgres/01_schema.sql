@@ -50,6 +50,18 @@ CREATE TABLE order_items (
     price DECIMAL(10, 2)
 );
 
+CREATE TABLE products (
+    product_id SERIAL PRIMARY KEY,
+    sku VARCHAR(80) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    is_available BOOLEAN DEFAULT TRUE,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_products_name ON products (name);
+CREATE INDEX idx_products_lower_name ON products ((lower(name)));
+
 -- Fulfillment and Payment Tables
 CREATE TABLE payments (
     transaction_id VARCHAR(50) PRIMARY KEY, -- Format: TXN-XXXX
