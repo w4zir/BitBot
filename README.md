@@ -33,23 +33,32 @@ flowchart LR
 | Topic | Document |
 |-------|----------|
 | Dataset creation, binary split, fine-tuning, evaluation, serving | [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md) |
+| Index Foodpanda policy Markdown in Elasticsearch | [docs/elasticsearch-foodpanda-policy-docs.md](docs/elasticsearch-foodpanda-policy-docs.md) |
 
 ## How to add data to Elasticsearch
 
 Policy retrieval (`backend/rag/policy_retriever.py`) queries Elasticsearch with a `multi_match` on **`title`**, **`content`**, and **`tags`**. Configure the cluster with `.env` (see `.env.example`): `ES_HOST`, `ES_PORT`, `ES_SCHEME`, **`ES_POLICY_INDEX`** (default: `policy_docs`), and `ES_TIMEOUT_SECONDS`. With Docker Compose, these are passed into the `backend` service.
 
-1. **Ensure Elasticsearch is reachable** (e.g. `docker compose up` exposes port **9200**; security is disabled in Compose for local dev).
+**Foodpanda sample policies:** to index the Markdown under `data/policy_docs/foodpanda/policy_docs/`, use the bundled script (see [docs/elasticsearch-foodpanda-policy-docs.md](docs/elasticsearch-foodpanda-policy-docs.md)):
+
+```bash
+python scripts/upload_foodpanda_policy_docs.py --create-index --host localhost
+```
+
+The generic **`curl`** / `_bulk` flow below uses **`docker compose exec`** into the **`elasticsearch`** service so `curl` runs inside the container; Elasticsearch listens on **9200** in that container (Compose maps it to the host for debugging, but these examples stay fully in Docker).
+
+1. **Ensure Elasticsearch is running** (e.g. `docker compose up` with the `elasticsearch` service healthy).
 
 2. **Create an index** (optional; dynamic mapping is enough for a quick start). Replace `policy_docs` if you use a custom `ES_POLICY_INDEX`:
 
    ```bash
-   curl -s -X PUT "http://localhost:9200/policy_docs" -H "Content-Type: application/json" -d "{}"
+   docker compose exec -T elasticsearch curl -s -X PUT "http://localhost:9200/policy_docs" -H "Content-Type: application/json" -d "{}"
    ```
 
-3. **Index documents** with `_bulk`. Each source document must include the fields the retriever searches:
+3. **Index documents** with `_bulk`. Each source document must include the fields the retriever searches. **Bash** can stream a heredoc into the container (stdin is forwarded to `curl`):
 
    ```bash
-   curl -s -X POST "http://localhost:9200/_bulk" -H "Content-Type: application/x-ndjson" --data-binary @- <<'EOF'
+   docker compose exec -T elasticsearch curl -s -X POST "http://localhost:9200/_bulk" -H "Content-Type: application/x-ndjson" --data-binary @- <<'EOF'
    {"index":{"_index":"policy_docs","_id":"refund-overview"}}
    {"title":"Refund policy overview","content":"Customers may request a refund within 30 days of purchase.","tags":["refund","policy"]}
    {"index":{"_index":"policy_docs","_id":"shipping-late"}}
@@ -57,24 +66,40 @@ Policy retrieval (`backend/rag/policy_retriever.py`) queries Elasticsearch with 
    EOF
    ```
 
-   On **Windows PowerShell**, heredocs are not available; save the NDJSON lines (action line + JSON line per document) to a file such as `bulk.ndjson` and run: `curl -s -X POST "http://localhost:9200/_bulk" -H "Content-Type: application/x-ndjson" --data-binary "@bulk.ndjson"`.
+   **PowerShell** or any shell: save the NDJSON (action line + JSON line per document) to `bulk.ndjson` in the project root and run:
+
+   ```powershell
+   Get-Content bulk.ndjson -Raw | docker compose exec -T elasticsearch curl -s -X POST "http://localhost:9200/_bulk" -H "Content-Type: application/x-ndjson" --data-binary @-
+   ```
+
+   **Bash** one-liner equivalent:
+
+   ```bash
+   docker compose exec -T elasticsearch curl -s -X POST "http://localhost:9200/_bulk" -H "Content-Type: application/x-ndjson" --data-binary @- < bulk.ndjson
+   ```
 
 4. **Verify** with a search that matches the app query shape:
 
    ```bash
-   curl -s -X POST "http://localhost:9200/policy_docs/_search" -H "Content-Type: application/json" -d "{\"size\":3,\"query\":{\"multi_match\":{\"query\":\"refund\",\"fields\":[\"title^2\",\"content\",\"tags\"]}}}"
+   docker compose exec -T elasticsearch curl -s -X POST "http://localhost:9200/policy_docs/_search" -H "Content-Type: application/json" -d "{\"size\":3,\"query\":{\"multi_match\":{\"query\":\"refund\",\"fields\":[\"title^2\",\"content\",\"tags\"]}}}"
    ```
 
-5. **Optional source material**: Markdown under [`data/policy_docs/`](data/policy_docs/) can be copied or scripted into `content` / `title` / `tags` when building your index (there is no bundled indexer in this repo).
+5. **Optional source material**: Markdown under [`data/policy_docs/`](data/policy_docs/) can be loaded with [`scripts/upload_foodpanda_policy_docs.py`](scripts/upload_foodpanda_policy_docs.py) (Foodpanda folder) or adapted for your own bulk NDJSON.
 
 If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint only records that Elasticsearch env vars are configured, not cluster health.
 
 ## Quickstart (Docker)
 
-1. Copy environment file:
+1. Create `.env` from `.env.example` (example uses a tiny Alpine container so you do not rely on host `cp`):
 
    ```bash
-   cp .env.example .env
+   docker run --rm -v "$PWD:/w" -w /w alpine cp .env.example .env
+   ```
+
+   **PowerShell** (repository root):
+
+   ```powershell
+   docker run --rm -v "${PWD}:/w" -w /w alpine cp .env.example .env
    ```
 
    Set `POSTGRES_USER`, `POSTGRES_PASSWORD`, and any overrides.
@@ -89,22 +114,22 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
 4. Open the UI at **http://localhost:8501** (backend API: **http://localhost:8000**).
 
-5. Try classification (Bento only, no Postgres/LLM):
+5. Try classification (Bento only, no Postgres/LLM). The **`elasticsearch`** image includes `curl` and shares the Compose network with **`backend`**, so call the API by service name:
 
    ```bash
-   curl -s -X POST http://localhost:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\",\"full_flow\":false}"
+   docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\",\"full_flow\":false}"
    ```
 
 6. Full conversation flow (Postgres + LangGraph + local Ollama): set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `OLLAMA_BASE_URL` in `.env` (see `.env.example`). Ensure Postgres is up and Ollama is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). Then:
 
    ```bash
-   curl -s -X POST http://localhost:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"
+   docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"
    ```
 
 7. Escalation decision action (for pending `interrupt` steps in procedures):
 
    ```bash
-   curl -s -X POST http://localhost:8000/escalations/decision -H "Content-Type: application/json" -d "{\"session_id\":\"<session-uuid>\",\"action_id\":\"<action-id>\",\"decision\":\"accept\"}"
+   docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/escalations/decision -H "Content-Type: application/json" -d "{\"session_id\":\"<session-uuid>\",\"action_id\":\"<action-id>\",\"decision\":\"accept\"}"
    ```
 
 ## API Surface (Core)
@@ -130,29 +155,42 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
 ### Dummy Postgres dataset (`db/postgres/`)
 
-Docker Compose initializes the database from [`infra/postgres/init.sql`](infra/postgres/init.sql). For **expanded test users, orders, refunds, and products** aligned with [`backend/procedures/`](backend/procedures/), apply (in order) on a Postgres database of your choice:
+Docker Compose initializes the database from [`infra/postgres/init.sql`](infra/postgres/init.sql). For **expanded test users, orders, refunds, and products** aligned with [`backend/procedures/`](backend/procedures/), apply the SQL **in order** via `psql` in the **`postgres`** container (from the repo root, stack running):
 
 1. [`db/postgres/01_schema.sql`](db/postgres/01_schema.sql) — drops and recreates the dummy tables (rerunnable).
+
+   ```bash
+   docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/01_schema.sql
+   ```
+
 2. [`db/postgres/02_seed.sql`](db/postgres/02_seed.sql) — loads data using `INSERT … ON CONFLICT … DO UPDATE` (safe to run **multiple times** without duplicate-key failures).
+
+   ```bash
+   docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/02_seed.sql
+   ```
+
 3. Optional: [`db/postgres/03_smoke_checks.sql`](db/postgres/03_smoke_checks.sql) — sanity queries after load.
 
-This dummy schema is **not** the same as `infra/postgres/init.sql` (different `orders` shape and related tables). Use a dedicated DB or run these scripts when you want SQL-level fixtures for procedures; wiring the backend to that database may require matching column names to [`backend/db/`](backend/db/) repos.
+   ```bash
+   docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/03_smoke_checks.sql
+   ```
 
-## Development (local, without Docker)
+**PowerShell** (repo root; set variables if they differ from defaults):
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-pip install -r backend/requirements.txt
-set CLASSIFIER_BENTOML_URL=http://localhost:3000/classify
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+```powershell
+Get-Content db/postgres/01_schema.sql -Raw | docker compose exec -T postgres psql -U admin -d ecom_support -f -
+Get-Content db/postgres/02_seed.sql -Raw | docker compose exec -T postgres psql -U admin -d ecom_support -f -
+Get-Content db/postgres/03_smoke_checks.sql -Raw | docker compose exec -T postgres psql -U admin -d ecom_support -f -
 ```
 
-Run tests:
+This dummy schema is **not** the same as `infra/postgres/init.sql` (different `orders` shape and related tables). Use a dedicated database or run these scripts when you want SQL-level fixtures for procedures; wiring the backend to that database may require matching column names to [`backend/db/`](backend/db/) repos.
+
+## Development (Docker)
+
+Run the test suite inside the **`backend`** service. The app imports the `backend` package from `/app`, so set **`PYTHONPATH=/app`** when invoking tests:
 
 ```bash
-pip install -r backend/requirements.txt
-pytest backend/tests
+docker compose exec backend env PYTHONPATH=/app pytest backend/tests
 ```
 
 ## License
