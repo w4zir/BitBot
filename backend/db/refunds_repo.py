@@ -6,8 +6,11 @@ from backend.db.orders_repo import get_order_status
 from backend.db.postgres import get_connection
 
 
-def get_refund_context(order_number: str) -> dict[str, Any] | None:
-    order = get_order_status(order_number)
+def get_refund_context(order_id: str) -> dict[str, Any] | None:
+    oid = (order_id or "").strip().upper()
+    if not oid:
+        return None
+    order = get_order_status(oid)
     if not order:
         return None
     with get_connection() as conn:
@@ -20,7 +23,7 @@ def get_refund_context(order_number: str) -> dict[str, Any] | None:
                 ORDER BY requested_at DESC NULLS LAST, refund_id DESC
                 LIMIT 1
                 """,
-                (order_number.upper(),),
+                (oid,),
             )
             row = cur.fetchone()
     return {

@@ -28,9 +28,12 @@ def test_classify_simple_bento_only(client: TestClient, monkeypatch: pytest.Monk
     assert data["messages"] == []
     assert data["intent"] == ""
     assert data["procedure_id"] == ""
+    assert data["session_issue"]["is_resolved"] is False
 
 
-def test_classify_full_flow_no_issue(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_classify_full_flow_no_issue(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
+) -> None:
     messages_store: list[dict] = []
 
     def fake_postgres_ok() -> bool:
@@ -76,9 +79,16 @@ def test_classify_full_flow_no_issue(client: TestClient, monkeypatch: pytest.Mon
     assert data["procedure_id"] == "no_issue_chat"
     assert data["assistant_reply"] == "Hello! How can I help?"
     assert len(data["messages"]) >= 2
+    assert data["session_issue"]["intent"] == "no_issue_chat"
+    assert data["session_issue"]["user_request"] == "Just saying hi"
+    assert data["session_issue"]["is_resolved"] is True
+    sid = data["session_id"]
+    assert session_issue_mocks[sid]["resolved_at"] is not None
 
 
-def test_classify_full_flow_validation_missing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_classify_full_flow_validation_missing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
+) -> None:
     messages_store: list[dict] = []
 
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
@@ -117,10 +127,11 @@ def test_classify_full_flow_validation_missing(client: TestClient, monkeypatch: 
     assert data["intent"] in ("cancel_order", "order_status")
     assert "order_id" in (data.get("validation_missing") or [])
     assert data.get("assistant_reply")
+    assert data["session_issue"]["is_resolved"] is False
 
 
 def test_classify_full_flow_interrupt_sets_pending_action(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
 ) -> None:
     messages_store: list[dict] = []
 
@@ -132,7 +143,7 @@ def test_classify_full_flow_interrupt_sets_pending_action(
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
     monkeypatch.setattr(
         "backend.agent.issue_graph.get_order_status",
-        lambda order_id: {"order_number": order_id, "status": "shipped", "total_amount": 120.0},
+        lambda order_id: {"order_id": order_id, "status": "shipped", "total_amount": 120.0},
     )
     monkeypatch.setattr(
         "backend.agent.issue_graph.get_refund_context",
@@ -167,6 +178,142 @@ def test_classify_full_flow_interrupt_sets_pending_action(
     assert data["assistant_reply"]
     assert data["assistant_metadata"].get("pending_human_action") is True
     assert data["assistant_metadata"].get("action_type") == "refund_escalation"
+    assert data["session_issue"]["is_resolved"] is False
+
+
+def test_classify_intent_stays_locked_second_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
+) -> None:
+    """After order_status is stored, a later turn must not reclassify intent from the latest text."""
+    messages_store: list[dict] = []
+
+    monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
+    monkeypatch.setattr(
+        "backend.api.routes.classify.create_session",
+        lambda: "00000000-0000-0000-0000-000000000004",
+    )
+    monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
+
+    def append_message(sid: str, role: str, content: str, metadata=None):
+        messages_store.append(
+            {"role": role, "content": content, "metadata": metadata or {}}
+        )
+
+    def list_messages(sid: str):
+        _ = sid
+        return list(messages_store)
+
+    monkeypatch.setattr("backend.api.routes.classify.append_message", append_message)
+    monkeypatch.setattr("backend.api.routes.classify.list_messages", list_messages)
+
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_order_status",
+        lambda order_id: {
+            "order_id": order_id,
+            "status": "shipped",
+            "total_amount": 99.0,
+        },
+    )
+
+    qc = MagicMock()
+    qc.classify.side_effect = [
+        ClassificationResult(category="order", confidence=0.9),
+        ClassificationResult(category="refund", confidence=0.99),
+    ]
+    monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
+    monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
+
+    chat_calls: list[int] = []
+
+    def chat_completion(**kwargs):
+        chat_calls.append(1)
+        n = len(chat_calls)
+        if n == 1:
+            return '{"valid": false, "missing_field_names": ["order_id"], "notes": "need id"}'
+        if n == 2:
+            return '{"valid": true, "missing_field_names": [], "notes": "ok"}'
+        return "Your order ORD-12345 is shipped."
+
+    monkeypatch.setattr("backend.agent.issue_graph.chat_completion", chat_completion)
+
+    r1 = client.post(
+        "/classify",
+        json={"text": "What is the status of my order", "full_flow": True},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["intent"] == "order_status"
+    assert r1.json()["session_issue"]["intent"] == "order_status"
+    assert r1.json()["session_issue"]["is_resolved"] is False
+
+    r2 = client.post(
+        "/classify",
+        json={
+            "text": "ORD-12345",
+            "full_flow": True,
+            "session_id": "00000000-0000-0000-0000-000000000004",
+        },
+    )
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["intent"] == "order_status"
+    assert d2["category"] == "order"
+    assert d2["assistant_metadata"].get("intent_classifier") == "session_locked"
+    assert d2["session_issue"]["user_request"] == "What is the status of my order"
+    assert d2["session_issue"]["is_resolved"] is True
+
+
+def test_classify_new_issue_after_resolution(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
+) -> None:
+    messages_store: list[dict] = []
+
+    monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
+    monkeypatch.setattr(
+        "backend.api.routes.classify.create_session",
+        lambda: "00000000-0000-0000-0000-000000000005",
+    )
+    monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
+
+    def append_message(sid: str, role: str, content: str, metadata=None):
+        messages_store.append(
+            {"role": role, "content": content, "metadata": metadata or {}}
+        )
+
+    def list_messages(sid: str):
+        _ = sid
+        return list(messages_store)
+
+    monkeypatch.setattr("backend.api.routes.classify.append_message", append_message)
+    monkeypatch.setattr("backend.api.routes.classify.list_messages", list_messages)
+
+    qc = MagicMock()
+    qc.classify.side_effect = [
+        ClassificationResult(category="no_issue", confidence=0.99),
+        ClassificationResult(category="order", confidence=0.91),
+    ]
+    monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
+    monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
+
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.chat_completion",
+        lambda **kwargs: "Hello!",
+    )
+
+    sid = "00000000-0000-0000-0000-000000000005"
+    r1 = client.post("/classify", json={"text": "Just hi", "full_flow": True})
+    assert r1.status_code == 200
+    assert r1.json()["session_issue"]["is_resolved"] is True
+
+    r2 = client.post(
+        "/classify",
+        json={"text": "My order is late", "full_flow": True, "session_id": sid},
+    )
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["category"] == "order"
+    assert d2["intent"] in ("cancel_order", "order_status")
+    assert d2["session_issue"]["user_request"] == "My order is late"
+    assert d2["session_issue"]["is_resolved"] is False
 
 
 def test_escalation_decision_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

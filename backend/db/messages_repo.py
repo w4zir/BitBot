@@ -26,7 +26,12 @@ def get_session(session_id: str) -> Optional[dict[str, Any]]:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, user_id, company_id, created_at FROM sessions WHERE id = %s",
+                """
+                SELECT id, user_id, company_id, created_at,
+                       intent, user_request, issue_category, issue_confidence,
+                       resolved_at, escalated
+                FROM sessions WHERE id = %s
+                """,
                 (session_id,),
             )
             row = cur.fetchone()
@@ -37,7 +42,58 @@ def get_session(session_id: str) -> Optional[dict[str, Any]]:
                 "user_id": row[1],
                 "company_id": row[2],
                 "created_at": row[3],
+                "intent": row[4],
+                "user_request": row[5],
+                "issue_category": row[6],
+                "issue_confidence": row[7],
+                "resolved_at": row[8],
+                "escalated": row[9],
             }
+
+
+def get_session_issue_state(session_id: str) -> Optional[dict[str, Any]]:
+    """Return session row fields needed for active issue locking (or None if missing)."""
+    return get_session(session_id)
+
+
+def update_session_active_issue(
+    session_id: str,
+    *,
+    intent: str,
+    user_request: str,
+    issue_category: str,
+    issue_confidence: float,
+) -> None:
+    """Set the locked procedure intent and canonical user request; clears resolution timestamp."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sessions
+                SET intent = %s,
+                    user_request = %s,
+                    issue_category = %s,
+                    issue_confidence = %s,
+                    resolved_at = NULL,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (intent, user_request, issue_category, issue_confidence, session_id),
+            )
+
+
+def mark_session_resolved(session_id: str) -> None:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sessions
+                SET resolved_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (session_id,),
+            )
 
 
 def list_messages(session_id: str) -> list[dict[str, Any]]:
@@ -85,11 +141,16 @@ def append_message(
                 """
                 INSERT INTO messages (id, session_id, role, content, metadata)
                 VALUES (%s, %s, %s, %s, %s)
+                RETURNING created_at
                 """,
                 (mid, session_id, role, content, Json(metadata or {})),
             )
+            row = cur.fetchone()
+            created_at = row[0] if row else None
+    ca_iso = created_at.isoformat() if created_at is not None else None
     return {
         "role": role,
         "content": content,
         "metadata": metadata or {},
+        "created_at": ca_iso,
     }

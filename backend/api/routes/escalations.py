@@ -36,7 +36,7 @@ async def escalation_decision(req: EscalationDecisionRequest) -> dict:
     else:
         reply = "Understood. I will not escalate this case right now."
 
-    append_message(
+    appended = append_message(
         req.session_id,
         "assistant",
         reply,
@@ -55,5 +55,11 @@ async def escalation_decision(req: EscalationDecisionRequest) -> dict:
                     (req.session_id,),
                 )
 
-    return {"ok": True, "assistant_reply": reply, "decision": req.decision}
+    created_at = appended.get("created_at") if isinstance(appended, dict) else None
+    return {
+        "ok": True,
+        "assistant_reply": reply,
+        "decision": req.decision,
+        "created_at": created_at,
+    }
 

@@ -150,14 +150,14 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 | `training/scripts/` | Bitext dataset build, binary split, `train_modernbert.py`, `eval_modernbert.py` |
 | `training/data/samples/` | Small committed examples for smoke tests |
 | `infra/postgres/` | Postgres init SQL (core tables) used by **Docker Compose** |
-| `db/postgres/` | Rerunnable dummy schema + **idempotent** seed data for procedure/tool scenarios (separate from Compose init) |
+| `db/postgres/` | Rerunnable dummy schema + **idempotent** seed (ecommerce demos + **sessions/messages/observability** aligned with [`infra/postgres/init.sql`](infra/postgres/init.sql)) |
 | `docs/` | Detailed guides |
 
 ### Dummy Postgres dataset (`db/postgres/`)
 
-Docker Compose initializes the database from [`infra/postgres/init.sql`](infra/postgres/init.sql). For **expanded test users, orders, refunds, and products** aligned with [`backend/procedures/`](backend/procedures/), apply the SQL **in order** via `psql` in the **`postgres`** container (from the repo root, stack running):
+Docker Compose initializes the database from [`infra/postgres/init.sql`](infra/postgres/init.sql). For **expanded test users, orders, refunds, products**, plus **seeded chat sessions** (unresolved / resolved / escalated) and observability samples, apply the SQL **in order** via `psql` in the **`postgres`** container (from the repo root, stack running):
 
-1. [`db/postgres/01_schema.sql`](db/postgres/01_schema.sql) — drops and recreates the dummy tables (rerunnable).
+1. [`db/postgres/01_schema.sql`](db/postgres/01_schema.sql) — drops and recreates the dummy ecommerce tables **and** the session/messaging/observability objects that match the app (`sessions`, `messages`, `tickets`, `agent_spans`, `outcomes`, `evaluation_scores`, analytics views).
 
    ```bash
    docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/01_schema.sql
@@ -183,7 +183,7 @@ Get-Content db/postgres/02_seed.sql -Raw | docker compose exec -T postgres psql 
 Get-Content db/postgres/03_smoke_checks.sql -Raw | docker compose exec -T postgres psql -U admin -d ecom_support -f -
 ```
 
-This dummy schema is **not** the same as `infra/postgres/init.sql` (different `orders` shape and related tables). Use a dedicated database or run these scripts when you want SQL-level fixtures for procedures; wiring the backend to that database may require matching column names to [`backend/db/`](backend/db/) repos.
+The **ecommerce** portion (VARCHAR `order_id`, `support_tickets`, etc.) is **not** the same as the UUID `orders` table in `infra/postgres/init.sql`. The **chat session** tables and observability schema are aligned with `infra/postgres/init.sql` so `sessions` / `messages` and related analytics match the backend. Use a dedicated database or run these scripts when you want SQL-level fixtures; wiring the backend may require matching column names to [`backend/db/`](backend/db/) repos.
 
 ## Development (Docker)
 

@@ -12,7 +12,13 @@ UNION ALL SELECT 'invoices', COUNT(*)::int FROM invoices
 UNION ALL SELECT 'refund_requests', COUNT(*)::int FROM refund_requests
 UNION ALL SELECT 'products', COUNT(*)::int FROM products
 UNION ALL SELECT 'support_tickets', COUNT(*)::int FROM support_tickets
-UNION ALL SELECT 'security_incidents', COUNT(*)::int FROM security_incidents;
+UNION ALL SELECT 'security_incidents', COUNT(*)::int FROM security_incidents
+UNION ALL SELECT 'sessions', COUNT(*)::int FROM sessions
+UNION ALL SELECT 'messages', COUNT(*)::int FROM messages
+UNION ALL SELECT 'tickets', COUNT(*)::int FROM tickets
+UNION ALL SELECT 'agent_spans', COUNT(*)::int FROM agent_spans
+UNION ALL SELECT 'outcomes', COUNT(*)::int FROM outcomes
+UNION ALL SELECT 'evaluation_scores', COUNT(*)::int FROM evaluation_scores;
 
 -- Issue types: one ticket per category from issue_required_fields.json (+ security)
 SELECT issue_type, COUNT(*)::int AS tickets
@@ -66,3 +72,36 @@ SELECT sku, name, price, is_available FROM products ORDER BY product_id;
 SELECT order_id, status, total_amount FROM orders WHERE order_id IN (
   'ORD-1004', 'ORD-1006', 'ORD-1007', 'ORD-1008', 'ORD-1011'
 ) ORDER BY order_id;
+
+-- Session-aware issue state (seeded demos)
+SELECT id, intent, issue_category, user_request,
+       resolved_at IS NOT NULL AS is_resolved,
+       escalated
+FROM sessions
+ORDER BY created_at;
+
+-- Messages per seeded session
+SELECT s.id AS session_id, COUNT(m.id)::int AS message_count
+FROM sessions s
+LEFT JOIN messages m ON m.session_id = s.id
+GROUP BY s.id
+ORDER BY s.id;
+
+-- Analytics views (non-empty after seed)
+SELECT * FROM v_automation_rate;
+SELECT * FROM v_escalation_rate;
+SELECT * FROM v_tool_success_rate;
+SELECT * FROM v_hallucination_rate;
+
+-- Escalated session has ticket + pending_human_action in latest assistant metadata
+SELECT s.id, t.summary,
+  (
+    SELECT m.metadata->>'pending_human_action'
+    FROM messages m
+    WHERE m.session_id = s.id AND m.role = 'assistant'
+    ORDER BY m.created_at DESC NULLS LAST
+    LIMIT 1
+  ) AS pending_human_action
+FROM sessions s
+JOIN tickets t ON t.session_id = s.id
+WHERE s.escalated = true;

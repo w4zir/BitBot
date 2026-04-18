@@ -185,6 +185,300 @@ ON CONFLICT (incident_id) DO UPDATE SET
   escalated_to = EXCLUDED.escalated_to,
   status = EXCLUDED.status;
 
+-- ---------------------------------------------------------------------------
+-- Chat sessions + messages (session-aware issue state; aligns with app / infra)
+-- ---------------------------------------------------------------------------
+
+-- Unresolved: locked order_status, awaiting details / tool completion
+INSERT INTO sessions (
+    id, user_id, company_id,
+    created_at, updated_at,
+    intent, escalated, resolved_at,
+    user_request, issue_category, issue_confidence,
+    csat_score, nps_score
+) VALUES (
+    '11111111-1111-4111-8111-111111111101',
+    'silver_user@example.com',
+    'demo',
+    '2026-04-17 09:00:00+00',
+    '2026-04-17 09:01:00+00',
+    'order_status',
+    false,
+    NULL,
+    'What is the status of my order ORD-1001?',
+    'order',
+    0.88,
+    NULL,
+    NULL
+)
+ON CONFLICT (id) DO UPDATE SET
+  user_id = EXCLUDED.user_id,
+  company_id = EXCLUDED.company_id,
+  updated_at = EXCLUDED.updated_at,
+  intent = EXCLUDED.intent,
+  escalated = EXCLUDED.escalated,
+  resolved_at = EXCLUDED.resolved_at,
+  user_request = EXCLUDED.user_request,
+  issue_category = EXCLUDED.issue_category,
+  issue_confidence = EXCLUDED.issue_confidence,
+  csat_score = EXCLUDED.csat_score,
+  nps_score = EXCLUDED.nps_score;
+
+INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUES
+(
+    '21111111-1111-4111-8111-111111111101',
+    '11111111-1111-4111-8111-111111111101',
+    'user',
+    'What is the status of my order ORD-1001?',
+    '{"source": "user"}'::jsonb,
+    '2026-04-17 09:00:00+00'
+),
+(
+    '21111111-1111-4111-8111-111111111102',
+    '11111111-1111-4111-8111-111111111101',
+    'assistant',
+    'I can look that up. If anything is missing, share your order number again.',
+    '{"category": "order", "intent": "order_status", "procedure_id": "order_status", "confidence": 0.88, "validation_ok": false, "validation_missing": ["email"]}'::jsonb,
+    '2026-04-17 09:01:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  role = EXCLUDED.role,
+  content = EXCLUDED.content,
+  metadata = EXCLUDED.metadata,
+  created_at = EXCLUDED.created_at;
+
+-- Resolved: small talk completed; resolved_at set
+INSERT INTO sessions (
+    id, user_id, company_id,
+    created_at, updated_at,
+    intent, escalated, resolved_at,
+    user_request, issue_category, issue_confidence,
+    csat_score, nps_score
+) VALUES (
+    '22222222-2222-4222-8222-222222222202',
+    'gold_user@example.com',
+    'demo',
+    '2026-04-16 14:00:00+00',
+    '2026-04-16 14:02:00+00',
+    'no_issue_chat',
+    false,
+    '2026-04-16 14:02:00+00',
+    'Thanks, that is all I needed!',
+    'no_issue',
+    0.99,
+    5,
+    9
+)
+ON CONFLICT (id) DO UPDATE SET
+  user_id = EXCLUDED.user_id,
+  company_id = EXCLUDED.company_id,
+  updated_at = EXCLUDED.updated_at,
+  intent = EXCLUDED.intent,
+  escalated = EXCLUDED.escalated,
+  resolved_at = EXCLUDED.resolved_at,
+  user_request = EXCLUDED.user_request,
+  issue_category = EXCLUDED.issue_category,
+  issue_confidence = EXCLUDED.issue_confidence,
+  csat_score = EXCLUDED.csat_score,
+  nps_score = EXCLUDED.nps_score;
+
+INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUES
+(
+    '22221111-2222-4222-8222-222222222201',
+    '22222222-2222-4222-8222-222222222202',
+    'user',
+    'Thanks, that is all I needed!',
+    '{"source": "user"}'::jsonb,
+    '2026-04-16 14:01:00+00'
+),
+(
+    '22221111-2222-4222-8222-222222222202',
+    '22222222-2222-4222-8222-222222222202',
+    'assistant',
+    'Happy to help anytime!',
+    '{"category": "no_issue", "intent": "no_issue_chat", "procedure_id": "no_issue_chat", "confidence": 0.99, "validation_ok": true, "validation_missing": []}'::jsonb,
+    '2026-04-16 14:02:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  role = EXCLUDED.role,
+  content = EXCLUDED.content,
+  metadata = EXCLUDED.metadata,
+  created_at = EXCLUDED.created_at;
+
+-- Escalated: refund path pending human approval (unresolved issue)
+INSERT INTO sessions (
+    id, user_id, company_id,
+    created_at, updated_at,
+    intent, escalated, resolved_at,
+    user_request, issue_category, issue_confidence,
+    csat_score, nps_score
+) VALUES (
+    '33333333-3333-4333-8333-333333333303',
+    'refund_scenarios@example.com',
+    'demo',
+    '2026-04-15 11:00:00+00',
+    '2026-04-15 11:05:00+00',
+    'get_refund',
+    true,
+    NULL,
+    'I want a refund for ORD-1008 — defective speaker.',
+    'refund',
+    0.91,
+    NULL,
+    NULL
+)
+ON CONFLICT (id) DO UPDATE SET
+  user_id = EXCLUDED.user_id,
+  company_id = EXCLUDED.company_id,
+  updated_at = EXCLUDED.updated_at,
+  intent = EXCLUDED.intent,
+  escalated = EXCLUDED.escalated,
+  resolved_at = EXCLUDED.resolved_at,
+  user_request = EXCLUDED.user_request,
+  issue_category = EXCLUDED.issue_category,
+  issue_confidence = EXCLUDED.issue_confidence,
+  csat_score = EXCLUDED.csat_score,
+  nps_score = EXCLUDED.nps_score;
+
+INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUES
+(
+    '33331111-3333-4333-8333-333333333301',
+    '33333333-3333-4333-8333-333333333303',
+    'user',
+    'I want a refund for ORD-1008 — defective speaker.',
+    '{"source": "user"}'::jsonb,
+    '2026-04-15 11:00:00+00'
+),
+(
+    '33331111-3333-4333-8333-333333333302',
+    '33333333-3333-4333-8333-333333333303',
+    'assistant',
+    'A specialist needs to review this refund. Please confirm if you want escalation.',
+    '{"category": "refund", "intent": "get_refund", "procedure_id": "get_refund", "confidence": 0.91, "validation_ok": true, "pending_human_action": true, "action_type": "refund_escalation", "action_id": "act-seed-1008"}'::jsonb,
+    '2026-04-15 11:05:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  role = EXCLUDED.role,
+  content = EXCLUDED.content,
+  metadata = EXCLUDED.metadata,
+  created_at = EXCLUDED.created_at;
+
+-- Session-linked support ticket (UUID tickets table)
+INSERT INTO tickets (id, session_id, issue_type, summary, status, priority, created_at) VALUES
+(
+    '44444444-4444-4444-8444-444444444404',
+    '33333333-3333-4333-8333-333333333303',
+    'refund',
+    'Refund escalation for ORD-1008 (defective speaker)',
+    'open',
+    'high',
+    '2026-04-15 11:05:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  issue_type = EXCLUDED.issue_type,
+  summary = EXCLUDED.summary,
+  status = EXCLUDED.status,
+  priority = EXCLUDED.priority,
+  created_at = EXCLUDED.created_at;
+
+-- Observability samples (populate analytics views)
+INSERT INTO agent_spans (id, session_id, trace_id, span_name, attributes, latency_ms, "timestamp", created_at) VALUES
+(
+    '55555555-5555-4555-8555-555555555501',
+    '11111111-1111-4111-8111-111111111101',
+    'trace-seed-1',
+    'execute_tool',
+    '{"tool": "check_order_status", "success": true}'::jsonb,
+    42.5,
+    '2026-04-17 09:01:00+00',
+    '2026-04-17 09:01:00+00'
+),
+(
+    '55555555-5555-4555-8555-555555555502',
+    '22222222-2222-4222-8222-222222222202',
+    'trace-seed-2',
+    'classify_category',
+    '{"model": "bento"}'::jsonb,
+    12.0,
+    '2026-04-16 14:01:00+00',
+    '2026-04-16 14:01:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  trace_id = EXCLUDED.trace_id,
+  span_name = EXCLUDED.span_name,
+  attributes = EXCLUDED.attributes,
+  latency_ms = EXCLUDED.latency_ms,
+  "timestamp" = EXCLUDED."timestamp",
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO outcomes (id, session_id, task, completed, escalated, verified, created_at) VALUES
+(
+    '66666666-6666-4666-8666-666666666601',
+    '11111111-1111-4111-8111-111111111101',
+    'order_status',
+    false,
+    false,
+    false,
+    '2026-04-17 09:01:00+00'
+),
+(
+    '66666666-6666-4666-8666-666666666602',
+    '22222222-2222-4222-8222-222222222202',
+    'no_issue_chat',
+    true,
+    false,
+    true,
+    '2026-04-16 14:02:00+00'
+),
+(
+    '66666666-6666-4666-8666-666666666603',
+    '33333333-3333-4333-8333-333333333303',
+    'get_refund',
+    false,
+    true,
+    false,
+    '2026-04-15 11:05:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  task = EXCLUDED.task,
+  completed = EXCLUDED.completed,
+  escalated = EXCLUDED.escalated,
+  verified = EXCLUDED.verified,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO evaluation_scores (id, session_id, groundedness, hallucination, helpfulness, metadata, evaluated_at) VALUES
+(
+    '77777777-7777-4777-8777-777777777701',
+    '22222222-2222-4222-8222-222222222202',
+    0.92,
+    false,
+    0.88,
+    '{"evaluator": "seed"}'::jsonb,
+    '2026-04-16 14:02:00+00'
+),
+(
+    '77777777-7777-4777-8777-777777777702',
+    '33333333-3333-4333-8333-333333333303',
+    0.75,
+    false,
+    0.70,
+    '{"evaluator": "seed"}'::jsonb,
+    '2026-04-15 11:05:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  groundedness = EXCLUDED.groundedness,
+  hallucination = EXCLUDED.hallucination,
+  helpfulness = EXCLUDED.helpfulness,
+  metadata = EXCLUDED.metadata,
+  evaluated_at = EXCLUDED.evaluated_at;
+
 COMMIT;
 
 -- Align SERIAL sequences after explicit IDs (safe for subsequent INSERTs without specifying ids)

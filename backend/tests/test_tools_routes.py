@@ -14,7 +14,7 @@ def client() -> TestClient:
 def test_tool_order_status_route(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "backend.api.routes.tools.get_order_status",
-        lambda _oid: {"order_number": "ORD-1", "status": "shipped"},
+        lambda _oid: {"order_id": "ORD-1", "status": "shipped"},
     )
     r = client.post("/tools/order-status", json={"order_id": "ORD-1"})
     assert r.status_code == 200

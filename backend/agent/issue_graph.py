@@ -16,6 +16,7 @@ from backend.agent.procedures import (
     get_category_intents,
     get_fallback_blueprint,
     infer_intent_from_text,
+    load_blueprints,
 )
 from backend.db.orders_repo import get_order_status
 from backend.db.products_repo import lookup_product
@@ -30,6 +31,7 @@ class IssueGraphState(TypedDict, total=False):
     text: str
     session_id: str
     messages: list[dict[str, Any]]
+    issue_locked: bool
     category: str
     intent: str
     confidence: float
@@ -44,8 +46,10 @@ class IssueGraphState(TypedDict, total=False):
 
 
 def _classify_category_node(state: IssueGraphState) -> IssueGraphState:
-    qc = get_query_classifier()
     text = state.get("text") or ""
+    if state.get("issue_locked"):
+        return {**state, "text": text}
+    qc = get_query_classifier()
     result: ClassificationResult = qc.classify(text)
     return {
         **state,
@@ -69,9 +73,17 @@ def _messages_for_llm(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
 def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
     category = normalize_category_key(state.get("category") or "unknown")
     text = state.get("text") or ""
+    meta = dict(state.get("assistant_metadata") or {})
+    if state.get("issue_locked"):
+        meta["intent_classifier"] = "session_locked"
+        meta["intent_candidates"] = [state.get("intent") or ""]
+        return {
+            **state,
+            "intent": (state.get("intent") or "").strip(),
+            "assistant_metadata": meta,
+        }
     intent = infer_intent_from_text(category=category, text=text)
     candidates = [bp.intent for bp in get_category_intents(category)]
-    meta = dict(state.get("assistant_metadata") or {})
     meta["intent_candidates"] = candidates
     meta["intent_classifier"] = "keyword_or_default"
     return {
@@ -152,7 +164,11 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
             "validation_ok": False,
             "validation_missing": [],
             "final_response": f"Validation could not run: {e}",
-            "assistant_metadata": {"branch": "validate", "error": str(e)},
+            "assistant_metadata": {
+                **dict(state.get("assistant_metadata") or {}),
+                "branch": "validate",
+                "error": str(e),
+            },
         }
     data = extract_json_object(raw)
     valid = bool(data.get("valid"))
@@ -168,6 +184,7 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
         assistant_reply = str(data.get("assistant_reply") or "")
 
     meta = {
+        **dict(state.get("assistant_metadata") or {}),
         "branch": "validate_required_data",
         "model_provider": provider,
         "model": model,
@@ -187,14 +204,78 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
 
 _ORDER_NUMBER_RE = re.compile(r"\b(ORD-[A-Z0-9]+)\b", re.IGNORECASE)
 _ESCALATION_DECISION_RE = re.compile(r"\b(accept|reject)\b", re.IGNORECASE)
+_USER_RESOLUTION_CONFIRM_RE = re.compile(
+    r"(?i)\b("
+    r"problem\s+solved|"
+    r"issue\s+resolved|"
+    r"all\s+set|"
+    r"no\s+more\s+(help|questions)|"
+    r"(it'?s|that'?s)\s+(resolved|fixed|sorted)|"
+    r"(yes[, ]+)?(that'?s|this\s+is)\s+(all|fixed|resolved|sorted)|"
+    r"(thanks|thank\s+you)[,.]?\s*(that'?s|this\s+is)\s+enough"
+    r")\b"
+)
 
 
-def _extract_order_number_from_messages(messages: list[dict[str, Any]]) -> str | None:
-    for m in reversed(messages or []):
+def get_category_for_stored_intent(intent: str) -> str | None:
+    """Resolve blueprint category from a stored intent name (for locked sessions)."""
+    it = (intent or "").strip().lower()
+    if not it:
+        return None
+    for bp in load_blueprints().values():
+        if bp.intent.lower() == it:
+            return bp.category
+    return None
+
+
+def user_confirms_resolution(text: str) -> bool:
+    """Heuristic: user explicitly signals their issue is resolved."""
+    return bool(_USER_RESOLUTION_CONFIRM_RE.search((text or "").strip()))
+
+
+def graph_suggests_session_resolved(state: IssueGraphState) -> bool:
+    """
+    True when the procedure finished successfully without pending human action or escalation
+    to a live agent.
+    """
+    meta = dict(state.get("assistant_metadata") or {})
+    if meta.get("pending_human_action"):
+        return False
+    if meta.get("escalation_decision") == "accept":
+        return False
+    if state.get("validation_ok") is False:
+        return False
+    if meta.get("tool_error") or meta.get("step_error"):
+        return False
+    if meta.get("branch") == "validate" and meta.get("error"):
+        return False
+    fr = str(state.get("final_response") or "")
+    if "could not map this request to a procedure" in fr.lower():
+        return False
+
+    todo = state.get("todo_list") or []
+    idx = int(state.get("current_step_index") or 0)
+    if not todo:
+        cat = str(state.get("category") or "").strip().lower()
+        if cat == "no_issue" and state.get("final_response"):
+            return True
+        return False
+    return idx >= len(todo)
+
+
+def _extract_order_id_from_conversation(
+    messages: list[dict[str, Any]] | None, text: str | None = None
+) -> str | None:
+    """First ORD-… token in chronological user messages wins; then current `text` if no match."""
+    for m in messages or []:
         if str(m.get("role")) != "user":
             continue
-        text = str(m.get("content") or "")
-        mo = _ORDER_NUMBER_RE.search(text)
+        content = str(m.get("content") or "")
+        mo = _ORDER_NUMBER_RE.search(content)
+        if mo:
+            return mo.group(1).upper()
+    if text:
+        mo = _ORDER_NUMBER_RE.search(str(text))
         if mo:
             return mo.group(1).upper()
     return None
@@ -223,7 +304,9 @@ def _extract_escalation_decision(messages: list[dict[str, Any]]) -> str | None:
 
 def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     """Populate context for order status from DB-backed repository."""
-    oid = _extract_order_number_from_messages(state.get("messages") or [])
+    oid = _extract_order_id_from_conversation(
+        state.get("messages") or [], state.get("text")
+    )
     tool_name = str(step.get("tool") or "check_order_status")
     base: dict[str, Any] = {
         "order_lookup_tool": tool_name,
@@ -269,7 +352,9 @@ def _lookup_product_info(step: dict[str, Any], state: IssueGraphState) -> dict[s
 
 def _lookup_refund_context(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     tool_name = str(step.get("tool") or "refund_context_lookup")
-    oid = _extract_order_number_from_messages(state.get("messages") or [])
+    oid = _extract_order_id_from_conversation(
+        state.get("messages") or [], state.get("text")
+    )
     base: dict[str, Any] = {"tool_call": tool_name, "order_id_extracted": oid}
     if not oid:
         return {**base, "refund_context_found": False}
@@ -482,16 +567,29 @@ def run_conversation_graph(
     text: str,
     session_id: str,
     messages: list[dict[str, Any]],
+    issue_locked: bool = False,
+    locked_category: str | None = None,
+    locked_intent: str | None = None,
+    locked_confidence: float | None = None,
 ) -> dict[str, Any]:
     graph = get_issue_classification_graph()
+    cat0 = "unknown"
+    intent0 = ""
+    conf0 = 0.0
+    if issue_locked and locked_intent:
+        cat0 = normalize_category_key(locked_category or get_category_for_stored_intent(locked_intent) or "unknown")
+        intent0 = str(locked_intent).strip()
+        conf0 = float(locked_confidence) if locked_confidence is not None else 1.0
+
     out = graph.invoke(
         {
             "text": text or "",
             "session_id": session_id or "",
             "messages": messages,
-            "category": "unknown",
-            "intent": "",
-            "confidence": 0.0,
+            "issue_locked": bool(issue_locked and locked_intent),
+            "category": cat0,
+            "intent": intent0,
+            "confidence": conf0,
             "procedure_id": "",
             "todo_list": [],
             "current_step_index": 0,
@@ -502,6 +600,7 @@ def run_conversation_graph(
             "assistant_metadata": {},
         }
     )
+    resolved_by_graph = graph_suggests_session_resolved(out)  # type: ignore[arg-type]
     return {
         "text": out.get("text", ""),
         "category": str(out.get("category", "unknown")),
@@ -512,4 +611,5 @@ def run_conversation_graph(
         "validation_missing": list(out.get("validation_missing") or []),
         "assistant_reply": out.get("final_response"),
         "assistant_metadata": out.get("assistant_metadata") or {},
+        "session_resolved_by_graph": resolved_by_graph,
     }

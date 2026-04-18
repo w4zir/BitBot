@@ -85,6 +85,30 @@ BEGIN
   ) THEN
     ALTER TABLE sessions ADD COLUMN resolved_at TIMESTAMPTZ;
   END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'user_request'
+  ) THEN
+    ALTER TABLE sessions ADD COLUMN user_request TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'issue_category'
+  ) THEN
+    ALTER TABLE sessions ADD COLUMN issue_category VARCHAR(100);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'issue_confidence'
+  ) THEN
+    ALTER TABLE sessions ADD COLUMN issue_confidence DOUBLE PRECISION;
+  END IF;
 END $$;
 
 CREATE TABLE IF NOT EXISTS agent_spans (

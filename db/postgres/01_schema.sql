@@ -1,7 +1,22 @@
 -- BitBot: Postgres schema for local/testing dummy data
 -- Rerunnable: drops existing objects in FK-safe order, then recreates.
+--
+-- Includes chat/session + observability structures aligned with infra/postgres/init.sql
+-- (dummy ecommerce tables below use VARCHAR order_id; infra UUID orders are not used here).
 
 BEGIN;
+
+-- Session / observability (must drop before sessions)
+DROP VIEW IF EXISTS v_hallucination_rate CASCADE;
+DROP VIEW IF EXISTS v_tool_success_rate CASCADE;
+DROP VIEW IF EXISTS v_escalation_rate CASCADE;
+DROP VIEW IF EXISTS v_automation_rate CASCADE;
+DROP TABLE IF EXISTS evaluation_scores CASCADE;
+DROP TABLE IF EXISTS outcomes CASCADE;
+DROP TABLE IF EXISTS agent_spans CASCADE;
+DROP TABLE IF EXISTS messages CASCADE;
+DROP TABLE IF EXISTS tickets CASCADE;
+DROP TABLE IF EXISTS sessions CASCADE;
 
 -- Children first (reverse dependency order)
 DROP TABLE IF EXISTS security_incidents CASCADE;
@@ -128,5 +143,123 @@ CREATE TABLE security_incidents (
     escalated_to VARCHAR(100),
     status VARCHAR(50)
 );
+
+-- ---------------------------------------------------------------------------
+-- Chat sessions + messages (aligns with infra/postgres/init.sql + issue state)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE sessions (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id            VARCHAR(100),
+    company_id         VARCHAR(100),
+    created_at         TIMESTAMPTZ DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ DEFAULT NOW(),
+    intent             VARCHAR(50),
+    escalated          BOOLEAN DEFAULT FALSE,
+    resolved_at        TIMESTAMPTZ,
+    user_request       TEXT,
+    issue_category     VARCHAR(100),
+    issue_confidence   DOUBLE PRECISION,
+    csat_score         SMALLINT,
+    nps_score          SMALLINT
+);
+
+CREATE TABLE messages (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id  UUID REFERENCES sessions(id),
+    role        VARCHAR(20) NOT NULL,
+    content     TEXT NOT NULL,
+    metadata    JSONB,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Support ticket records linked to a chat session (distinct from support_tickets above)
+CREATE TABLE tickets (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id  UUID REFERENCES sessions(id),
+    issue_type  VARCHAR(100),
+    summary     TEXT,
+    status      VARCHAR(50) DEFAULT 'open',
+    priority    VARCHAR(20) DEFAULT 'normal',
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE agent_spans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    trace_id VARCHAR(100),
+    span_name VARCHAR(100) NOT NULL,
+    attributes JSONB,
+    latency_ms NUMERIC(12, 3),
+    "timestamp" TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE outcomes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    task VARCHAR(100) NOT NULL,
+    completed BOOLEAN NOT NULL,
+    escalated BOOLEAN NOT NULL DEFAULT FALSE,
+    verified BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE evaluation_scores (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    groundedness DOUBLE PRECISION,
+    hallucination BOOLEAN,
+    helpfulness DOUBLE PRECISION,
+    metadata JSONB,
+    evaluated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_agent_spans_session_id ON agent_spans (session_id);
+CREATE INDEX idx_agent_spans_timestamp ON agent_spans ("timestamp");
+CREATE INDEX idx_outcomes_session_id ON outcomes (session_id);
+CREATE INDEX idx_outcomes_created_at ON outcomes (created_at);
+CREATE INDEX idx_eval_scores_session_id ON evaluation_scores (session_id);
+CREATE INDEX idx_eval_scores_evaluated_at ON evaluation_scores (evaluated_at);
+
+CREATE OR REPLACE VIEW v_automation_rate AS
+SELECT
+  COALESCE(
+    COUNT(*) FILTER (WHERE completed = TRUE AND escalated = FALSE)::DOUBLE PRECISION
+    / NULLIF(COUNT(*), 0),
+    0.0
+  ) AS automation_rate
+FROM outcomes;
+
+CREATE OR REPLACE VIEW v_escalation_rate AS
+SELECT
+  COALESCE(
+    COUNT(*) FILTER (WHERE escalated = TRUE)::DOUBLE PRECISION
+    / NULLIF(COUNT(*), 0),
+    0.0
+  ) AS escalation_rate
+FROM outcomes;
+
+CREATE OR REPLACE VIEW v_tool_success_rate AS
+SELECT
+  COALESCE(
+    AVG(
+      CASE
+        WHEN span_name = 'execute_tool' THEN
+          CASE
+            WHEN COALESCE((attributes ->> 'success')::BOOLEAN, FALSE) THEN 1.0
+            ELSE 0.0
+          END
+        ELSE NULL
+      END
+    ),
+    0.0
+  ) AS tool_success_rate
+FROM agent_spans;
+
+CREATE OR REPLACE VIEW v_hallucination_rate AS
+SELECT
+  COALESCE(AVG(CASE WHEN hallucination THEN 1.0 ELSE 0.0 END), 0.0) AS hallucination_rate
+FROM evaluation_scores;
 
 COMMIT;
