@@ -53,6 +53,49 @@ def main() -> None:
         if st.session_state.session_id:
             st.code(st.session_state.session_id)
 
+    # Process input before rendering so updated `messages` appear in the same run.
+    prompt = st.chat_input("Type a message…")
+    classify_out: dict | None = None
+    if prompt and prompt.strip():
+        user_text = prompt.strip()
+        try:
+            out = _post_classify(
+                user_text,
+                session_id=st.session_state.session_id,
+                full_flow=use_full,
+            )
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Request failed: {e}")
+        else:
+            classify_out = out
+            st.session_state.session_id = out.get("session_id") or st.session_state.session_id
+
+            if use_full and out.get("messages"):
+                st.session_state.messages = [
+                    {
+                        "role": m.get("role", "user"),
+                        "content": m.get("content", ""),
+                        "metadata": m.get("metadata") if isinstance(m.get("metadata"), dict) else {},
+                    }
+                    for m in out["messages"]
+                ]
+            else:
+                st.session_state.messages.append({"role": "user", "content": user_text})
+                if out.get("assistant_reply"):
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": str(out["assistant_reply"])}
+                    )
+                else:
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": (
+                                f"Category: `{out.get('category')}` · "
+                                f"confidence: `{out.get('confidence')}`"
+                            ),
+                        }
+                    )
+
     for m in st.session_state.messages:
         role = m.get("role", "user")
         content = m.get("content", "")
@@ -113,52 +156,9 @@ def main() -> None:
                 except Exception as e:  # noqa: BLE001
                     st.error(f"Escalation request failed: {e}")
 
-    prompt = st.chat_input("Type a message…")
-    if not prompt or not prompt.strip():
-        return
-
-    user_text = prompt.strip()
-
-    try:
-        out = _post_classify(
-            user_text,
-            session_id=st.session_state.session_id,
-            full_flow=use_full,
-        )
-    except Exception as e:  # noqa: BLE001
-        st.error(f"Request failed: {e}")
-        return
-
-    st.session_state.session_id = out.get("session_id") or st.session_state.session_id
-
-    if use_full and out.get("messages"):
-        st.session_state.messages = [
-            {
-                "role": m.get("role", "user"),
-                "content": m.get("content", ""),
-                "metadata": m.get("metadata") if isinstance(m.get("metadata"), dict) else {},
-            }
-            for m in out["messages"]
-        ]
-    else:
-        st.session_state.messages.append({"role": "user", "content": user_text})
-        if out.get("assistant_reply"):
-            st.session_state.messages.append(
-                {"role": "assistant", "content": str(out["assistant_reply"])}
-            )
-        else:
-            st.session_state.messages.append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        f"Category: `{out.get('category')}` · "
-                        f"confidence: `{out.get('confidence')}`"
-                    ),
-                }
-            )
-
-    with st.expander("Last response (JSON)"):
-        st.json(out)
+    if classify_out is not None:
+        with st.expander("Last response (JSON)"):
+            st.json(classify_out)
 
 
 if __name__ == "__main__":
