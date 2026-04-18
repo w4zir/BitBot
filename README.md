@@ -89,8 +89,19 @@ flowchart LR
 | `services/modernbert_bento/` | BentoML ModernBERT binary classifier |
 | `training/scripts/` | Bitext dataset build, binary split, `train_modernbert.py`, `eval_modernbert.py` |
 | `training/data/samples/` | Small committed examples for smoke tests |
-| `infra/postgres/` | Postgres init SQL (pgvector + tables) |
+| `infra/postgres/` | Postgres init SQL (pgvector + tables) used by **Docker Compose** |
+| `db/postgres/` | Rerunnable dummy schema + **idempotent** seed data for procedure/tool scenarios (separate from Compose init) |
 | `docs/` | Detailed guides |
+
+### Dummy Postgres dataset (`db/postgres/`)
+
+Docker Compose initializes the database from [`infra/postgres/init.sql`](infra/postgres/init.sql). For **expanded test users, orders, refunds, and products** aligned with [`backend/procedures/`](backend/procedures/), apply (in order) on a Postgres database of your choice:
+
+1. [`db/postgres/01_schema.sql`](db/postgres/01_schema.sql) — drops and recreates the dummy tables (rerunnable).
+2. [`db/postgres/02_seed.sql`](db/postgres/02_seed.sql) — loads data using `INSERT … ON CONFLICT … DO UPDATE` (safe to run **multiple times** without duplicate-key failures).
+3. Optional: [`db/postgres/03_smoke_checks.sql`](db/postgres/03_smoke_checks.sql) — sanity queries after load.
+
+This dummy schema is **not** the same as `infra/postgres/init.sql` (different `orders` shape and related tables). Use a dedicated DB or run these scripts when you want SQL-level fixtures for procedures; wiring the backend to that database may require matching column names to [`backend/db/`](backend/db/) repos.
 
 ## Development (local, without Docker)
 

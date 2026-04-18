@@ -10,6 +10,7 @@ UNION ALL SELECT 'shipments', COUNT(*)::int FROM shipments
 UNION ALL SELECT 'subscription_accounts', COUNT(*)::int FROM subscription_accounts
 UNION ALL SELECT 'invoices', COUNT(*)::int FROM invoices
 UNION ALL SELECT 'refund_requests', COUNT(*)::int FROM refund_requests
+UNION ALL SELECT 'products', COUNT(*)::int FROM products
 UNION ALL SELECT 'support_tickets', COUNT(*)::int FROM support_tickets
 UNION ALL SELECT 'security_incidents', COUNT(*)::int FROM security_incidents;
 
@@ -57,3 +58,11 @@ WHERE ticket_id = 102;
 
 -- Invoices: order vs subscription-linked
 SELECT invoice_id, order_id, account_email, status FROM invoices ORDER BY invoice_id;
+
+-- Product catalog (get_product_info / product_catalog_lookup)
+SELECT sku, name, price, is_available FROM products ORDER BY product_id;
+
+-- Procedure-oriented order samples (order_status / cancel / change address / refund context)
+SELECT order_id, status, total_amount FROM orders WHERE order_id IN (
+  'ORD-1004', 'ORD-1006', 'ORD-1007', 'ORD-1008', 'ORD-1011'
+) ORDER BY order_id;
