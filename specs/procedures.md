@@ -238,6 +238,8 @@ def structured_executor(state: AgentState) -> dict:
 
 ## 7. RAG Integration
 
+**BitBot implementation:** `retrieval` steps call Elasticsearch via `multi_match` on indexed policy documents (`title`, `content`, `tags`). There is no Postgres vector store or in-process reranker in the current codebase; the pseudocode below is the target pattern.
+
 After each `retrieval` step, apply a **reranker** before storing results in `context_data`. This ensures that only genuinely relevant chunks are passed to subsequent tool calls or LLM steps.
 
 ```python

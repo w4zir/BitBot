@@ -25,7 +25,7 @@ flowchart LR
 - **Procedures** (`backend/procedures/`): One YAML blueprint per intent. Blueprints define `required_data` and ordered steps (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) used to enforce deterministic control flow.
 - **ModernBERT** (`services/modernbert_bento/`): BentoML service loading a local fine-tuned checkpoint.
 - **Policy source**: Policy constraints/content remain external to procedures and come from Elasticsearch-backed policy documents through retrieval steps.
-- **Data stores**: Postgres (pgvector-ready schema in `infra/postgres/init.sql`) plus Elasticsearch for policy retrieval.
+- **Data stores**: Postgres for sessions, orders, products, and related app data (`infra/postgres/init.sql`). **Policy retrieval** uses **Elasticsearch only** (no vector search in Postgres).
 - **Product catalog**: `products` table in Postgres backs `get_product_info` tool-calling.
 
 ## Documentation
@@ -33,6 +33,41 @@ flowchart LR
 | Topic | Document |
 |-------|----------|
 | Dataset creation, binary split, fine-tuning, evaluation, serving | [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md) |
+
+## How to add data to Elasticsearch
+
+Policy retrieval (`backend/rag/policy_retriever.py`) queries Elasticsearch with a `multi_match` on **`title`**, **`content`**, and **`tags`**. Configure the cluster with `.env` (see `.env.example`): `ES_HOST`, `ES_PORT`, `ES_SCHEME`, **`ES_POLICY_INDEX`** (default: `policy_docs`), and `ES_TIMEOUT_SECONDS`. With Docker Compose, these are passed into the `backend` service.
+
+1. **Ensure Elasticsearch is reachable** (e.g. `docker compose up` exposes port **9200**; security is disabled in Compose for local dev).
+
+2. **Create an index** (optional; dynamic mapping is enough for a quick start). Replace `policy_docs` if you use a custom `ES_POLICY_INDEX`:
+
+   ```bash
+   curl -s -X PUT "http://localhost:9200/policy_docs" -H "Content-Type: application/json" -d "{}"
+   ```
+
+3. **Index documents** with `_bulk`. Each source document must include the fields the retriever searches:
+
+   ```bash
+   curl -s -X POST "http://localhost:9200/_bulk" -H "Content-Type: application/x-ndjson" --data-binary @- <<'EOF'
+   {"index":{"_index":"policy_docs","_id":"refund-overview"}}
+   {"title":"Refund policy overview","content":"Customers may request a refund within 30 days of purchase.","tags":["refund","policy"]}
+   {"index":{"_index":"policy_docs","_id":"shipping-late"}}
+   {"title":"Late delivery","content":"If your order is late, contact support with your order number.","tags":["shipping","order"]}
+   EOF
+   ```
+
+   On **Windows PowerShell**, heredocs are not available; save the NDJSON lines (action line + JSON line per document) to a file such as `bulk.ndjson` and run: `curl -s -X POST "http://localhost:9200/_bulk" -H "Content-Type: application/x-ndjson" --data-binary "@bulk.ndjson"`.
+
+4. **Verify** with a search that matches the app query shape:
+
+   ```bash
+   curl -s -X POST "http://localhost:9200/policy_docs/_search" -H "Content-Type: application/json" -d "{\"size\":3,\"query\":{\"multi_match\":{\"query\":\"refund\",\"fields\":[\"title^2\",\"content\",\"tags\"]}}}"
+   ```
+
+5. **Optional source material**: Markdown under [`data/policy_docs/`](data/policy_docs/) can be copied or scripted into `content` / `title` / `tags` when building your index (there is no bundled indexer in this repo).
+
+If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint only records that Elasticsearch env vars are configured, not cluster health.
 
 ## Quickstart (Docker)
 
@@ -89,7 +124,7 @@ flowchart LR
 | `services/modernbert_bento/` | BentoML ModernBERT binary classifier |
 | `training/scripts/` | Bitext dataset build, binary split, `train_modernbert.py`, `eval_modernbert.py` |
 | `training/data/samples/` | Small committed examples for smoke tests |
-| `infra/postgres/` | Postgres init SQL (pgvector + tables) used by **Docker Compose** |
+| `infra/postgres/` | Postgres init SQL (core tables) used by **Docker Compose** |
 | `db/postgres/` | Rerunnable dummy schema + **idempotent** seed data for procedure/tool scenarios (separate from Compose init) |
 | `docs/` | Detailed guides |
 

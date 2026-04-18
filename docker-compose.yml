@@ -1,7 +1,7 @@
 # BitBot — frontend, backend, Postgres, Elasticsearch, ModernBERT (BentoML)
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ecom_support}
       POSTGRES_USER: ${POSTGRES_USER:-admin}
@@ -50,6 +50,11 @@ services:
       NO_ISSUE_MODEL: ${NO_ISSUE_MODEL:-llama3.2}
       VALIDATION_MODEL_PROVIDER: ${VALIDATION_MODEL_PROVIDER:-ollama}
       VALIDATION_MODEL: ${VALIDATION_MODEL:-llama3.2}
+      ES_HOST: ${ES_HOST:-elasticsearch}
+      ES_PORT: ${ES_PORT:-9200}
+      ES_SCHEME: ${ES_SCHEME:-http}
+      ES_POLICY_INDEX: ${ES_POLICY_INDEX:-policy_docs}
+      ES_TIMEOUT_SECONDS: ${ES_TIMEOUT_SECONDS:-5}
     depends_on:
       - postgres
       - elasticsearch

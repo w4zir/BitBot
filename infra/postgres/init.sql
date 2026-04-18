@@ -1,25 +1,5 @@
--- infra/postgres/init.sql — pgvector + core tables (Phase 0/1)
--- EMBEDDING_DIM: 768 for nomic-embed-text (Ollama), 1536 for OpenAI text-embedding-3-small
-
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TABLE documents (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    content     TEXT NOT NULL,
-    parent_id   UUID REFERENCES documents(id),
-    embedding   VECTOR(768),
-    company_id  VARCHAR(100),
-    source      VARCHAR(50),
-    doc_tier    INTEGER DEFAULT 1,
-    category    VARCHAR(100),
-    source_id   VARCHAR(200),
-    metadata    JSONB,
-    created_at  TIMESTAMPTZ DEFAULT NOW()
-);
-CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-CREATE INDEX ON documents (doc_tier);
-CREATE INDEX ON documents (source);
-CREATE INDEX ON documents (company_id);
+-- infra/postgres/init.sql — core tables (Phase 0/1)
+-- Policy text retrieval uses Elasticsearch only (see README).
 
 CREATE TABLE sessions (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
