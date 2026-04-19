@@ -208,3 +208,28 @@ CREATE OR REPLACE VIEW v_hallucination_rate AS
 SELECT
   COALESCE(AVG(CASE WHEN hallucination THEN 1.0 ELSE 0.0 END), 0.0) AS hallucination_rate
 FROM evaluation_scores;
+
+-- ---------------------------------------------------------------------------
+-- Intent taxonomy: Bitext categories/intents + custom no_issue / product
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS intent_categories (
+    id           SERIAL PRIMARY KEY,
+    name         VARCHAR(100) UNIQUE NOT NULL,
+    display_name VARCHAR(200) NOT NULL,
+    source       VARCHAR(50)  NOT NULL DEFAULT 'bitext',
+    is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS category_intents (
+    id              SERIAL PRIMARY KEY,
+    category_name   VARCHAR(100) NOT NULL REFERENCES intent_categories (name) ON DELETE CASCADE,
+    intent_name     VARCHAR(200) NOT NULL,
+    display_name    VARCHAR(200) NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (category_name, intent_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_category_intents_category ON category_intents (category_name);

@@ -479,6 +479,85 @@ ON CONFLICT (id) DO UPDATE SET
   metadata = EXCLUDED.metadata,
   evaluated_at = EXCLUDED.evaluated_at;
 
+-- Intent taxonomy: Bitext categories + custom no_issue / product (aligns with training/data/bitext_category + plan)
+INSERT INTO intent_categories (name, display_name, source, is_active) VALUES
+('account', 'Account', 'bitext', true),
+('cancel', 'Cancel', 'bitext', true),
+('contact', 'Contact', 'bitext', true),
+('delivery', 'Delivery', 'bitext', true),
+('feedback', 'Feedback', 'bitext', true),
+('invoice', 'Invoice', 'bitext', true),
+('order', 'Order', 'bitext', true),
+('payment', 'Payment', 'bitext', true),
+('refund', 'Refund', 'bitext', true),
+('shipping', 'Shipping', 'bitext', true),
+('subscription', 'Subscription', 'bitext', true),
+('no_issue', 'No issue', 'custom', true),
+('product', 'Product', 'custom', true)
+ON CONFLICT (name) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  source = EXCLUDED.source,
+  is_active = EXCLUDED.is_active;
+
+INSERT INTO category_intents (category_name, intent_name, display_name, is_active) VALUES
+-- account
+('account', 'create_account', 'Create account', true),
+('account', 'delete_account', 'Delete account', true),
+('account', 'edit_account', 'Edit account', true),
+('account', 'recover_password', 'Recover password', true),
+('account', 'registration_problems', 'Registration problems', true),
+('account', 'switch_account', 'Switch account', true),
+('account', 'verify_contact_info', 'Verify contact info', true),
+-- cancel
+('cancel', 'cancel_order', 'Cancel order', true),
+('cancel', 'change_order', 'Change order', true),
+('cancel', 'check_cancellation_fee', 'Check cancellation fee', true),
+-- contact
+('contact', 'contact_customer_service', 'Contact customer service', true),
+('contact', 'contact_human_agent', 'Contact human agent', true),
+-- delivery
+('delivery', 'delivery_options', 'Delivery options', true),
+('delivery', 'delivery_period', 'Delivery period', true),
+('delivery', 'lost_or_stolen_package', 'Lost or stolen package', true),
+('delivery', 'wrong_address_entered', 'Wrong address entered', true),
+-- feedback
+('feedback', 'complaint', 'Complaint', true),
+('feedback', 'review', 'Review', true),
+-- invoice
+('invoice', 'check_invoice', 'Check invoice', true),
+('invoice', 'get_invoice', 'Get invoice', true),
+-- order
+('order', 'track_order', 'Track order', true),
+('order', 'place_order', 'Place order', true),
+('order', 'change_order', 'Change order', true),
+('order', 'check_invoice', 'Check invoice', true),
+-- payment
+('payment', 'check_payment_methods', 'Check payment methods', true),
+('payment', 'payment_issue', 'Payment issue', true),
+('payment', 'track_refund', 'Track refund', true),
+-- refund
+('refund', 'get_refund', 'Get refund', true),
+('refund', 'check_refund_policy', 'Check refund policy', true),
+('refund', 'track_refund', 'Track refund', true),
+-- shipping
+('shipping', 'change_shipping_address', 'Change shipping address', true),
+('shipping', 'delivery_options', 'Delivery options', true),
+('shipping', 'delivery_period', 'Delivery period', true),
+('shipping', 'set_up_shipping_address', 'Set up shipping address', true),
+-- subscription
+('subscription', 'newsletter_subscription', 'Newsletter subscription', true),
+('subscription', 'subscription_status', 'Subscription status', true),
+('subscription', 'unsubscribe', 'Unsubscribe', true),
+-- no_issue (custom)
+('no_issue', 'no_issue', 'No issue', true),
+-- product (custom)
+('product', 'product_info', 'Product info', true),
+('product', 'product_price', 'Product price', true),
+('product', 'product_availability', 'Product availability', true)
+ON CONFLICT (category_name, intent_name) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  is_active = EXCLUDED.is_active;
+
 COMMIT;
 
 -- Align SERIAL sequences after explicit IDs (safe for subsequent INSERTs without specifying ids)
@@ -488,3 +567,5 @@ SELECT setval(pg_get_serial_sequence('products', 'product_id'), COALESCE((SELECT
 SELECT setval(pg_get_serial_sequence('refund_requests', 'refund_id'), COALESCE((SELECT MAX(refund_id) FROM refund_requests), 1), true);
 SELECT setval(pg_get_serial_sequence('support_tickets', 'ticket_id'), COALESCE((SELECT MAX(ticket_id) FROM support_tickets), 1), true);
 SELECT setval(pg_get_serial_sequence('security_incidents', 'incident_id'), COALESCE((SELECT MAX(incident_id) FROM security_incidents), 1), true);
+SELECT setval(pg_get_serial_sequence('intent_categories', 'id'), COALESCE((SELECT MAX(id) FROM intent_categories), 1), true);
+SELECT setval(pg_get_serial_sequence('category_intents', 'id'), COALESCE((SELECT MAX(id) FROM category_intents), 1), true);

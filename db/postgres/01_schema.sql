@@ -6,6 +6,10 @@
 
 BEGIN;
 
+-- Category / intent taxonomy (Bitext + custom); drop before dependent nothing else references these
+DROP TABLE IF EXISTS category_intents CASCADE;
+DROP TABLE IF EXISTS intent_categories CASCADE;
+
 -- Session / observability (must drop before sessions)
 DROP VIEW IF EXISTS v_hallucination_rate CASCADE;
 DROP VIEW IF EXISTS v_tool_success_rate CASCADE;
@@ -143,6 +147,31 @@ CREATE TABLE security_incidents (
     escalated_to VARCHAR(100),
     status VARCHAR(50)
 );
+
+-- ---------------------------------------------------------------------------
+-- Intent taxonomy: Bitext categories/intents + custom no_issue / product
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE intent_categories (
+    id           SERIAL PRIMARY KEY,
+    name         VARCHAR(100) UNIQUE NOT NULL,
+    display_name VARCHAR(200) NOT NULL,
+    source       VARCHAR(50)  NOT NULL DEFAULT 'bitext',
+    is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE category_intents (
+    id              SERIAL PRIMARY KEY,
+    category_name   VARCHAR(100) NOT NULL REFERENCES intent_categories (name) ON DELETE CASCADE,
+    intent_name     VARCHAR(200) NOT NULL,
+    display_name    VARCHAR(200) NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (category_name, intent_name)
+);
+
+CREATE INDEX idx_category_intents_category ON category_intents (category_name);
 
 -- ---------------------------------------------------------------------------
 -- Chat sessions + messages (aligns with infra/postgres/init.sql + issue state)
