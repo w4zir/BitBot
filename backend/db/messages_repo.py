@@ -28,7 +28,7 @@ def get_session(session_id: str) -> Optional[dict[str, Any]]:
             cur.execute(
                 """
                 SELECT id, user_id, company_id, created_at,
-                       intent, user_request, issue_category, issue_confidence,
+                       intent, user_request, problem_to_solve, issue_category, issue_confidence,
                        resolved_at, escalated
                 FROM sessions WHERE id = %s
                 """,
@@ -44,10 +44,11 @@ def get_session(session_id: str) -> Optional[dict[str, Any]]:
                 "created_at": row[3],
                 "intent": row[4],
                 "user_request": row[5],
-                "issue_category": row[6],
-                "issue_confidence": row[7],
-                "resolved_at": row[8],
-                "escalated": row[9],
+                "problem_to_solve": row[6],
+                "issue_category": row[7],
+                "issue_confidence": row[8],
+                "resolved_at": row[9],
+                "escalated": row[10],
             }
 
 
@@ -61,6 +62,7 @@ def update_session_active_issue(
     *,
     intent: str,
     user_request: str,
+    problem_to_solve: str,
     issue_category: str,
     issue_confidence: float,
 ) -> None:
@@ -72,13 +74,14 @@ def update_session_active_issue(
                 UPDATE sessions
                 SET intent = %s,
                     user_request = %s,
+                    problem_to_solve = %s,
                     issue_category = %s,
                     issue_confidence = %s,
                     resolved_at = NULL,
                     updated_at = NOW()
                 WHERE id = %s
                 """,
-                (intent, user_request, issue_category, issue_confidence, session_id),
+                (intent, user_request, problem_to_solve, issue_category, issue_confidence, session_id),
             )
 
 

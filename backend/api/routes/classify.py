@@ -46,6 +46,7 @@ class SessionIssue(BaseModel):
 
     intent: str = ""
     user_request: str = ""
+    problem_to_solve: str = ""
     is_resolved: bool = False
 
 
@@ -147,6 +148,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             "intent": str(pre.get("intent") or ""),
             "procedure_id": "",
             "confidence": float(pre.get("issue_confidence") or 0.0),
+            "problem_to_solve": str(pre.get("problem_to_solve") or ""),
             "resolution": "user_confirmed",
         }
         append_message(
@@ -157,6 +159,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         )
         final_rows = list_messages(session_id)
         ur = str(pre.get("user_request") or "")
+        problem_to_solve = str(pre.get("problem_to_solve") or "")
         return ClassifyResponse(
             session_id=session_id,
             text=text,
@@ -172,6 +175,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             session_issue=SessionIssue(
                 intent=str(pre.get("intent") or ""),
                 user_request=ur,
+                problem_to_solve=problem_to_solve,
                 is_resolved=True,
             ),
         )
@@ -183,6 +187,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         issue_locked=issue_locked,
         locked_category=str(pre.get("issue_category") or "") if issue_locked else None,
         locked_intent=str(pre.get("intent") or "") if issue_locked else None,
+        locked_problem_to_solve=str(pre.get("problem_to_solve") or "") if issue_locked else None,
         locked_confidence=float(pre["issue_confidence"])
         if issue_locked and pre.get("issue_confidence") is not None
         else None,
@@ -191,6 +196,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
     cat = graph_out.get("category") or "unknown"
     conf = float(graph_out.get("confidence") or 0.0)
     intent = str(graph_out.get("intent") or "")
+    problem_to_solve = str(graph_out.get("problem_to_solve") or "")
     procedure_id = str(graph_out.get("procedure_id") or "")
     val_ok = graph_out.get("validation_ok")
     val_missing = list(graph_out.get("validation_missing") or [])
@@ -201,6 +207,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
     assistant_meta: dict[str, Any] = {
         "category": cat,
         "intent": intent,
+        "problem_to_solve": problem_to_solve,
         "procedure_id": procedure_id,
         "confidence": conf,
         **(meta if isinstance(meta, dict) else {}),
@@ -223,6 +230,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             session_id,
             intent=intent,
             user_request=text,
+            problem_to_solve=problem_to_solve,
             issue_category=str(cat),
             issue_confidence=conf,
         )
@@ -247,6 +255,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         session_issue=SessionIssue(
             intent=str(post.get("intent") or ""),
             user_request=str(post.get("user_request") or ""),
+            problem_to_solve=str(post.get("problem_to_solve") or ""),
             is_resolved=post.get("resolved_at") is not None,
         ),
     )

@@ -187,6 +187,7 @@ CREATE TABLE sessions (
     escalated          BOOLEAN DEFAULT FALSE,
     resolved_at        TIMESTAMPTZ,
     user_request       TEXT,
+    problem_to_solve   TEXT,
     issue_category     VARCHAR(100),
     issue_confidence   DOUBLE PRECISION,
     csat_score         SMALLINT,

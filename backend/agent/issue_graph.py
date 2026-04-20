@@ -13,12 +13,12 @@ from langgraph.graph import END, StateGraph
 from backend.agent.procedures import (
     as_dict,
     get_blueprint_by_category_intent,
-    get_category_intents,
     get_fallback_blueprint,
-    infer_intent_from_text,
     load_blueprints,
 )
+from backend.db.intents_repo import get_intents_for_category
 from backend.db.orders_repo import get_order_status
+from backend.db.postgres import postgres_configured
 from backend.db.products_repo import lookup_product
 from backend.db.refunds_repo import get_refund_context
 from backend.llm.providers import chat_completion, extract_json_object
@@ -35,6 +35,7 @@ class IssueGraphState(TypedDict, total=False):
     category: str
     intent: str
     confidence: float
+    problem_to_solve: str
     procedure_id: str
     todo_list: list[dict[str, Any]]
     current_step_index: int
@@ -59,6 +60,41 @@ def _classify_category_node(state: IssueGraphState) -> IssueGraphState:
     }
 
 
+def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
+    provider = os.getenv("NO_ISSUE_MODEL_PROVIDER", "ollama").strip().lower()
+    model = os.getenv("NO_ISSUE_MODEL", "llama3.2").strip()
+    system = os.getenv(
+        "NO_ISSUE_SYSTEM_PROMPT",
+        "You are a helpful assistant for a commerce chatbot. Reply concisely and helpfully.",
+    ).strip()
+
+    llm_messages: list[dict[str, str]] = []
+    if system:
+        llm_messages.append({"role": "system", "content": system})
+    llm_messages.extend(_messages_for_llm(state.get("messages") or []))
+
+    meta = dict(state.get("assistant_metadata") or {})
+    meta["branch"] = "no_issue_direct"
+    meta["model_provider"] = provider
+    meta["model"] = model
+    try:
+        reply = chat_completion(provider=provider, model=model, messages=llm_messages)
+    except Exception as e:  # noqa: BLE001
+        reply = f"(Model error: {e})"
+        meta["error"] = str(e)
+
+    return {
+        **state,
+        "intent": "no_issue_chat",
+        "problem_to_solve": "",
+        "procedure_id": "no_issue_chat",
+        "todo_list": [],
+        "current_step_index": 0,
+        "final_response": reply,
+        "assistant_metadata": meta,
+    }
+
+
 def _messages_for_llm(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for m in messages:
@@ -70,9 +106,28 @@ def _messages_for_llm(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     return out
 
 
+def _user_messages_from_session(messages: list[dict[str, Any]]) -> list[str]:
+    out: list[str] = []
+    for msg in messages:
+        if str(msg.get("role") or "").strip().lower() != "user":
+            continue
+        content = str(msg.get("content") or "").strip()
+        if content:
+            out.append(content)
+    return out
+
+
+def _load_allowed_intents(category: str) -> list[str]:
+    if not postgres_configured():
+        return []
+    try:
+        return get_intents_for_category(category)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
     category = normalize_category_key(state.get("category") or "unknown")
-    text = state.get("text") or ""
     meta = dict(state.get("assistant_metadata") or {})
     if state.get("issue_locked"):
         meta["intent_classifier"] = "session_locked"
@@ -80,15 +135,76 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
         return {
             **state,
             "intent": (state.get("intent") or "").strip(),
+            "problem_to_solve": str(state.get("problem_to_solve") or "").strip(),
             "assistant_metadata": meta,
         }
-    intent = infer_intent_from_text(category=category, text=text)
-    candidates = [bp.intent for bp in get_category_intents(category)]
-    meta["intent_candidates"] = candidates
-    meta["intent_classifier"] = "keyword_or_default"
+
+    provider = os.getenv("INTENT_MODEL_PROVIDER", "ollama").strip().lower()
+    model = os.getenv("INTENT_MODEL", "llama3.2").strip()
+    confidence = float(state.get("confidence") or 0.0)
+    user_messages = _user_messages_from_session(state.get("messages") or [])
+    messages_json = json.dumps(user_messages, ensure_ascii=False)
+    allowed_intents = _load_allowed_intents(category)
+    if allowed_intents:
+        intents_bullets = "\n".join(f"- {item}" for item in allowed_intents)
+        system_prompt = (
+            "You classify a customer support session into a stable procedure intent and summarize "
+            "the user's problem to solve.\n"
+            "Use ONLY the provided category, confidence score, and user messages.\n"
+            "Respond with ONLY a JSON object shaped as:\n"
+            '{"intent":"snake_case_short_label","problem_to_solve":"one concise sentence"}\n'
+            "Rules:\n"
+            "- intent must be stable for the full session.\n"
+            "- intent MUST be one of the allowed intents listed below.\n"
+            f"- if none fits, use {category}_general.\n"
+            "- problem_to_solve should capture the concrete user problem for this session.\n"
+            "- Keep both values concise and deterministic.\n\n"
+            f"Allowed intents for category '{category}':\n{intents_bullets}"
+        )
+    else:
+        system_prompt = (
+            "You classify a customer support session into a stable procedure intent and summarize "
+            "the user's problem to solve.\n"
+            "Use ONLY the provided category, confidence score, and user messages.\n"
+            "Respond with ONLY a JSON object shaped as:\n"
+            '{"intent":"snake_case_short_label","problem_to_solve":"one concise sentence"}\n'
+            "Rules:\n"
+            "- intent must be stable for the full session.\n"
+            "- problem_to_solve should capture the concrete user problem for this session.\n"
+            "- Keep both values concise and deterministic."
+        )
+    user_prompt = (
+        f"Category: {category}\n"
+        f"Category probability: {confidence:.6f}\n"
+        f"User messages (chronological JSON array): {messages_json}"
+    )
+    llm_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    try:
+        raw = chat_completion(provider=provider, model=model, messages=llm_messages)
+        data = extract_json_object(raw)
+    except Exception as e:  # noqa: BLE001
+        data = {}
+        meta["intent_classifier_error"] = str(e)
+
+    intent = str(data.get("intent") or f"{category}_general").strip()
+    if not intent:
+        intent = f"{category}_general"
+    if allowed_intents and intent not in allowed_intents:
+        intent = f"{category}_general"
+    problem_to_solve = str(data.get("problem_to_solve") or "").strip()
+
+    meta["intent_classifier"] = "llm"
+    meta["intent_model_provider"] = provider
+    meta["intent_model"] = model
+    meta["intent_allowed_list_used"] = bool(allowed_intents)
+    meta["intent_candidates"] = allowed_intents if allowed_intents else [intent]
     return {
         **state,
         "intent": intent,
+        "problem_to_solve": problem_to_solve,
         "assistant_metadata": meta,
     }
 
@@ -515,15 +631,28 @@ def _should_continue(state: IssueGraphState) -> Literal["continue", "end"]:
         return "end"
     return "continue"
 
+
+def _route_after_category(state: IssueGraphState) -> Literal["no_issue_direct", "classify_intent"]:
+    category = normalize_category_key(state.get("category") or "unknown")
+    if category == "no_issue":
+        return "no_issue_direct"
+    return "classify_intent"
+
 def build_issue_classification_graph():
     g: StateGraph[IssueGraphState] = StateGraph(IssueGraphState)
     g.add_node("classify_category", _classify_category_node)
+    g.add_node("no_issue_direct", _no_issue_direct_node)
     g.add_node("classify_intent", _classify_intent_node)
     g.add_node("fetch_procedure", _fetch_procedure_node)
     g.add_node("validate_required", _validate_required_data_node)
     g.add_node("structured_executor", _structured_executor_node)
     g.set_entry_point("classify_category")
-    g.add_edge("classify_category", "classify_intent")
+    g.add_conditional_edges(
+        "classify_category",
+        _route_after_category,
+        {"no_issue_direct": "no_issue_direct", "classify_intent": "classify_intent"},
+    )
+    g.add_edge("no_issue_direct", END)
     g.add_edge("classify_intent", "fetch_procedure")
     g.add_edge("fetch_procedure", "validate_required")
     g.add_edge("validate_required", "structured_executor")
@@ -570,15 +699,18 @@ def run_conversation_graph(
     issue_locked: bool = False,
     locked_category: str | None = None,
     locked_intent: str | None = None,
+    locked_problem_to_solve: str | None = None,
     locked_confidence: float | None = None,
 ) -> dict[str, Any]:
     graph = get_issue_classification_graph()
     cat0 = "unknown"
     intent0 = ""
+    problem0 = ""
     conf0 = 0.0
     if issue_locked and locked_intent:
         cat0 = normalize_category_key(locked_category or get_category_for_stored_intent(locked_intent) or "unknown")
         intent0 = str(locked_intent).strip()
+        problem0 = str(locked_problem_to_solve or "").strip()
         conf0 = float(locked_confidence) if locked_confidence is not None else 1.0
 
     out = graph.invoke(
@@ -589,6 +721,7 @@ def run_conversation_graph(
             "issue_locked": bool(issue_locked and locked_intent),
             "category": cat0,
             "intent": intent0,
+            "problem_to_solve": problem0,
             "confidence": conf0,
             "procedure_id": "",
             "todo_list": [],
@@ -605,6 +738,7 @@ def run_conversation_graph(
         "text": out.get("text", ""),
         "category": str(out.get("category", "unknown")),
         "intent": str(out.get("intent", "")),
+        "problem_to_solve": str(out.get("problem_to_solve", "")),
         "confidence": float(out.get("confidence", 0.0)),
         "procedure_id": str(out.get("procedure_id", "")),
         "validation_ok": out.get("validation_ok"),

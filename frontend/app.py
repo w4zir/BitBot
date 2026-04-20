@@ -103,16 +103,16 @@ def main() -> None:
     with st.sidebar:
         st.subheader("Session")
         use_full = st.toggle("Full flow (Postgres + LangGraph + LLM)", value=True)
-        if st.session_state.last_classify_json and use_full:
-            si = st.session_state.last_classify_json.get("session_issue") or {}
-            if isinstance(si, dict):
-                st.markdown("**Active issue**")
-                st.caption("Intent (locked until resolved)")
-                st.code(si.get("intent") or "—")
-                st.caption("User request")
-                st.write(si.get("user_request") or "—")
-                st.caption("Resolved")
-                st.write("Yes" if si.get("is_resolved") else "No")
+        si = (st.session_state.last_classify_json or {}).get("session_issue") or {}
+        if not isinstance(si, dict):
+            si = {}
+        st.markdown("**Session status**")
+        st.caption("Intent")
+        st.code(si.get("intent") or "—")
+        st.caption("Problem to solve")
+        st.write(si.get("problem_to_solve") or "—")
+        st.caption("Resolved")
+        st.write("Yes" if si.get("is_resolved") else "No")
         if st.button("New session"):
             st.session_state.session_id = None
             st.session_state.messages = []

@@ -97,18 +97,6 @@ def get_category_intents(category: str) -> list[ProcedureBlueprint]:
     return [bp for bp in load_blueprints().values() if bp.category.lower() == cat]
 
 
-def infer_intent_from_text(*, category: str, text: str) -> str:
-    choices = get_category_intents(category)
-    t = (text or "").strip().lower()
-    if not choices:
-        return f"{(category or 'unknown').lower()}_general"
-    for bp in choices:
-        for kw in bp.keywords:
-            if kw.strip().lower() and kw.strip().lower() in t:
-                return bp.intent
-    return choices[0].intent
-
-
 def validate_blueprints() -> list[str]:
     errors: list[str] = []
     blueprints = load_blueprints()

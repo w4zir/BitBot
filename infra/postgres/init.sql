@@ -97,6 +97,14 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'problem_to_solve'
+  ) THEN
+    ALTER TABLE sessions ADD COLUMN problem_to_solve TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'issue_category'
   ) THEN
     ALTER TABLE sessions ADD COLUMN issue_category VARCHAR(100);
