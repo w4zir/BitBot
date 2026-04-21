@@ -103,16 +103,6 @@ def main() -> None:
     with st.sidebar:
         st.subheader("Session")
         use_full = st.toggle("Full flow (Postgres + LangGraph + LLM)", value=True)
-        si = (st.session_state.last_classify_json or {}).get("session_issue") or {}
-        if not isinstance(si, dict):
-            si = {}
-        st.markdown("**Session status**")
-        st.caption("Intent")
-        st.code(si.get("intent") or "—")
-        st.caption("Problem to solve")
-        st.write(si.get("problem_to_solve") or "—")
-        st.caption("Resolved")
-        st.write("Yes" if si.get("is_resolved") else "No")
         if st.button("New session"):
             st.session_state.session_id = None
             st.session_state.messages = []
@@ -135,6 +125,43 @@ def main() -> None:
         )
         st.session_state.pending_classify_text = user_text
 
+    # Session status in sidebar after pending state is known (same run as submit).
+    with st.sidebar:
+        st.markdown("**Session status**")
+        if not use_full:
+            st.info("Enable Full flow for session status.")
+        si = (st.session_state.last_classify_json or {}).get("session_issue") or {}
+        if not isinstance(si, dict):
+            si = {}
+        pending = bool(st.session_state.pending_classify_text)
+
+        st.caption("Intent")
+        intent_slot = st.empty()
+        if pending and use_full:
+            intent_slot.caption("Fetching…")
+        else:
+            with intent_slot:
+                st.code(si.get("intent") or "—")
+
+        st.caption("Problem to solve")
+        problem_slot = st.empty()
+        if pending and use_full:
+            problem_slot.caption("Fetching…")
+        else:
+            with problem_slot:
+                st.write(si.get("problem_to_solve") or "—")
+
+        st.caption("Resolved")
+        resolved_slot = st.empty()
+        if pending and use_full:
+            resolved_slot.caption("Fetching…")
+        elif si.get("is_resolved"):
+            with resolved_slot:
+                st.success("Resolved")
+        else:
+            with resolved_slot:
+                st.warning("Not resolved")
+
     for m in st.session_state.messages:
         role = m.get("role", "user")
         content = m.get("content", "")
@@ -149,6 +176,10 @@ def main() -> None:
         user_text = st.session_state.pending_classify_text
         with st.chat_message("assistant"):
             with st.spinner("AI is processing…"):
+                if st.session_state.last_classify_json is None:
+                    with st.expander("Last response (JSON)"):
+                        with st.spinner("Waiting for response…"):
+                            st.caption("Response JSON will appear below when ready.")
                 try:
                     out = _post_classify(
                         user_text,
@@ -164,17 +195,8 @@ def main() -> None:
                     if use_full and out.get("messages"):
                         st.session_state.messages = [_msg_from_api(m) for m in out["messages"]]
                     else:
-                        base = st.session_state.messages[:-1]
-                        base.append(
-                            {
-                                "role": "user",
-                                "content": user_text,
-                                "metadata": {},
-                                "created_at": _now_iso(),
-                            }
-                        )
                         if out.get("assistant_reply"):
-                            base.append(
+                            st.session_state.messages.append(
                                 {
                                     "role": "assistant",
                                     "content": str(out["assistant_reply"]),
@@ -183,7 +205,7 @@ def main() -> None:
                                 }
                             )
                         else:
-                            base.append(
+                            st.session_state.messages.append(
                                 {
                                     "role": "assistant",
                                     "content": (
@@ -194,7 +216,6 @@ def main() -> None:
                                     "created_at": _now_iso(),
                                 }
                             )
-                        st.session_state.messages = base
 
                     st.session_state.last_classify_json = out
                     st.session_state.pending_classify_text = None
