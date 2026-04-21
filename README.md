@@ -9,29 +9,32 @@ flowchart LR
   fe[Streamlit_frontend] --> be[FastAPI_backend]
   be --> lg[LangGraph_procedure_executor]
   lg --> bento[ModernBERT_Bento]
-  lg --> intent[IntentClassifierScopedByCategory]
+  lg --> llmIntent["LLM intent plus DB allowlist"]
   lg --> yaml[ProcedureYAMLLibrary]
   lg --> llm[Ollama_or_Cerebras]
   lg --> es[(ElasticsearchPolicyDocs)]
   be --> pg[(Postgres)]
+  llmIntent --> pg
   train[Dataset_and_finetune_scripts] --> artifacts[Local_model_dir]
   artifacts --> bento
 ```
 
 - **Frontend** (`frontend/`): Streamlit chat UI calling `POST /classify` with `full_flow` for session + LangGraph + LLM branches.
-- **Backend** (`backend/`): FastAPI + **LangGraph** (`backend/agent/issue_graph.py`): Bento category classification → intent classification (scoped to that category) → YAML procedure load (`backend/procedures/*.yaml`) → hybrid required-data validation → structured step execution.
+- **Backend** (`backend/`): FastAPI + **LangGraph** ([`backend/agent/issue_graph.py`](backend/agent/issue_graph.py)): **ModernBERT via Bento** for **category** → **LLM JSON intent** (scoped to category, optionally constrained by **Postgres** intents per category) → YAML procedure load (`backend/procedures/*.yaml`) → hybrid required-data validation → structured step execution (see [docs/agent.md](docs/agent.md)).
 - **Tool APIs** (`backend/api/routes/tools.py`): DB-backed tool endpoints used by procedures (`/tools/order-status`, `/tools/product-lookup`, `/tools/refund-context`).
 - **Escalation API** (`backend/api/routes/escalations.py`): in-chat escalation decision endpoint (`/escalations/decision`) for accept/reject UX.
 - **Procedures** (`backend/procedures/`): One YAML blueprint per intent. Blueprints define `required_data` and ordered steps (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) used to enforce deterministic control flow.
 - **ModernBERT** (`services/modernbert_bento/`): BentoML service loading a local fine-tuned checkpoint.
 - **Policy source**: Policy constraints/content remain external to procedures and come from Elasticsearch-backed policy documents through retrieval steps.
 - **Data stores**: Postgres for sessions, orders, products, and related app data (`infra/postgres/init.sql`). **Policy retrieval** uses **Elasticsearch only** (no vector search in Postgres).
-- **Product catalog**: `products` table in Postgres backs `get_product_info` tool-calling.
+- **Sessions** (`POST /classify` with `full_flow=true`): messages and **active issue** (intent, category, confidence) live in Postgres. While an issue is active, intent classification is **locked** to the stored intent on later turns. Users can **confirm resolution** in natural language to end the issue without re-running the graph; the graph can also **mark the session resolved** when a procedure completes cleanly (see [`graph_suggests_session_resolved`](backend/agent/issue_graph.py) and [`classify.py`](backend/api/routes/classify.py)).
+- **Product catalog**: `products` table in Postgres backs the `product_catalog_lookup` step inside the LangGraph executor.
 
 ## Documentation
 
 | Topic | Document |
 |-------|----------|
+| LangGraph issue agent (nodes, procedures, session flow) | [docs/agent.md](docs/agent.md) |
 | Dataset creation, binary split, fine-tuning, evaluation, serving | [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md) |
 | Index Foodpanda policy Markdown in Elasticsearch | [docs/elasticsearch-foodpanda-policy-docs.md](docs/elasticsearch-foodpanda-policy-docs.md) |
 
@@ -120,7 +123,7 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\",\"full_flow\":false}"
    ```
 
-6. Full conversation flow (Postgres + LangGraph + local Ollama): set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `OLLAMA_BASE_URL` in `.env` (see `.env.example`). Ensure Postgres is up and Ollama is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). Then:
+6. Full conversation flow (Postgres + LangGraph + local Ollama): set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, `INTENT_MODEL_PROVIDER` / `INTENT_MODEL` (defaults match `docker-compose.yml`), and `OLLAMA_BASE_URL` in `.env` (see `.env.example`). Ensure Postgres is up and Ollama is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). Then:
 
    ```bash
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"
@@ -134,6 +137,8 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
 ## API Surface (Core)
 
+- `GET /health`: liveness probe for the backend.
+- `GET /health/ready`: readiness; reports configured Postgres/Elasticsearch and tries the classifier health when `CLASSIFIER_BENTOML_URL` is set.
 - `POST /classify`: classification-only (`full_flow=false`) or full LangGraph orchestration (`full_flow=true`).
 - `POST /tools/order-status`: DB-backed order lookup tool.
 - `POST /tools/product-lookup`: DB-backed product catalog lookup tool.
