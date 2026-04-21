@@ -319,6 +319,7 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
 
 
 _ORDER_NUMBER_RE = re.compile(r"\b(ORD-[A-Z0-9]+)\b", re.IGNORECASE)
+_ORDER_ID_ONLY_RE = re.compile(r"^\s*ORD-[A-Z0-9]+\s*$", re.IGNORECASE)
 _ESCALATION_DECISION_RE = re.compile(r"\b(accept|reject)\b", re.IGNORECASE)
 _USER_RESOLUTION_CONFIRM_RE = re.compile(
     r"(?i)\b("
@@ -444,7 +445,31 @@ def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[st
 
 def _retrieve_policy(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     tool_name = str(step.get("tool") or "policy_search")
-    query = state.get("text") or ""
+    text = str(state.get("text") or "").strip()
+    problem_to_solve = str(state.get("problem_to_solve") or "").strip()
+    category = str(state.get("category") or "").strip().replace("_", " ")
+    intent = str(state.get("intent") or "").strip().replace("_", " ")
+
+    query_parts: list[str] = []
+    if problem_to_solve:
+        query_parts.append(problem_to_solve)
+    if text and not _ORDER_ID_ONLY_RE.match(text):
+        query_parts.append(text)
+    if category:
+        query_parts.append(category)
+    if intent and intent.lower() != category.lower():
+        query_parts.append(intent)
+
+    deduped_parts: list[str] = []
+    seen: set[str] = set()
+    for part in query_parts:
+        key = part.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_parts.append(part)
+
+    query = " ".join(deduped_parts).strip() or text or "policy"
     docs = search_policy_docs(query)
     return {
         "policy_found": bool(docs),
