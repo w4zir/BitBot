@@ -63,10 +63,10 @@ Routing functions (not separate graph nodes):
 
 1. Requires Postgres ([`postgres_configured`](../backend/db/postgres.py)); otherwise HTTP 503.
 2. Creates or loads a session; appends the user message; loads transcript into `messages_for_graph`.
-3. **Issue lock:** If the session already has an active intent and is not resolved, `issue_locked` is true for [`run_conversation_graph`](../backend/agent/issue_graph.py).
+3. **Issue lock:** If the session already has an active intent and is not resolved, `issue_locked` is set to true for [`run_conversation_graph`](../backend/agent/issue_graph.py), so category/intent are reused rather than re-inferred.
 4. **Resolution short-circuit:** If locked and [`user_confirms_resolution`](../backend/agent/issue_graph.py) matches the latest text, the handler marks the session resolved and returns without invoking the graph.
 5. Invokes the compiled graph, then optionally appends the assistant message with merged metadata.
-6. **Persistence:** If not locked, [`update_session_active_issue`](../backend/db/messages_repo.py) stores category, intent, confidence, problem text. If [`graph_suggests_session_resolved`](../backend/agent/issue_graph.py) is true for the graph output, [`mark_session_resolved`](../backend/db/messages_repo.py) runs.
+6. **Persistence:** If not locked, [`update_session_active_issue`](../backend/db/messages_repo.py) stores category, intent, confidence, and problem text. If [`graph_suggests_session_resolved`](../backend/agent/issue_graph.py) is true for the graph output, [`mark_session_resolved`](../backend/db/messages_repo.py) runs.
 
 `full_flow=false` only calls [`QueryClassifier.classify`](../backend/rag/query_classifier.py) and does not run LangGraph.
 
@@ -243,7 +243,7 @@ Blueprint schema: [`ProcedureBlueprint`](../backend/agent/procedures.py), [`Proc
 
 | Route | Role |
 |-------|------|
-| [`backend/api/routes/tools.py`](../backend/api/routes/tools.py) | DB-backed tools (`/tools/order-status`, `/tools/product-lookup`, `/tools/refund-context`) for procedures or external callers |
+| [`backend/api/routes/tools.py`](../backend/api/routes/tools.py) | DB-backed tools (`/tools/order-status`, `/tools/product-lookup`, `/tools/refund-context`) for external callers; graph tool steps use in-process repo helpers by default |
 | [`backend/api/routes/escalations.py`](../backend/api/routes/escalations.py) | `/escalations/decision` for accept/reject UX alongside in-graph interrupt metadata |
 
 In-graph interrupts also parse **accept** / **reject** from the latest user messages ([`_extract_escalation_decision`](../backend/agent/issue_graph.py)).

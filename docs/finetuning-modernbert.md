@@ -150,7 +150,7 @@ The Bento service expects a Hugging Face-compatible exported directory (includin
 - `POST /classify` -> `{ "category": "<label>", "confidence": <float> }`
 - `POST /health` -> `{ "status": "ok" }`
 
-Docker compose currently mounts `./training/models` read-only and points `MODERNBERT_MODEL_DIR` to a `.../winner` path by default.
+Docker Compose currently mounts `./training/models` read-only and points `MODERNBERT_MODEL_DIR` to a `.../winner` checkpoint path by default. In this repo, `.env.example` defaults `MODERNBERT_MODEL_SOURCE` to `./training/models/bitext_multiclass_finetuned_20260415T120000Z/winner`.
 
 Run:
 
@@ -158,7 +158,7 @@ Run:
 docker compose up --build
 ```
 
-The backend classifier client calls `CLASSIFIER_BENTOML_URL` (usually `http://modernbert:3000/classify`) with payload `{"text":"..."}`.
+The backend classifier client calls `CLASSIFIER_BENTOML_URL` (Compose default: `http://modernbert:3000/classify`) with payload `{"text":"..."}`.
 
 ## 6) Runtime routing note (LangGraph)
 

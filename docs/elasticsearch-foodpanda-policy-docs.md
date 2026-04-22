@@ -16,7 +16,7 @@ Environment variables (see `.env.example`): `ES_HOST`, `ES_PORT`, `ES_SCHEME`, *
 
 ## Source files
 
-The Foodpanda sample policies are six Markdown files, for example:
+The Foodpanda sample policies are seven Markdown files:
 
 - `01_Returns_And_Refund_Policy.md`
 - `02_Shipping_And_Logistics_Policy.md`
@@ -24,8 +24,9 @@ The Foodpanda sample policies are six Markdown files, for example:
 - `04_Loyalty_Program_Policy.md`
 - `05_Damaged_Items_Policy.md`
 - `06_Fraud_Security_Policy.md`
+- `07_Order_Cancellation_Policy.md`
 
-The repository includes a small uploader: [`scripts/upload_foodpanda_policy_docs.py`](../scripts/upload_foodpanda_policy_docs.py). It reads **all** `*.md` files in the folder above, derives `title` from the first `#` heading (or the filename), builds stable `_id` values from the filename stem, sets `tags` from `foodpanda`, `policy`, and filename tokens, and POSTs to the Elasticsearch [`_bulk`](https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html) API.
+The repository includes a small uploader: [`scripts/upload_foodpanda_policy_docs.py`](../scripts/upload_foodpanda_policy_docs.py). It reads **all** `*.md` files in the folder above (including newly added files), derives `title` from the first `#` heading (or the filename), builds stable `_id` values from the filename stem, sets `tags` from `foodpanda`, `policy`, and filename tokens, and POSTs to the Elasticsearch [`_bulk`](https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html) API.
 
 ## Prerequisites
 

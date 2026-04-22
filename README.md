@@ -87,7 +87,7 @@ The generic **`curl`** / `_bulk` flow below uses **`docker compose exec`** into 
    docker compose exec -T elasticsearch curl -s -X POST "http://localhost:9200/policy_docs/_search" -H "Content-Type: application/json" -d "{\"size\":3,\"query\":{\"multi_match\":{\"query\":\"refund\",\"fields\":[\"title^2\",\"content\",\"tags\"]}}}"
    ```
 
-5. **Optional source material**: Markdown under [`data/policy_docs/`](data/policy_docs/) can be loaded with [`scripts/upload_foodpanda_policy_docs.py`](scripts/upload_foodpanda_policy_docs.py) (Foodpanda folder) or adapted for your own bulk NDJSON.
+5. **Optional source material**: Markdown under [`data/policy_docs/`](data/policy_docs/) can be loaded with [`scripts/upload_foodpanda_policy_docs.py`](scripts/upload_foodpanda_policy_docs.py) (currently 7 Foodpanda policy files, including `07_Order_Cancellation_Policy.md`) or adapted for your own bulk NDJSON.
 
 If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint only records that Elasticsearch env vars are configured, not cluster health.
 
@@ -152,7 +152,8 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 | `backend/` | FastAPI app, LangGraph flow, classifier HTTP client |
 | `frontend/` | Streamlit demo |
 | `services/modernbert_bento/` | BentoML ModernBERT binary classifier |
-| `training/scripts/` | Bitext dataset build, binary split, `train_modernbert.py`, `eval_modernbert.py` |
+| `training/scripts/` | Dataset preparation scripts (`create_bitext_dataset.py`, `build_is_issue_dataset.py`) |
+| `training/experiments/src/` | ModernBERT training entrypoints (`train_multiclass_modernbert.py`, `train_modernbert.py`) |
 | `training/data/samples/` | Small committed examples for smoke tests |
 | `infra/postgres/` | Postgres init SQL (core tables) used by **Docker Compose** |
 | `db/postgres/` | Rerunnable dummy schema + **idempotent** seed (ecommerce demos + **sessions/messages/observability** aligned with [`infra/postgres/init.sql`](infra/postgres/init.sql)) |
