@@ -6,6 +6,8 @@ from typing import Any
 import httpx
 from fastapi import APIRouter
 
+from backend.rag.policy_retriever import ping_elasticsearch
+
 router = APIRouter(tags=["health"])
 
 
@@ -26,7 +28,12 @@ async def ready() -> dict[str, Any]:
 
     es_host = os.getenv("ES_HOST", "").strip()
     if es_host:
-        out["checks"]["elasticsearch"] = "configured"
+        ok, detail = ping_elasticsearch()
+        if ok:
+            out["checks"]["elasticsearch"] = "ok"
+        else:
+            out["checks"]["elasticsearch"] = f"unreachable: {detail}"
+            out["status"] = "degraded"
 
     clf = os.getenv("CLASSIFIER_BENTOML_URL", "").strip()
     if clf:
