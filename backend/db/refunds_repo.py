@@ -32,3 +32,35 @@ def get_refund_context(order_id: str) -> dict[str, Any] | None:
         "refund_order_status": order.get("status"),
         "refund_order_total_amount": order.get("total_amount"),
     }
+
+
+def create_refund_request(order_id: str, reason: str) -> dict[str, Any]:
+    oid = (order_id or "").strip().upper()
+    note = (reason or "").strip()
+    if not oid:
+        return {"ok": False, "reason": "missing_order_id"}
+    if not note:
+        return {"ok": False, "reason": "missing_refund_reason"}
+
+    order = get_order_status(oid)
+    if not order:
+        return {"ok": False, "reason": "order_not_found"}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO refund_requests (order_id, reason, requested_at, decision, decision_reason)
+                VALUES (%s, %s, NOW(), 'pending', NULL)
+                RETURNING refund_id
+                """,
+                (oid, note),
+            )
+            row = cur.fetchone()
+
+    return {
+        "ok": True,
+        "refund_id": row[0] if row else None,
+        "order_id": oid,
+        "decision": "pending",
+    }

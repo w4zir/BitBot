@@ -44,23 +44,30 @@ ON CONFLICT (account_email) DO UPDATE SET
 -- ORD-1001 delivered; ORD-1002 delivered electronics edge; ORD-1003 shipped; ORD-1004/1005 processing;
 -- ORD-1006 cancelled; ORD-1007 delivered (address change blocked); ORD-1008 processing (address ok, refund approved);
 -- ORD-1009 shipped; ORD-1010 processing low amount; ORD-1011 delivered no refund_requests row
-INSERT INTO orders (order_id, user_id, order_date, status, total_amount) VALUES
-('ORD-1001', 1, '2026-04-10 10:00:00', 'delivered', 150.00),
-('ORD-1002', 4, '2026-03-26 09:00:00', 'delivered', 899.99),
-('ORD-1003', 2, '2026-04-14 14:00:00', 'shipped', 45.00),
-('ORD-1004', 1, '2026-04-15 08:00:00', 'processing', 25.00),
-('ORD-1005', 1, '2026-04-15 09:00:00', 'processing', 100.00),
-('ORD-1006', 6, '2026-04-01 11:00:00', 'cancelled', 75.00),
-('ORD-1007', 6, '2026-04-08 12:00:00', 'delivered', 200.00),
-('ORD-1008', 7, '2026-04-16 09:00:00', 'processing', 49.99),
-('ORD-1009', 7, '2026-04-15 10:00:00', 'shipped', 30.00),
-('ORD-1010', 8, '2026-04-16 14:00:00', 'processing', 15.00),
-('ORD-1011', 8, '2026-04-05 10:00:00', 'delivered', 120.00)
+INSERT INTO orders (
+    order_id, user_id, order_date, status, total_amount,
+    shipping_address_line, shipping_city, shipping_postal_code, shipping_country
+) VALUES
+('ORD-1001', 1, '2026-04-10 10:00:00', 'delivered', 150.00, '10 Market St', 'San Francisco', '94105', 'US'),
+('ORD-1002', 4, '2026-03-26 09:00:00', 'delivered', 899.99, '220 Harbor Ave', 'Seattle', '98101', 'US'),
+('ORD-1003', 2, '2026-04-14 14:00:00', 'shipped', 45.00, '8 Rose Lane', 'Austin', '73301', 'US'),
+('ORD-1004', 1, '2026-04-15 08:00:00', 'processing', 25.00, '16 Pine Rd', 'Denver', '80014', 'US'),
+('ORD-1005', 1, '2026-04-15 09:00:00', 'processing', 100.00, '99 Elm Street', 'Boston', '02108', 'US'),
+('ORD-1006', 6, '2026-04-01 11:00:00', 'cancelled', 75.00, '3 Sunset Blvd', 'Phoenix', '85001', 'US'),
+('ORD-1007', 6, '2026-04-08 12:00:00', 'delivered', 200.00, '41 River Way', 'Chicago', '60601', 'US'),
+('ORD-1008', 7, '2026-04-16 09:00:00', 'processing', 49.99, '12 Birch Ave', 'Portland', '97201', 'US'),
+('ORD-1009', 7, '2026-04-15 10:00:00', 'shipped', 30.00, '77 Lake Drive', 'Miami', '33101', 'US'),
+('ORD-1010', 8, '2026-04-16 14:00:00', 'processing', 15.00, '5 Hill St', 'Dallas', '75001', 'US'),
+('ORD-1011', 8, '2026-04-05 10:00:00', 'delivered', 120.00, '1 Cedar Court', 'New York', '10001', 'US')
 ON CONFLICT (order_id) DO UPDATE SET
   user_id = EXCLUDED.user_id,
   order_date = EXCLUDED.order_date,
   status = EXCLUDED.status,
-  total_amount = EXCLUDED.total_amount;
+  total_amount = EXCLUDED.total_amount,
+  shipping_address_line = EXCLUDED.shipping_address_line,
+  shipping_city = EXCLUDED.shipping_city,
+  shipping_postal_code = EXCLUDED.shipping_postal_code,
+  shipping_country = EXCLUDED.shipping_country;
 
 -- Order line items (names align with products catalog where applicable for get_product_info)
 INSERT INTO order_items (item_id, order_id, item_name, category, is_opened, qty, price) VALUES

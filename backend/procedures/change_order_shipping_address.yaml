@@ -30,13 +30,27 @@ steps:
   - id: branch_order_delivered
     type: logic_gate
     condition: {op: neq, field: order_status, value: delivered}
-    on_true: change_shipping_address
+    on_true: apply_shipping_address_change
     on_false: already_delivered
-  - id: change_shipping_address
+  - id: apply_shipping_address_change
+    type: tool_call
+    tool: update_shipping_address
+  - id: branch_address_update_succeeded
+    type: logic_gate
+    condition: {op: eq, field: shipping_address_updated, value: true}
+    on_true: change_shipping_address_confirmed
+    on_false: change_shipping_address_failed
+  - id: change_shipping_address_confirmed
     type: llm_response
     message: >
-      The order was found and is not delivered yet. Confirm that the shipping address has been
-      changed to new_address and briefly share what happens next.
+      The shipping address update was completed by the backend tool (shipping_address_updated is
+      true). Confirm the new shipping address from shipping_address and briefly share what happens
+      next.
+  - id: change_shipping_address_failed
+    type: llm_response
+    message: >
+      The shipping address update could not be completed (shipping_address_updated is false).
+      Explain why using shipping_address_update_reason from procedure context.
   - id: already_delivered
     type: llm_response
     message: >

@@ -48,15 +48,22 @@ steps:
     on_reject_message: >
       Understood. I will not escalate this refund request right now.
   - id: assess_eligibility_and_refund
+    type: tool_call
+    tool: create_refund_request
+  - id: branch_refund_created
+    type: logic_gate
+    condition: {op: eq, field: refund_request_created, value: true}
+    on_true: confirm_refund_submitted
+    on_false: refund_not_created
+  - id: confirm_refund_submitted
     type: llm_response
     message: >
-      Refund policy text and rules are in retrieved_docs (policy_found is true). The order was
-      found (order_found is true); use order_id_extracted and order_status from procedure context.
-      First, determine whether the customer is eligible for a refund under those policy rules.
-      If they are not eligible, explain clearly why, with specific reasons tied to the policy—do
-      not proceed with a refund. If they are eligible, determine the refund amount; compare it to
-      any refund approval threshold stated in the policy. If the refund amount is above that
-      threshold, explain that the case requires human validation and escalation before a refund
-      can be issued. If the amount is at or below the threshold, confirm that a refund will be
-      generated (or has been submitted) and what the customer should expect next.
+      A refund request was created by the backend tool (refund_request_created is true). Confirm
+      the submission to the customer using refund_request_id and refund_decision from procedure
+      context and explain next expected steps.
+  - id: refund_not_created
+    type: llm_response
+    message: >
+      The refund request could not be created (refund_request_created is false). Explain clearly
+      why using refund_request_reason from procedure context and advise the customer on next steps.
 fallback_response: I can help with a refund once you share your order number so we can look it up.

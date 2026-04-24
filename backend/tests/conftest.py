@@ -41,6 +41,7 @@ def session_issue_mocks(monkeypatch: pytest.MonkeyPatch) -> dict:
         *,
         intent: str,
         user_request: str,
+        problem_to_solve: str,
         issue_category: str,
         issue_confidence: float,
     ) -> None:
@@ -48,6 +49,7 @@ def session_issue_mocks(monkeypatch: pytest.MonkeyPatch) -> dict:
         b.update(
             intent=intent,
             user_request=user_request,
+            problem_to_solve=problem_to_solve,
             issue_category=issue_category,
             issue_confidence=issue_confidence,
             resolved_at=None,

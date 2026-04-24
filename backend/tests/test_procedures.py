@@ -6,11 +6,11 @@ from backend.agent import procedures
 def test_blueprints_load() -> None:
     procedures.load_blueprints.cache_clear()
     data = procedures.load_blueprints()
-    assert "no_issue_chat" in data
     assert "order_cancel" in data
     assert "get_refund" in data
     assert "change_order_shipping_address" in data
     assert "get_product_info" in data
+    assert "order_status" in data
 
 
 def test_category_intents_are_loaded() -> None:

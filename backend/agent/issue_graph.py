@@ -17,10 +17,14 @@ from backend.agent.procedures import (
     load_blueprints,
 )
 from backend.db.intents_repo import get_intents_for_category
-from backend.db.orders_repo import get_order_status
+from backend.db.orders_repo import (
+    cancel_order as cancel_order_record,
+    get_order_status,
+    update_shipping_address as update_shipping_address_record,
+)
 from backend.db.postgres import postgres_configured
 from backend.db.products_repo import lookup_product
-from backend.db.refunds_repo import get_refund_context
+from backend.db.refunds_repo import create_refund_request, get_refund_context
 from backend.llm.providers import chat_completion, extract_json_object
 from backend.rag.policy_retriever import search_policy_docs
 from backend.rag.query_classifier import ClassificationResult, get_query_classifier
@@ -292,6 +296,9 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
     if not isinstance(missing, list):
         missing = []
     missing_strs = [str(x) for x in missing if x]
+    extracted_fields = data.get("extracted_fields")
+    if not isinstance(extracted_fields, dict):
+        extracted_fields = {}
 
     assistant_reply: str | None = None
     if not valid:
@@ -311,6 +318,10 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
         "validation_ok": valid,
         "validation_missing": missing_strs,
         "final_response": assistant_reply or state.get("final_response"),
+        "context_data": {
+            **dict(state.get("context_data") or {}),
+            **{str(k): v for k, v in extracted_fields.items() if k},
+        },
         "assistant_metadata": meta,
     }
     if not valid:
@@ -399,6 +410,16 @@ def _extract_order_id_from_conversation(
 
 
 def _extract_product_name_from_messages(messages: list[dict[str, Any]]) -> str | None:
+    for m in reversed(messages or []):
+        if str(m.get("role")) != "user":
+            continue
+        text = str(m.get("content") or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_latest_user_message(messages: list[dict[str, Any]]) -> str | None:
     for m in reversed(messages or []):
         if str(m.get("role")) != "user":
             continue
@@ -503,6 +524,64 @@ def _lookup_refund_context(step: dict[str, Any], state: IssueGraphState) -> dict
     if not payload:
         return {**base, "refund_context_found": False}
     return {**base, "refund_context_found": True, **payload}
+
+
+def _cancel_order_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "cancel_order")
+    oid = str((state.get("context_data") or {}).get("order_id_extracted") or "")
+    if not oid:
+        oid = _extract_order_id_from_conversation(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "order_id_extracted": oid}
+    result = cancel_order_record(oid)
+    return {
+        **base,
+        "cancel_succeeded": bool(result.get("ok")),
+        "cancel_reason": str(result.get("reason") or ""),
+        "order_status": result.get("status") or (state.get("context_data") or {}).get("order_status"),
+    }
+
+
+def _create_refund_request_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "create_refund_request")
+    context = dict(state.get("context_data") or {})
+    oid = str(context.get("order_id_extracted") or "")
+    if not oid:
+        oid = _extract_order_id_from_conversation(state.get("messages") or [], state.get("text")) or ""
+    reason = str(context.get("refund_reason") or _extract_latest_user_message(state.get("messages") or []) or "")
+    base: dict[str, Any] = {
+        "tool_call": tool_name,
+        "order_id_extracted": oid,
+        "refund_reason": reason,
+    }
+    result = create_refund_request(oid, reason)
+    return {
+        **base,
+        "refund_request_created": bool(result.get("ok")),
+        "refund_request_reason": str(result.get("reason") or ""),
+        "refund_request_id": result.get("refund_id"),
+        "refund_decision": result.get("decision"),
+    }
+
+
+def _update_shipping_address_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "update_shipping_address")
+    context = dict(state.get("context_data") or {})
+    oid = str(context.get("order_id_extracted") or "")
+    if not oid:
+        oid = _extract_order_id_from_conversation(state.get("messages") or [], state.get("text")) or ""
+    new_address = str(context.get("new_address") or _extract_latest_user_message(state.get("messages") or []) or "")
+    base: dict[str, Any] = {
+        "tool_call": tool_name,
+        "order_id_extracted": oid,
+        "new_address": new_address,
+    }
+    result = update_shipping_address_record(oid, new_address)
+    return {
+        **base,
+        "shipping_address_updated": bool(result.get("ok")),
+        "shipping_address_update_reason": str(result.get("reason") or ""),
+        "shipping_address": result.get("shipping_address") or {"line": new_address},
+    }
 
 
 def _handle_interrupt_step(step: dict[str, Any], state: IssueGraphState, idx: int, todo: list[dict[str, Any]]) -> IssueGraphState:
@@ -616,6 +695,9 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
         "check_order_status": _check_order_status,
         "product_catalog_lookup": _lookup_product_info,
         "refund_context_lookup": _lookup_refund_context,
+        "cancel_order": _cancel_order_tool,
+        "create_refund_request": _create_refund_request_tool,
+        "update_shipping_address": _update_shipping_address_tool,
     }
 
     if step_type == "retrieval":

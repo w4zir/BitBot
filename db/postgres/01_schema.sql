@@ -57,7 +57,11 @@ CREATE TABLE orders (
     user_id INT REFERENCES users(user_id),
     order_date TIMESTAMP,
     status VARCHAR(50), -- processing, shipped, delivered, cancelled
-    total_amount DECIMAL(10, 2)
+    total_amount DECIMAL(10, 2),
+    shipping_address_line TEXT,
+    shipping_city VARCHAR(100),
+    shipping_postal_code VARCHAR(30),
+    shipping_country VARCHAR(80)
 );
 
 CREATE TABLE order_items (

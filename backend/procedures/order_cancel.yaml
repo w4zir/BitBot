@@ -42,12 +42,22 @@ steps:
     on_reject_message: >
       Understood. I will not escalate this cancellation case right now.
   - id: apply_policy_and_cancel_or_decline
+    type: tool_call
+    tool: cancel_order
+  - id: branch_cancel_succeeded
+    type: logic_gate
+    condition: {op: eq, field: cancel_succeeded, value: true}
+    on_true: confirm_cancelled
+    on_false: cancellation_not_allowed
+  - id: confirm_cancelled
     type: llm_response
     message: >
-      Cancellation policy text is in retrieved_docs (policy_found is true). The order was found
-      (order_found is true); use order_id_extracted and order_status from procedure context.
-      Compare the order against the policy rules: if cancellation is allowed, state clearly that
-      the order has been cancelled (or cancellation is submitted) and what the customer should
-      expect next. If cancellation is not allowed under the policy, explain briefly and clearly
-      why, citing the relevant policy reason—do not cancel the order in that case.
+      The cancellation was executed by the backend tool (cancel_succeeded is true). Confirm to
+      the customer that order_id_extracted has been cancelled and share what they should expect
+      next.
+  - id: cancellation_not_allowed
+    type: llm_response
+    message: >
+      The cancellation could not be executed (cancel_succeeded is false). Explain clearly why
+      using cancel_reason from procedure context and guide the customer on next steps.
 fallback_response: I can help with cancellation once you share your order number so I can verify it.

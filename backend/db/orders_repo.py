@@ -21,6 +21,10 @@ def get_order_status(order_id: str) -> dict[str, Any] | None:
                     o.order_id,
                     o.status,
                     o.total_amount,
+                    o.shipping_address_line,
+                    o.shipping_city,
+                    o.shipping_postal_code,
+                    o.shipping_country,
                     (
                         SELECT s.promised_delivery_at
                         FROM shipments s
@@ -40,5 +44,65 @@ def get_order_status(order_id: str) -> dict[str, Any] | None:
         "order_id": row[0],
         "status": row[1],
         "total_amount": float(row[2]) if row[2] is not None else None,
-        "estimated_delivery": row[3].isoformat() if row[3] else None,
+        "shipping_address": {
+            "line": row[3],
+            "city": row[4],
+            "postal_code": row[5],
+            "country": row[6],
+        },
+        "estimated_delivery": row[7].isoformat() if row[7] else None,
+    }
+
+
+def cancel_order(order_id: str) -> dict[str, Any]:
+    oid = (order_id or "").strip().upper()
+    if not oid:
+        return {"ok": False, "reason": "missing_order_id"}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM orders WHERE order_id = %s", (oid,))
+            row = cur.fetchone()
+            if not row:
+                return {"ok": False, "reason": "order_not_found"}
+            status = str(row[0] or "").strip().lower()
+            if status in {"cancelled", "delivered"}:
+                return {"ok": False, "reason": f"order_{status}"}
+            cur.execute(
+                "UPDATE orders SET status = 'cancelled' WHERE order_id = %s",
+                (oid,),
+            )
+    return {"ok": True, "order_id": oid, "status": "cancelled"}
+
+
+def update_shipping_address(order_id: str, new_address: str) -> dict[str, Any]:
+    oid = (order_id or "").strip().upper()
+    raw = (new_address or "").strip()
+    if not oid:
+        return {"ok": False, "reason": "missing_order_id"}
+    if not raw:
+        return {"ok": False, "reason": "missing_new_address"}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM orders WHERE order_id = %s", (oid,))
+            row = cur.fetchone()
+            if not row:
+                return {"ok": False, "reason": "order_not_found"}
+            status = str(row[0] or "").strip().lower()
+            if status in {"delivered", "cancelled"}:
+                return {"ok": False, "reason": f"order_{status}"}
+
+            cur.execute(
+                """
+                UPDATE orders
+                SET shipping_address_line = %s
+                WHERE order_id = %s
+                """,
+                (raw, oid),
+            )
+    return {
+        "ok": True,
+        "order_id": oid,
+        "shipping_address": {"line": raw},
     }

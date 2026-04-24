@@ -114,11 +114,19 @@ def test_classify_full_flow_validation_missing(
     qc.classify.return_value = ClassificationResult(category="order", confidence=0.88)
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
-
     monkeypatch.setattr(
-        "backend.agent.issue_graph.chat_completion",
-        lambda **kwargs: '{"valid": false, "missing_field_names": ["order_id", "email"], "notes": "need ids"}',
+        "backend.agent.issue_graph.get_intents_for_category",
+        lambda _category: ["order_status", "cancel_order"],
     )
+
+    def chat_completion(**kwargs):
+        msgs = kwargs.get("messages") or []
+        system = str(msgs[0].get("content") if msgs else "")
+        if "classify a customer support session" in system:
+            return '{"intent": "order_status", "problem_to_solve": "Check order status"}'
+        return '{"valid": false, "missing_field_names": ["order_id", "email"], "notes": "need ids"}'
+
+    monkeypatch.setattr("backend.agent.issue_graph.chat_completion", chat_completion)
 
     r = client.post("/classify", json={"text": "I need help", "full_flow": True})
     assert r.status_code == 200
@@ -163,11 +171,19 @@ def test_classify_full_flow_interrupt_sets_pending_action(
     qc.classify.return_value = ClassificationResult(category="refund", confidence=0.91)
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
-
     monkeypatch.setattr(
-        "backend.agent.issue_graph.chat_completion",
-        lambda **kwargs: '{"valid": true, "missing_field_names": [], "notes": "ok"}',
+        "backend.agent.issue_graph.get_intents_for_category",
+        lambda _category: ["get_refund"],
     )
+
+    def chat_completion(**kwargs):
+        msgs = kwargs.get("messages") or []
+        system = str(msgs[0].get("content") if msgs else "")
+        if "classify a customer support session" in system:
+            return '{"intent": "get_refund", "problem_to_solve": "Request refund"}'
+        return '{"valid": true, "missing_field_names": [], "notes": "ok"}'
+
+    monkeypatch.setattr("backend.agent.issue_graph.chat_completion", chat_completion)
 
     r = client.post(
         "/classify",
@@ -222,15 +238,22 @@ def test_classify_intent_stays_locked_second_message(
     ]
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_intents_for_category",
+        lambda _category: ["order_status", "cancel_order"],
+    )
 
     chat_calls: list[int] = []
 
     def chat_completion(**kwargs):
+        msgs = kwargs.get("messages") or []
+        system = str(msgs[0].get("content") if msgs else "")
+        if "classify a customer support session" in system:
+            return '{"intent": "order_status", "problem_to_solve": "Track order"}'
         chat_calls.append(1)
-        n = len(chat_calls)
-        if n == 1:
+        if len(chat_calls) == 1:
             return '{"valid": false, "missing_field_names": ["order_id"], "notes": "need id"}'
-        if n == 2:
+        if len(chat_calls) == 2:
             return '{"valid": true, "missing_field_names": [], "notes": "ok"}'
         return "Your order ORD-12345 is shipped."
 
@@ -293,11 +316,21 @@ def test_classify_new_issue_after_resolution(
     ]
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
-
     monkeypatch.setattr(
-        "backend.agent.issue_graph.chat_completion",
-        lambda **kwargs: "Hello!",
+        "backend.agent.issue_graph.get_intents_for_category",
+        lambda _category: ["order_status", "cancel_order"],
     )
+
+    def chat_completion(**kwargs):
+        msgs = kwargs.get("messages") or []
+        system = str(msgs[0].get("content") if msgs else "")
+        if "classify a customer support session" in system:
+            return '{"intent": "order_status", "problem_to_solve": "Track order"}'
+        if "validate whether the user provided" in system:
+            return '{"valid": false, "missing_field_names": ["order_id"], "notes": "need id"}'
+        return "Hello!"
+
+    monkeypatch.setattr("backend.agent.issue_graph.chat_completion", chat_completion)
 
     sid = "00000000-0000-0000-0000-000000000005"
     r1 = client.post("/classify", json={"text": "Just hi", "full_flow": True})
