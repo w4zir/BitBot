@@ -21,7 +21,7 @@ steps:
     tool: refund_context_lookup
   - id: branch_order_found
     type: logic_gate
-    condition: "order_found == True"
+    condition: {op: eq, field: order_found, value: true}
     on_true: retrieve_refund_policy
     on_false: order_not_found
   - id: order_not_found
@@ -34,7 +34,7 @@ steps:
     tool: order_policy_search
   - id: branch_refund_policy_found
     type: logic_gate
-    condition: "policy_found == True"
+    condition: {op: eq, field: policy_found, value: true}
     on_true: assess_eligibility_and_refund
     on_false: escalate_no_refund_policy
   - id: escalate_no_refund_policy

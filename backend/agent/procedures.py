@@ -30,7 +30,7 @@ class ProcedureStep(BaseModel):
     type: StepType
     tool: str | None = None
     required_data: list[str] = Field(default_factory=list)
-    condition: str | None = None
+    condition: dict[str, Any] | None = None
     on_true: str | None = None
     on_false: str | None = None
     message: str | None = None
@@ -104,6 +104,12 @@ def validate_blueprints() -> list[str]:
         step_ids = {s.id for s in bp.steps}
         for step in bp.steps:
             if step.type == "logic_gate":
+                if not isinstance(step.condition, dict):
+                    errors.append(f"{bp.id}:{step.id} condition must be an object")
+                    continue
+                if "op" not in step.condition or "field" not in step.condition:
+                    errors.append(f"{bp.id}:{step.id} condition missing op/field")
+                    continue
                 if not step.on_true or not step.on_false:
                     errors.append(f"{bp.id}:{step.id} missing on_true/on_false")
                     continue

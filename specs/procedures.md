@@ -34,7 +34,7 @@ steps:
 
   - id: check_eligibility
     type: logic_gate
-    condition: "days_since_purchase < 30"
+    condition: {op: lt, field: days_since_purchase, value: 30}
     on_true: process_refund
     on_false: escalate_to_human
 
@@ -54,18 +54,37 @@ steps:
 |---|---|
 | `retrieval` | RAG lookup; result stored in `context_data` |
 | `tool_call` | External API call; requires all `required_data` present in `context_data` |
-| `logic_gate` | Conditional branch; evaluates expression against `context_data` |
+| `logic_gate` | Conditional branch; evaluates a structured condition dict `{op, field, value}` against `context_data` |
 | `interrupt` | Pauses execution for human-in-the-loop approval |
 | `llm_response` | LLM drafts a message to the user using `context_data` |
 
-### 2.3 Storage Strategy
+### 2.3 Logic Gate Condition Schema
+
+`logic_gate` steps use a structured condition object instead of executable strings.
+
+```yaml
+condition: {op: eq, field: order_found, value: true}
+```
+
+Supported operators:
+
+| Operator | Meaning | YAML example |
+|---|---|---|
+| `eq` | `field == value` | `{op: eq, field: order_found, value: true}` |
+| `neq` | `field != value` | `{op: neq, field: order_status, value: delivered}` |
+| `gt` | `field > value` | `{op: gt, field: days_since_purchase, value: 30}` |
+| `lt` | `field < value` | `{op: lt, field: item_count, value: 5}` |
+| `in` | `field in value` | `{op: in, field: status, value: [pending, processing]}` |
+| `exists` | `field is not None` | `{op: exists, field: order_id}` |
+
+### 2.4 Storage Strategy
 
 | Environment | Storage | Rationale |
 |---|---|---|
 | Development | `.yaml` files in `/blueprints/` directory | Version-controlled, testable, diff-friendly |
 | Production | PostgreSQL JSONB or MongoDB document store | Allows ops/product teams to update procedures without code deploys |
 
-### 2.4 Validation
+### 2.5 Validation
 
 All blueprints must be validated at load time using **Pydantic**.
 
@@ -78,7 +97,7 @@ class BlueprintStep(BaseModel):
     type: Literal["retrieval", "tool_call", "logic_gate", "interrupt", "llm_response"]
     tool: Optional[str] = None
     required_data: Optional[list[str]] = []
-    condition: Optional[str] = None
+    condition: Optional[dict] = None
     on_true: Optional[str] = None
     on_false: Optional[str] = None
     message: Optional[str] = None
@@ -170,6 +189,26 @@ def structured_executor(state: AgentState) -> dict:
 
     return {"context_data": state["context_data"],
             "current_step_index": state["current_step_index"] + 1}
+```
+
+```python
+CONDITION_OPS = {
+    "eq": lambda a, b: a == b,
+    "neq": lambda a, b: a != b,
+    "gt": lambda a, b: a > b,
+    "lt": lambda a, b: a < b,
+    "in": lambda a, b: a in b,
+    "exists": lambda a, _: a is not None,
+}
+
+def evaluate_condition(condition: dict, context_data: dict) -> bool:
+    op = condition["op"]
+    field = condition["field"]
+    value = condition.get("value")
+    fn = CONDITION_OPS.get(op)
+    if not fn:
+        return False
+    return bool(fn(context_data.get(field), value))
 ```
 
 ### 4.4 Termination Condition

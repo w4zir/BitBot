@@ -6,7 +6,7 @@ import json
 import os
 import re
 import uuid
-from typing import Any, Literal, TypedDict
+from typing import Any, Callable, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -548,9 +548,26 @@ def _handle_interrupt_step(step: dict[str, Any], state: IssueGraphState, idx: in
     return {**state, "assistant_metadata": meta, "final_response": msg, "current_step_index": len(todo)}
 
 
-def _evaluate_condition(condition: str, context_data: dict[str, Any]) -> bool:
+_CONDITION_OPS: dict[str, Callable[[Any, Any], bool]] = {
+    "eq": lambda a, b: a == b,
+    "neq": lambda a, b: a != b,
+    "gt": lambda a, b: a > b,
+    "lt": lambda a, b: a < b,
+    "in": lambda a, b: a in b,
+    "exists": lambda a, _: a is not None,
+}
+
+
+def _evaluate_condition(condition: dict[str, Any], context_data: dict[str, Any]) -> bool:
     try:
-        return bool(eval(condition, {"__builtins__": {}}, dict(context_data)))  # noqa: S307
+        op = str(condition["op"])
+        field = str(condition["field"])
+        lhs = context_data.get(field)
+        rhs = condition.get("value")
+        predicate = _CONDITION_OPS.get(op)
+        if predicate is None:
+            return False
+        return bool(predicate(lhs, rhs))
     except Exception:  # noqa: BLE001
         return False
 
@@ -621,7 +638,7 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             }
         context.update(runner(step, state))
     elif step_type == "logic_gate":
-        cond = str(step.get("condition") or "False")
+        cond = step.get("condition") or {}
         branch = _evaluate_condition(cond, context)
         target = str(step.get("on_true") if branch else step.get("on_false") or "")
         return _jump_to_step({**state, "context_data": context}, target)

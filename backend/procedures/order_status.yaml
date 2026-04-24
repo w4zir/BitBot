@@ -15,7 +15,7 @@ steps:
     tool: check_order_status
   - id: branch_lookup
     type: logic_gate
-    condition: "order_found == True"
+    condition: {op: eq, field: order_found, value: true}
     on_true: share_status
     on_false: order_not_found
   - id: share_status

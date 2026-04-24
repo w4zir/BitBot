@@ -19,7 +19,7 @@ steps:
     tool: check_order_status
   - id: branch_order_found
     type: logic_gate
-    condition: "order_found == True"
+    condition: {op: eq, field: order_found, value: true}
     on_true: branch_order_delivered
     on_false: order_not_found
   - id: order_not_found
@@ -29,7 +29,7 @@ steps:
       order in our system, and ask them to validate the order ID and share it again.
   - id: branch_order_delivered
     type: logic_gate
-    condition: "order_status != 'delivered'"
+    condition: {op: neq, field: order_status, value: delivered}
     on_true: change_shipping_address
     on_false: already_delivered
   - id: change_shipping_address

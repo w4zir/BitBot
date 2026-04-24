@@ -15,7 +15,7 @@ steps:
     tool: check_order_status
   - id: branch_order_found
     type: logic_gate
-    condition: "order_found == True"
+    condition: {op: eq, field: order_found, value: true}
     on_true: retrieve_cancel_policy
     on_false: order_not_found
   - id: order_not_found
@@ -28,7 +28,7 @@ steps:
     tool: order_policy_search
   - id: branch_cancel_policy_found
     type: logic_gate
-    condition: "policy_found == True"
+    condition: {op: eq, field: policy_found, value: true}
     on_true: apply_policy_and_cancel_or_decline
     on_false: escalate_no_cancel_policy
   - id: escalate_no_cancel_policy

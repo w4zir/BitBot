@@ -224,7 +224,7 @@ Each stage defines purpose, input contract, output contract, hard rules, and fai
   - `interrupt`
 - `tool_call` uses category-scoped tool registry only.
 - Unknown tool/step type is a hard execution error.
-- `logic_gate` condition evaluation runs in sandboxed context (no builtins).
+- `logic_gate` condition evaluation uses a structured condition object (`op`, `field`, optional `value`) dispatched through an allowlisted operator map.
 - Loop continues until terminal state or interruption.
 
 **Failure Modes**
@@ -303,7 +303,7 @@ class ProcedureStep(TypedDict, total=False):
     id: str
     type: Literal["logic_gate", "tool_call", "llm_response", "retrieval", "interrupt"]
     tool: str
-    condition: str
+    condition: dict[str, Any]
     on_true: str
     on_false: str
     message: str

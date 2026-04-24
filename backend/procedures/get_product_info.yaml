@@ -17,7 +17,7 @@ steps:
     tool: product_catalog_lookup
   - id: branch_product_found
     type: logic_gate
-    condition: "product_found == True"
+    condition: {op: eq, field: product_found, value: true}
     on_true: share_product_info
     on_false: product_not_found
   - id: share_product_info
