@@ -537,7 +537,7 @@ INSERT INTO category_intents (category_name, intent_name, display_name, is_activ
 ('order', 'track_order', 'Track order', true),
 ('order', 'place_order', 'Place order', true),
 ('order', 'change_order', 'Change order', true),
-('order', 'check_invoice', 'Check invoice', true),
+('order', 'cancel_order', 'Cancel order', true),
 -- payment
 ('payment', 'check_payment_methods', 'Check payment methods', true),
 ('payment', 'payment_issue', 'Payment issue', true),
