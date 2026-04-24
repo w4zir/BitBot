@@ -1,26 +1,30 @@
 # BitBot
 
-Agentic bot for any business — **BitBot** bootstrap with **category classification** using **ModernBERT** (fine-tuned `MoritzLaurer/ModernBERT-base-zeroshot-v2.0`), a **procedure-driven LangGraph** API flow, and **Docker Compose** for **frontend** (Streamlit), **backend** (FastAPI), **PostgreSQL**, **Elasticsearch**, and a **BentoML** classifier service.
+Agentic bot for any business — **BitBot** bootstrap with **category classification** using **ModernBERT** (fine-tuned `MoritzLaurer/ModernBERT-base-zeroshot-v2.0`), a **staged procedure-driven LangGraph** API flow, and **Docker Compose** for **frontend** (Streamlit), **backend** (FastAPI), **PostgreSQL**, **Elasticsearch**, and a **BentoML** classifier service.
 
 ## Architecture (overview)
 
 ```mermaid
 flowchart LR
   fe[Streamlit_frontend] --> be[FastAPI_backend]
-  be --> lg[LangGraph_procedure_executor]
+  be --> lg[LangGraph_staged_issue_pipeline]
   lg --> bento[ModernBERT_Bento]
-  lg --> llmIntent["LLM intent plus DB allowlist"]
+  lg --> stageIntent["LLM_intent_plus_DB_allowlist"]
+  lg --> stageRouter[Deterministic_specialist_router]
   lg --> yaml[ProcedureYAMLLibrary]
+  lg --> stagePolicy[Policy_load_and_constraints]
+  lg --> stageValidate[Data_plus_eligibility_gates]
+  lg --> stageOutcome[Outcome_validator_and_escalation]
   lg --> llm[Ollama_or_Cerebras]
   lg --> es[(ElasticsearchPolicyDocs)]
   be --> pg[(Postgres)]
-  llmIntent --> pg
+  stageIntent --> pg
   train[Dataset_and_finetune_scripts] --> artifacts[Local_model_dir]
   artifacts --> bento
 ```
 
 - **Frontend** (`frontend/`): Streamlit chat UI calling `POST /classify` with `full_flow` for session + LangGraph + LLM branches.
-- **Backend** (`backend/`): FastAPI + **LangGraph** ([`backend/agent/issue_graph.py`](backend/agent/issue_graph.py)): **ModernBERT via Bento** for **category** → **LLM JSON intent** (scoped to category, optionally constrained by **Postgres** intents per category) → YAML procedure load (`backend/procedures/*.yaml`) → hybrid required-data validation → structured step execution (see [docs/agent.md](docs/agent.md)).
+- **Backend** (`backend/`): FastAPI + **staged LangGraph** ([`backend/agent/issue_graph.py`](backend/agent/issue_graph.py)): **ModernBERT via Bento** for category → no-issue/low-confidence branch or intent resolution → deterministic specialist routing → YAML procedure load (`backend/procedures/*.yaml`) → policy load/constraints → data+eligibility gates → structured step execution → explicit outcome validation/escalation (see [docs/agent.md](docs/agent.md)).
 - **Tool APIs** (`backend/api/routes/tools.py`): DB-backed tool endpoints used by procedures (`/tools/order-status`, `/tools/product-lookup`, `/tools/refund-context`).
 - **Escalation API** (`backend/api/routes/escalations.py`): in-chat escalation decision endpoint (`/escalations/decision`) for accept/reject UX.
 - **Procedures** (`backend/procedures/`): One YAML blueprint per intent. Blueprints define `required_data` and ordered steps (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) used to enforce deterministic control flow.

@@ -13,7 +13,7 @@ from langgraph.graph import END, StateGraph
 from backend.agent.procedures import (
     as_dict,
     get_blueprint_by_category_intent,
-    get_fallback_blueprint,
+    get_blueprint_with_fallback_chain,
     load_blueprints,
 )
 from backend.db.intents_repo import get_intents_for_category
@@ -46,6 +46,13 @@ class IssueGraphState(TypedDict, total=False):
     context_data: dict[str, Any]
     validation_ok: bool | None
     validation_missing: list[str]
+    eligibility_ok: bool | None
+    specialist_agent_id: str
+    tool_registry_scope: str
+    procedure_namespace: str
+    policy_constraints: dict[str, Any] | None
+    outcome_status: str | None
+    escalation_bundle: dict[str, Any] | None
     final_response: str | None
     assistant_metadata: dict[str, Any]
 
@@ -62,6 +69,15 @@ def _classify_category_node(state: IssueGraphState) -> IssueGraphState:
         "category": result.category,
         "confidence": result.confidence,
     }
+
+
+def _category_confidence_threshold() -> float:
+    raw = os.getenv("CATEGORY_CONFIDENCE_THRESHOLD", "0.5").strip()
+    try:
+        val = float(raw)
+    except ValueError:
+        return 0.5
+    return max(0.0, min(1.0, val))
 
 
 def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
@@ -216,9 +232,7 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
 def _fetch_procedure_node(state: IssueGraphState) -> IssueGraphState:
     category = normalize_category_key(state.get("category") or "unknown")
     intent = (state.get("intent") or "").strip()
-    bp = get_blueprint_by_category_intent(category, intent)
-    if bp is None:
-        bp = get_fallback_blueprint(category) or get_fallback_blueprint("unknown")
+    bp = get_blueprint_with_fallback_chain(category, intent)
     if bp is None:
         return {
             **state,
@@ -234,6 +248,46 @@ def _fetch_procedure_node(state: IssueGraphState) -> IssueGraphState:
         "todo_list": [as_dict(step) for step in bp.steps],
         "current_step_index": 0,
         "context_data": dict(state.get("context_data") or {}),
+    }
+
+
+def _specialist_router_node(state: IssueGraphState) -> IssueGraphState:
+    category = normalize_category_key(state.get("category") or "unknown")
+    intent = str(state.get("intent") or "").strip()
+    specialist = f"{category}_agent" if category and category != "unknown" else "general_agent"
+    return {
+        **state,
+        "specialist_agent_id": specialist,
+        "tool_registry_scope": specialist,
+        "procedure_namespace": f"{category}:{intent or 'general'}",
+    }
+
+
+def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
+    text = str(state.get("text") or "").strip()
+    category = str(state.get("category") or "").strip().replace("_", " ")
+    intent = str(state.get("intent") or "").strip().replace("_", " ")
+    problem_to_solve = str(state.get("problem_to_solve") or "").strip()
+    query = " ".join(x for x in [category, intent, problem_to_solve, text] if x).strip() or "policy"
+    docs = search_policy_docs(query)
+    constraints = {
+        "eligible": True,
+        "reason": "",
+        "conditions": [],
+        "time_limit_hours": None,
+        "requires_evidence": False,
+        "auto_resolvable": True,
+        "raw_chunks": [str(d.get("content") or "") for d in docs],
+    }
+    return {
+        **state,
+        "policy_constraints": constraints,
+        "context_data": {
+            **dict(state.get("context_data") or {}),
+            "policy_found": bool(docs),
+            "policy_query": query,
+            "retrieved_docs": docs,
+        },
     }
 
 
@@ -326,6 +380,21 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
     }
     if not valid:
         out["current_step_index"] = len(state.get("todo_list") or [])
+    return out
+
+
+def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphState:
+    validated = _validate_required_data_node(state)
+    policy_constraints = dict(validated.get("policy_constraints") or {})
+    eligibility_ok = bool(policy_constraints.get("eligible", True))
+    out: IssueGraphState = {
+        **validated,
+        "eligibility_ok": eligibility_ok,
+    }
+    if validated.get("validation_ok") is False:
+        out["outcome_status"] = "needs_more_data"
+    elif not eligibility_ok:
+        out["outcome_status"] = "policy_ineligible"
     return out
 
 
@@ -748,6 +817,47 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
     return {**state, "context_data": context, "current_step_index": idx + 1}
 
 
+def _outcome_validator_node(state: IssueGraphState) -> IssueGraphState:
+    status = state.get("outcome_status")
+    if status in {"needs_more_data", "policy_ineligible"}:
+        return state
+    meta = dict(state.get("assistant_metadata") or {})
+    if meta.get("pending_human_action") or meta.get("escalation_decision") == "accept":
+        status = "pending_escalation"
+    elif meta.get("tool_error"):
+        status = "tool_error"
+    elif meta.get("step_error"):
+        status = "step_error"
+    elif graph_suggests_session_resolved(state):
+        status = "resolved"
+    else:
+        status = "unresolvable"
+    return {**state, "outcome_status": status}
+
+
+def _human_escalation_node(state: IssueGraphState) -> IssueGraphState:
+    bundle = {
+        "session_id": str(state.get("session_id") or ""),
+        "category": str(state.get("category") or ""),
+        "intent": str(state.get("intent") or ""),
+        "problem_to_solve": str(state.get("problem_to_solve") or ""),
+        "transcript": state.get("messages") or [],
+        "context_data": dict(state.get("context_data") or {}),
+        "policy_constraints": state.get("policy_constraints") or {},
+        "procedure_id": str(state.get("procedure_id") or ""),
+        "last_step_id": (
+            (state.get("todo_list") or [])[max(0, int(state.get("current_step_index") or 0) - 1)].get("id")
+            if state.get("todo_list")
+            else None
+        ),
+        "outcome_status": str(state.get("outcome_status") or "unresolvable"),
+        "reason": "Escalated by outcome validator",
+    }
+    meta = dict(state.get("assistant_metadata") or {})
+    meta["escalated"] = True
+    return {**state, "escalation_bundle": bundle, "assistant_metadata": meta}
+
+
 def _should_continue(state: IssueGraphState) -> Literal["continue", "end"]:
     todo = state.get("todo_list") or []
     idx = int(state.get("current_step_index") or 0)
@@ -758,18 +868,43 @@ def _should_continue(state: IssueGraphState) -> Literal["continue", "end"]:
 
 def _route_after_category(state: IssueGraphState) -> Literal["no_issue_direct", "classify_intent"]:
     category = normalize_category_key(state.get("category") or "unknown")
-    if category == "no_issue":
+    confidence = float(state.get("confidence") or 0.0)
+    if category == "no_issue" or confidence < _category_confidence_threshold():
         return "no_issue_direct"
     return "classify_intent"
+
+
+def _route_after_validation(state: IssueGraphState) -> Literal["structured_executor", "outcome_validator", "end"]:
+    if state.get("validation_ok") is False:
+        return "end"
+    if state.get("eligibility_ok") is False:
+        return "outcome_validator"
+    return "structured_executor"
+
+
+def _route_after_outcome(state: IssueGraphState) -> Literal["human_escalation", "end"]:
+    if str(state.get("outcome_status") or "") in {
+        "pending_escalation",
+        "unresolvable",
+        "tool_error",
+        "step_error",
+        "policy_ineligible",
+    }:
+        return "human_escalation"
+    return "end"
 
 def build_issue_classification_graph():
     g: StateGraph[IssueGraphState] = StateGraph(IssueGraphState)
     g.add_node("classify_category", _classify_category_node)
     g.add_node("no_issue_direct", _no_issue_direct_node)
     g.add_node("classify_intent", _classify_intent_node)
+    g.add_node("specialist_router", _specialist_router_node)
     g.add_node("fetch_procedure", _fetch_procedure_node)
-    g.add_node("validate_required", _validate_required_data_node)
+    g.add_node("policy_load", _policy_load_node)
+    g.add_node("validate_required", _data_and_eligibility_validator_node)
     g.add_node("structured_executor", _structured_executor_node)
+    g.add_node("outcome_validator", _outcome_validator_node)
+    g.add_node("human_escalation", _human_escalation_node)
     g.set_entry_point("classify_category")
     g.add_conditional_edges(
         "classify_category",
@@ -777,14 +912,30 @@ def build_issue_classification_graph():
         {"no_issue_direct": "no_issue_direct", "classify_intent": "classify_intent"},
     )
     g.add_edge("no_issue_direct", END)
-    g.add_edge("classify_intent", "fetch_procedure")
-    g.add_edge("fetch_procedure", "validate_required")
-    g.add_edge("validate_required", "structured_executor")
+    g.add_edge("classify_intent", "specialist_router")
+    g.add_edge("specialist_router", "fetch_procedure")
+    g.add_edge("fetch_procedure", "policy_load")
+    g.add_edge("policy_load", "validate_required")
+    g.add_conditional_edges(
+        "validate_required",
+        _route_after_validation,
+        {
+            "structured_executor": "structured_executor",
+            "outcome_validator": "outcome_validator",
+            "end": END,
+        },
+    )
     g.add_conditional_edges(
         "structured_executor",
         _should_continue,
-        {"continue": "structured_executor", "end": END},
+        {"continue": "structured_executor", "end": "outcome_validator"},
     )
+    g.add_conditional_edges(
+        "outcome_validator",
+        _route_after_outcome,
+        {"human_escalation": "human_escalation", "end": END},
+    )
+    g.add_edge("human_escalation", END)
     return g.compile()
 
 
@@ -853,6 +1004,13 @@ def run_conversation_graph(
             "context_data": {},
             "validation_ok": None,
             "validation_missing": [],
+            "eligibility_ok": None,
+            "specialist_agent_id": "",
+            "tool_registry_scope": "",
+            "procedure_namespace": "",
+            "policy_constraints": None,
+            "outcome_status": None,
+            "escalation_bundle": None,
             "final_response": None,
             "assistant_metadata": {},
         }
@@ -868,6 +1026,10 @@ def run_conversation_graph(
         "validation_ok": out.get("validation_ok"),
         "validation_missing": list(out.get("validation_missing") or []),
         "assistant_reply": out.get("final_response"),
-        "assistant_metadata": out.get("assistant_metadata") or {},
+        "assistant_metadata": {
+            **(out.get("assistant_metadata") or {}),
+            "outcome_status": out.get("outcome_status"),
+            "specialist_agent_id": out.get("specialist_agent_id"),
+        },
         "session_resolved_by_graph": resolved_by_graph,
     }

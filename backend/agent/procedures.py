@@ -92,6 +92,19 @@ def get_fallback_blueprint(category: str) -> ProcedureBlueprint | None:
     return None
 
 
+def get_blueprint_with_fallback_chain(category: str, intent: str) -> ProcedureBlueprint | None:
+    """
+    Resolve a blueprint using the deterministic fallback chain:
+    1) (category, intent)
+    2) (category, *_general fallback)
+    3) (unknown, *_general fallback)
+    """
+    direct = get_blueprint_by_category_intent(category, intent)
+    if direct is not None:
+        return direct
+    return get_fallback_blueprint(category) or get_fallback_blueprint("unknown")
+
+
 def get_category_intents(category: str) -> list[ProcedureBlueprint]:
     cat = (category or "").strip().lower()
     return [bp for bp in load_blueprints().values() if bp.category.lower() == cat]
@@ -101,6 +114,8 @@ def validate_blueprints() -> list[str]:
     errors: list[str] = []
     blueprints = load_blueprints()
     for bp in blueprints.values():
+        if len({s.id for s in bp.steps}) != len(bp.steps):
+            errors.append(f"{bp.id} has duplicate step ids")
         step_ids = {s.id for s in bp.steps}
         for step in bp.steps:
             if step.type == "logic_gate":
