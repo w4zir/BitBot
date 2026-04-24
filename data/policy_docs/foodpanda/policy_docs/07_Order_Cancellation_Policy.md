@@ -3,3 +3,9 @@
 
 ### Standard Order Status
 * Order status not in shipped, delivered or cancelled.
+
+
+### Refund of Cancel Order
+* Generate a refund if payment was already made for the order.
+
+
