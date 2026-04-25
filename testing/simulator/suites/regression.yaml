@@ -1,0 +1,20 @@
+run_id: regression_core
+agent_url: http://localhost:8000/classify
+db_snapshot: live
+
+defaults:
+  max_turns: 8
+  cooperation_level: cooperative
+  eval_targets:
+    - structural
+    - policy
+  llm_judge_model: claude-sonnet-4-20250514
+  fail_on_regression: false
+  fail_on_coverage_gap: false
+
+scenarios:
+  - seed_id: order_cancel_processing_easy
+  - seed_id: order_cancel_delivered_policy_ineligible
+  - seed_id: order_status_cooperative
+  - seed_id: refund_delivered_easy
+  - seed_id: refund_missing_data_resistant

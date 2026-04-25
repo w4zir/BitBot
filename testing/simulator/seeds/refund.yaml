@@ -1,0 +1,29 @@
+seeds:
+  - seed_id: refund_delivered_easy
+    category: refund
+    intent: get_refund
+    difficulty: medium
+    persona_id: polite_first_timer
+    description: "Delivered order requesting refund"
+    expected_outcome: resolved
+    expected_procedure_id: get_refund
+    db_filter:
+      entity_type: order
+      order_status: [delivered]
+    multi_issue: false
+
+  - seed_id: refund_missing_data_resistant
+    category: refund
+    intent: get_refund
+    difficulty: hard
+    persona_id: impatient_escalator
+    description: "Resistant user for refund flow, forces validation loop"
+    expected_outcome: resolved
+    expected_procedure_id: get_refund
+    cooperation_level: resistant
+    db_filter:
+      entity_type: order
+      order_status: [delivered, processing]
+    adversarial_flags:
+      - missing_data_stubborn
+    multi_issue: false

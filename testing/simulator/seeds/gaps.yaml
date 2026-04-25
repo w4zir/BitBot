@@ -1,0 +1,5 @@
+known_gaps:
+  - category: shipping
+    intent: track_order
+    reason: "No dedicated shipping track procedure in current YAML set."
+    ticket: ""

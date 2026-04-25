@@ -1,0 +1,33 @@
+personas:
+  - persona_id: polite_first_timer
+    display_name: "Polite First-Timer"
+    vocabulary: simple
+    patience: high
+    cooperation_level: cooperative
+    escalation_tendency: low
+    typical_message_length: medium
+    traits:
+      - provides requested info quickly
+      - accepts clear resolutions
+
+  - persona_id: impatient_escalator
+    display_name: "Impatient Escalator"
+    vocabulary: informal
+    patience: low
+    cooperation_level: resistant
+    escalation_tendency: high
+    typical_message_length: short
+    traits:
+      - asks for human support quickly
+      - withholds information at first
+
+  - persona_id: policy_prober
+    display_name: "Policy Prober"
+    vocabulary: technical
+    patience: medium
+    cooperation_level: passive
+    escalation_tendency: medium
+    typical_message_length: medium
+    traits:
+      - challenges policy boundaries
+      - asks clarifying follow-up questions

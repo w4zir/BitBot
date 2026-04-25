@@ -1,0 +1,42 @@
+seeds:
+  - seed_id: order_cancel_processing_easy
+    category: order
+    intent: cancel_order
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Cancelable processing order with cooperative user"
+    expected_outcome: resolved
+    expected_procedure_id: order_cancel
+    db_filter:
+      entity_type: order
+      order_status: [processing, shipped]
+    multi_issue: false
+
+  - seed_id: order_cancel_delivered_policy_ineligible
+    category: order
+    intent: cancel_order
+    difficulty: hard
+    persona_id: policy_prober
+    description: "Delivered order where cancellation should fail"
+    expected_outcome: policy_ineligible
+    expected_procedure_id: order_cancel
+    db_filter:
+      entity_type: order
+      order_status: [delivered]
+    adversarial_flags:
+      - eligibility_boundary
+      - policy_argument
+    multi_issue: false
+
+  - seed_id: order_status_cooperative
+    category: order
+    intent: order_status
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Simple order tracking status request"
+    expected_outcome: resolved
+    expected_procedure_id: order_status
+    db_filter:
+      entity_type: order
+      order_status: [processing, shipped, delivered]
+    multi_issue: false

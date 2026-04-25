@@ -1,0 +1,17 @@
+run_id: smoke_local
+agent_url: http://localhost:8000/classify
+db_snapshot: live
+
+defaults:
+  max_turns: 6
+  cooperation_level: cooperative
+  eval_targets:
+    - structural
+    - policy
+  fail_on_regression: false
+  fail_on_coverage_gap: false
+
+scenarios:
+  - seed_id: order_cancel_processing_easy
+  - seed_id: order_status_cooperative
+  - seed_id: refund_delivered_easy
