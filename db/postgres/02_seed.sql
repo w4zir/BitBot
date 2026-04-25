@@ -576,3 +576,486 @@ SELECT setval(pg_get_serial_sequence('support_tickets', 'ticket_id'), COALESCE((
 SELECT setval(pg_get_serial_sequence('security_incidents', 'incident_id'), COALESCE((SELECT MAX(incident_id) FROM security_incidents), 1), true);
 SELECT setval(pg_get_serial_sequence('intent_categories', 'id'), COALESCE((SELECT MAX(id) FROM intent_categories), 1), true);
 SELECT setval(pg_get_serial_sequence('category_intents', 'id'), COALESCE((SELECT MAX(id) FROM category_intents), 1), true);
+
+-- ---------------------------------------------------------------------------
+-- Spec-aligned operational + simulator seed data
+-- ---------------------------------------------------------------------------
+
+BEGIN;
+
+INSERT INTO procedure_blueprints (
+    id, procedure_id, category, intent, version, is_active,
+    blueprint_json, metadata, created_by, created_at, updated_at
+) VALUES
+(
+    '91000000-0000-4000-8000-000000000001',
+    'order_status_v1',
+    'order',
+    'track_order',
+    1,
+    false,
+    '{"intent":"track_order","steps":[{"id":"retrieve_order","type":"tool_call","tool":"check_order_status","required_data":["order_id"]}]}'::jsonb,
+    '{"source":"seed","notes":"legacy baseline blueprint"}'::jsonb,
+    'seed_script',
+    '2026-04-14 09:00:00+00',
+    '2026-04-14 09:00:00+00'
+),
+(
+    '91000000-0000-4000-8000-000000000002',
+    'order_status_v1',
+    'order',
+    'track_order',
+    2,
+    true,
+    '{"intent":"track_order","steps":[{"id":"retrieve_order","type":"tool_call","tool":"check_order_status","required_data":["order_id"]},{"id":"compose_status","type":"llm_response","message":"Share current order status"}]}'::jsonb,
+    '{"source":"seed","notes":"active tracking blueprint"}'::jsonb,
+    'seed_script',
+    '2026-04-18 09:00:00+00',
+    '2026-04-18 09:00:00+00'
+),
+(
+    '91000000-0000-4000-8000-000000000003',
+    'refund_escalation_v1',
+    'refund',
+    'get_refund',
+    1,
+    true,
+    '{"intent":"get_refund","steps":[{"id":"retrieve_policy","type":"retrieval","tool":"get_refund_policy"},{"id":"eligibility_gate","type":"logic_gate","condition":{"op":"eq","field":"eligible","value":false},"on_true":"escalate","on_false":"submit_refund"},{"id":"submit_refund","type":"tool_call","tool":"submit_refund_ticket"},{"id":"escalate","type":"interrupt","message":"Escalating to human specialist"}]}'::jsonb,
+    '{"source":"seed","notes":"matches escalation flow"}'::jsonb,
+    'seed_script',
+    '2026-04-15 10:30:00+00',
+    '2026-04-15 10:30:00+00'
+)
+ON CONFLICT (procedure_id, version) DO UPDATE SET
+  category = EXCLUDED.category,
+  intent = EXCLUDED.intent,
+  is_active = EXCLUDED.is_active,
+  blueprint_json = EXCLUDED.blueprint_json,
+  metadata = EXCLUDED.metadata,
+  created_by = EXCLUDED.created_by,
+  updated_at = EXCLUDED.updated_at;
+
+INSERT INTO session_entities (
+    id, session_id, entity_type, user_id, order_id, subscription_email, relation, confidence, metadata, created_at
+) VALUES
+(
+    '92000000-0000-4000-8000-000000000001',
+    '11111111-1111-4111-8111-111111111101',
+    'order',
+    1,
+    'ORD-1001',
+    NULL,
+    'primary',
+    0.99,
+    '{"resolver":"order_lookup","from":"user_message"}'::jsonb,
+    '2026-04-17 09:01:00+00'
+),
+(
+    '92000000-0000-4000-8000-000000000002',
+    '33333333-3333-4333-8333-333333333303',
+    'order',
+    3,
+    'ORD-1008',
+    NULL,
+    'primary',
+    0.98,
+    '{"resolver":"refund_lookup"}'::jsonb,
+    '2026-04-15 11:01:00+00'
+),
+(
+    '92000000-0000-4000-8000-000000000003',
+    '33333333-3333-4333-8333-333333333303',
+    'subscription',
+    NULL,
+    NULL,
+    'sub_72h@example.com',
+    'secondary',
+    0.83,
+    '{"note":"linked account for eligibility cross-check"}'::jsonb,
+    '2026-04-15 11:02:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  entity_type = EXCLUDED.entity_type,
+  user_id = EXCLUDED.user_id,
+  order_id = EXCLUDED.order_id,
+  subscription_email = EXCLUDED.subscription_email,
+  relation = EXCLUDED.relation,
+  confidence = EXCLUDED.confidence,
+  metadata = EXCLUDED.metadata,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO escalation_handoffs (
+    id, session_id, ticket_id, procedure_id, outcome_status, queue_status, reason,
+    escalation_bundle, queued_at, claimed_at, resolved_at, assigned_to, created_at
+) VALUES
+(
+    '93000000-0000-4000-8000-000000000001',
+    '33333333-3333-4333-8333-333333333303',
+    '44444444-4444-4444-8444-444444444404',
+    'refund_escalation_v1',
+    'failed_or_escalate',
+    'queued',
+    'Defective hardware requires specialist decision',
+    '{"category":"refund","intent":"get_refund","last_step_id":"escalate","pending_human_action":true,"context_data":{"order_id":"ORD-1008","issue":"defective_speaker"}}'::jsonb,
+    '2026-04-15 11:05:00+00',
+    NULL,
+    NULL,
+    NULL,
+    '2026-04-15 11:05:00+00'
+),
+(
+    '93000000-0000-4000-8000-000000000002',
+    '11111111-1111-4111-8111-111111111101',
+    NULL,
+    'order_status_v1',
+    'resolved',
+    'resolved',
+    'Order status clarified automatically',
+    '{"category":"order","intent":"track_order","last_step_id":"compose_status","pending_human_action":false}'::jsonb,
+    '2026-04-17 09:02:00+00',
+    '2026-04-17 09:03:00+00',
+    '2026-04-17 09:04:00+00',
+    'queue-bot',
+    '2026-04-17 09:02:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  ticket_id = EXCLUDED.ticket_id,
+  procedure_id = EXCLUDED.procedure_id,
+  outcome_status = EXCLUDED.outcome_status,
+  queue_status = EXCLUDED.queue_status,
+  reason = EXCLUDED.reason,
+  escalation_bundle = EXCLUDED.escalation_bundle,
+  queued_at = EXCLUDED.queued_at,
+  claimed_at = EXCLUDED.claimed_at,
+  resolved_at = EXCLUDED.resolved_at,
+  assigned_to = EXCLUDED.assigned_to,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO tool_invocations (
+    id, session_id, span_id, trace_id, run_id, tool_name, step_id, procedure_id,
+    status, success, error_code, error_message, request_payload, response_payload,
+    duration_ms, invoked_at, created_at
+) VALUES
+(
+    '94000000-0000-4000-8000-000000000001',
+    '11111111-1111-4111-8111-111111111101',
+    '55555555-5555-4555-8555-555555555501',
+    'trace-seed-1',
+    'smoke_local_2026_04_17',
+    'check_order_status',
+    'retrieve_order',
+    'order_status_v1',
+    'success',
+    true,
+    NULL,
+    NULL,
+    '{"order_id":"ORD-1001"}'::jsonb,
+    '{"status":"processing","eta":"2026-04-19"}'::jsonb,
+    42.5,
+    '2026-04-17 09:01:00+00',
+    '2026-04-17 09:01:00+00'
+),
+(
+    '94000000-0000-4000-8000-000000000002',
+    '33333333-3333-4333-8333-333333333303',
+    NULL,
+    'trace-seed-3',
+    'regression_sprint_42',
+    'submit_refund_ticket',
+    'submit_refund',
+    'refund_escalation_v1',
+    'error',
+    false,
+    'MANUAL_REVIEW_REQUIRED',
+    'Refund requires specialist approval',
+    '{"order_id":"ORD-1008","reason":"defective"}'::jsonb,
+    '{"ticket_created":true,"ticket_type":"manual_refund"}'::jsonb,
+    301.8,
+    '2026-04-15 11:04:00+00',
+    '2026-04-15 11:04:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  span_id = EXCLUDED.span_id,
+  trace_id = EXCLUDED.trace_id,
+  run_id = EXCLUDED.run_id,
+  tool_name = EXCLUDED.tool_name,
+  step_id = EXCLUDED.step_id,
+  procedure_id = EXCLUDED.procedure_id,
+  status = EXCLUDED.status,
+  success = EXCLUDED.success,
+  error_code = EXCLUDED.error_code,
+  error_message = EXCLUDED.error_message,
+  request_payload = EXCLUDED.request_payload,
+  response_payload = EXCLUDED.response_payload,
+  duration_ms = EXCLUDED.duration_ms,
+  invoked_at = EXCLUDED.invoked_at,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO llm_metrics (
+    id, session_id, span_id, run_id, model_name, stage_name,
+    prompt_tokens, completion_tokens, total_tokens, finish_reason,
+    estimated_cost_usd, latency_ms, metadata, measured_at, created_at
+) VALUES
+(
+    '95000000-0000-4000-8000-000000000001',
+    '11111111-1111-4111-8111-111111111101',
+    '55555555-5555-4555-8555-555555555501',
+    'smoke_local_2026_04_17',
+    'claude-sonnet-4-20250514',
+    'intent_resolver',
+    312,
+    94,
+    406,
+    'stop',
+    0.001624,
+    118.4,
+    '{"quality":"high"}'::jsonb,
+    '2026-04-17 09:00:59+00',
+    '2026-04-17 09:00:59+00'
+),
+(
+    '95000000-0000-4000-8000-000000000002',
+    '33333333-3333-4333-8333-333333333303',
+    NULL,
+    'regression_sprint_42',
+    'claude-sonnet-4-20250514',
+    'outcome_validator',
+    420,
+    120,
+    540,
+    'stop',
+    0.002160,
+    163.9,
+    '{"policy_ineligible_check":true}'::jsonb,
+    '2026-04-15 11:05:00+00',
+    '2026-04-15 11:05:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  span_id = EXCLUDED.span_id,
+  run_id = EXCLUDED.run_id,
+  model_name = EXCLUDED.model_name,
+  stage_name = EXCLUDED.stage_name,
+  prompt_tokens = EXCLUDED.prompt_tokens,
+  completion_tokens = EXCLUDED.completion_tokens,
+  total_tokens = EXCLUDED.total_tokens,
+  finish_reason = EXCLUDED.finish_reason,
+  estimated_cost_usd = EXCLUDED.estimated_cost_usd,
+  latency_ms = EXCLUDED.latency_ms,
+  metadata = EXCLUDED.metadata,
+  measured_at = EXCLUDED.measured_at,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO audit_log (
+    id, session_id, actor_type, actor_id, action, entity_type, entity_id,
+    success, reason, before_json, after_json, metadata, occurred_at, created_at
+) VALUES
+(
+    '96000000-0000-4000-8000-000000000001',
+    '11111111-1111-4111-8111-111111111101',
+    'assistant',
+    'GeneralAgent',
+    'update_order_status_context',
+    'order',
+    'ORD-1001',
+    true,
+    'Status lookup completed',
+    '{"status":"processing"}'::jsonb,
+    '{"status":"processing","eta":"2026-04-19"}'::jsonb,
+    '{"tool":"check_order_status"}'::jsonb,
+    '2026-04-17 09:01:00+00',
+    '2026-04-17 09:01:00+00'
+),
+(
+    '96000000-0000-4000-8000-000000000002',
+    '33333333-3333-4333-8333-333333333303',
+    'assistant',
+    'RefundAgent',
+    'escalate_refund',
+    'ticket',
+    '44444444-4444-4444-8444-444444444404',
+    true,
+    'Eligibility check failed closed',
+    '{"status":"open"}'::jsonb,
+    '{"status":"open","priority":"high"}'::jsonb,
+    '{"escalated_to":"refund_specialist_queue"}'::jsonb,
+    '2026-04-15 11:05:00+00',
+    '2026-04-15 11:05:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  session_id = EXCLUDED.session_id,
+  actor_type = EXCLUDED.actor_type,
+  actor_id = EXCLUDED.actor_id,
+  action = EXCLUDED.action,
+  entity_type = EXCLUDED.entity_type,
+  entity_id = EXCLUDED.entity_id,
+  success = EXCLUDED.success,
+  reason = EXCLUDED.reason,
+  before_json = EXCLUDED.before_json,
+  after_json = EXCLUDED.after_json,
+  metadata = EXCLUDED.metadata,
+  occurred_at = EXCLUDED.occurred_at,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO simulation_runs (
+    id, run_id, suite_name, source, db_snapshot, baseline_ref, git_sha, status, started_at, completed_at, summary_json, created_at
+) VALUES
+(
+    '97000000-0000-4000-8000-000000000001',
+    'smoke_local_2026_04_17',
+    'smoke',
+    'local',
+    'live',
+    NULL,
+    'seed-demo-sha-1',
+    'completed',
+    '2026-04-17 09:00:00+00',
+    '2026-04-17 09:02:00+00',
+    '{"total":2,"passed":2,"failed":0}'::jsonb,
+    '2026-04-17 09:02:00+00'
+),
+(
+    '97000000-0000-4000-8000-000000000002',
+    'regression_sprint_42',
+    'regression',
+    'ci',
+    'live',
+    'baselines/baseline_v1.json',
+    'seed-demo-sha-2',
+    'completed',
+    '2026-04-15 11:00:00+00',
+    '2026-04-15 11:08:00+00',
+    '{"total":3,"passed":2,"failed":1,"regressions":1}'::jsonb,
+    '2026-04-15 11:08:00+00'
+)
+ON CONFLICT (run_id) DO UPDATE SET
+  suite_name = EXCLUDED.suite_name,
+  source = EXCLUDED.source,
+  db_snapshot = EXCLUDED.db_snapshot,
+  baseline_ref = EXCLUDED.baseline_ref,
+  git_sha = EXCLUDED.git_sha,
+  status = EXCLUDED.status,
+  started_at = EXCLUDED.started_at,
+  completed_at = EXCLUDED.completed_at,
+  summary_json = EXCLUDED.summary_json,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO simulation_scenarios (
+    id, run_id, session_id, seed_id, persona_id, category, intent,
+    linked_order_id, linked_user_id, linked_subscription_email,
+    expected_outcome, actual_outcome, passed, assertions_json, trace_json, evaluated_at, created_at
+) VALUES
+(
+    '98000000-0000-4000-8000-000000000001',
+    '97000000-0000-4000-8000-000000000001',
+    '11111111-1111-4111-8111-111111111101',
+    'order_status_smoke',
+    'polite_first_timer',
+    'order',
+    'track_order',
+    'ORD-1001',
+    1,
+    NULL,
+    'resolved',
+    'resolved',
+    true,
+    '{"outcome_status":"resolved","procedure_id":"order_status_v1"}'::jsonb,
+    '{"turns":2,"issue_locked":true}'::jsonb,
+    '2026-04-17 09:02:00+00',
+    '2026-04-17 09:02:00+00'
+),
+(
+    '98000000-0000-4000-8000-000000000002',
+    '97000000-0000-4000-8000-000000000002',
+    '33333333-3333-4333-8333-333333333303',
+    'refund_damaged_hard',
+    'impatient_escalator',
+    'refund',
+    'get_refund',
+    'ORD-1008',
+    3,
+    'sub_72h@example.com',
+    'policy_ineligible',
+    'escalated',
+    false,
+    '{"outcome_status":"policy_ineligible","expected_escalation_bundle":true}'::jsonb,
+    '{"turns":4,"issue_locked":true,"validation_missing":[]}'::jsonb,
+    '2026-04-15 11:07:00+00',
+    '2026-04-15 11:07:00+00'
+),
+(
+    '98000000-0000-4000-8000-000000000003',
+    '97000000-0000-4000-8000-000000000002',
+    '22222222-2222-4222-8222-222222222202',
+    'no_issue_chat_easy',
+    'friendly_smalltalk',
+    'no_issue',
+    'no_issue_chat',
+    NULL,
+    2,
+    NULL,
+    'resolved',
+    'resolved',
+    true,
+    '{"outcome_status":"resolved","procedure_id":"no_issue_chat"}'::jsonb,
+    '{"turns":1}'::jsonb,
+    '2026-04-15 11:06:00+00',
+    '2026-04-15 11:06:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  run_id = EXCLUDED.run_id,
+  session_id = EXCLUDED.session_id,
+  seed_id = EXCLUDED.seed_id,
+  persona_id = EXCLUDED.persona_id,
+  category = EXCLUDED.category,
+  intent = EXCLUDED.intent,
+  linked_order_id = EXCLUDED.linked_order_id,
+  linked_user_id = EXCLUDED.linked_user_id,
+  linked_subscription_email = EXCLUDED.linked_subscription_email,
+  expected_outcome = EXCLUDED.expected_outcome,
+  actual_outcome = EXCLUDED.actual_outcome,
+  passed = EXCLUDED.passed,
+  assertions_json = EXCLUDED.assertions_json,
+  trace_json = EXCLUDED.trace_json,
+  evaluated_at = EXCLUDED.evaluated_at,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO coverage_snapshots (
+    id, run_id, total_pairs, covered_pairs, known_gaps, unexpected_gaps, coverage_ratio, gap_details, created_at
+) VALUES
+(
+    '99000000-0000-4000-8000-000000000001',
+    '97000000-0000-4000-8000-000000000001',
+    42,
+    39,
+    3,
+    0,
+    0.9286,
+    '{"known":["subscription/unsubscribe","invoice/get_invoice","feedback/complaint"],"unexpected":[]}'::jsonb,
+    '2026-04-17 09:02:00+00'
+),
+(
+    '99000000-0000-4000-8000-000000000002',
+    '97000000-0000-4000-8000-000000000002',
+    42,
+    37,
+    3,
+    2,
+    0.8810,
+    '{"known":["subscription/unsubscribe","invoice/get_invoice","feedback/complaint"],"unexpected":["refund/get_refund","shipping/change_shipping_address"]}'::jsonb,
+    '2026-04-15 11:08:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  run_id = EXCLUDED.run_id,
+  total_pairs = EXCLUDED.total_pairs,
+  covered_pairs = EXCLUDED.covered_pairs,
+  known_gaps = EXCLUDED.known_gaps,
+  unexpected_gaps = EXCLUDED.unexpected_gaps,
+  coverage_ratio = EXCLUDED.coverage_ratio,
+  gap_details = EXCLUDED.gap_details,
+  created_at = EXCLUDED.created_at;
+
+COMMIT;

@@ -15,9 +15,22 @@ DROP VIEW IF EXISTS v_hallucination_rate CASCADE;
 DROP VIEW IF EXISTS v_tool_success_rate CASCADE;
 DROP VIEW IF EXISTS v_escalation_rate CASCADE;
 DROP VIEW IF EXISTS v_automation_rate CASCADE;
+DROP VIEW IF EXISTS v_handoff_queue_status CASCADE;
+DROP VIEW IF EXISTS v_llm_performance_summary CASCADE;
+DROP VIEW IF EXISTS v_simulation_run_summary CASCADE;
+DROP VIEW IF EXISTS v_simulation_outcome_breakdown CASCADE;
 DROP TABLE IF EXISTS evaluation_scores CASCADE;
 DROP TABLE IF EXISTS outcomes CASCADE;
 DROP TABLE IF EXISTS agent_spans CASCADE;
+DROP TABLE IF EXISTS coverage_snapshots CASCADE;
+DROP TABLE IF EXISTS simulation_scenarios CASCADE;
+DROP TABLE IF EXISTS simulation_runs CASCADE;
+DROP TABLE IF EXISTS audit_log CASCADE;
+DROP TABLE IF EXISTS llm_metrics CASCADE;
+DROP TABLE IF EXISTS tool_invocations CASCADE;
+DROP TABLE IF EXISTS session_entities CASCADE;
+DROP TABLE IF EXISTS escalation_handoffs CASCADE;
+DROP TABLE IF EXISTS procedure_blueprints CASCADE;
 DROP TABLE IF EXISTS messages CASCADE;
 DROP TABLE IF EXISTS tickets CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
@@ -249,12 +262,176 @@ CREATE TABLE evaluation_scores (
     evaluated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ---------------------------------------------------------------------------
+-- Spec-aligned operational + simulator testing tables
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE procedure_blueprints (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    procedure_id VARCHAR(150) NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    intent VARCHAR(200) NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    blueprint_json JSONB NOT NULL,
+    metadata JSONB,
+    created_by VARCHAR(120),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (procedure_id, version)
+);
+
+CREATE TABLE escalation_handoffs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    ticket_id UUID REFERENCES tickets(id) ON DELETE SET NULL,
+    procedure_id VARCHAR(150),
+    outcome_status VARCHAR(80) NOT NULL,
+    queue_status VARCHAR(40) NOT NULL DEFAULT 'queued',
+    reason TEXT,
+    escalation_bundle JSONB NOT NULL,
+    queued_at TIMESTAMPTZ DEFAULT NOW(),
+    claimed_at TIMESTAMPTZ,
+    resolved_at TIMESTAMPTZ,
+    assigned_to VARCHAR(120),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE session_entities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    entity_type VARCHAR(50) NOT NULL,
+    user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+    order_id VARCHAR(50) REFERENCES orders(order_id) ON DELETE SET NULL,
+    subscription_email VARCHAR(255) REFERENCES subscription_accounts(account_email) ON DELETE SET NULL,
+    relation VARCHAR(50) NOT NULL DEFAULT 'primary',
+    confidence DOUBLE PRECISION,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE tool_invocations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    span_id UUID REFERENCES agent_spans(id) ON DELETE SET NULL,
+    trace_id VARCHAR(100),
+    run_id VARCHAR(120),
+    tool_name VARCHAR(120) NOT NULL,
+    step_id VARCHAR(120),
+    procedure_id VARCHAR(150),
+    status VARCHAR(30) NOT NULL DEFAULT 'success',
+    success BOOLEAN NOT NULL DEFAULT TRUE,
+    error_code VARCHAR(80),
+    error_message TEXT,
+    request_payload JSONB,
+    response_payload JSONB,
+    duration_ms NUMERIC(12, 3),
+    invoked_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE llm_metrics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    span_id UUID REFERENCES agent_spans(id) ON DELETE SET NULL,
+    run_id VARCHAR(120),
+    model_name VARCHAR(120) NOT NULL,
+    stage_name VARCHAR(120),
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    finish_reason VARCHAR(80),
+    estimated_cost_usd NUMERIC(12, 6),
+    latency_ms NUMERIC(12, 3),
+    metadata JSONB,
+    measured_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE audit_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    actor_type VARCHAR(40) NOT NULL,
+    actor_id VARCHAR(120),
+    action VARCHAR(120) NOT NULL,
+    entity_type VARCHAR(80) NOT NULL,
+    entity_id VARCHAR(120) NOT NULL,
+    success BOOLEAN NOT NULL DEFAULT TRUE,
+    reason TEXT,
+    before_json JSONB,
+    after_json JSONB,
+    metadata JSONB,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE simulation_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id VARCHAR(120) UNIQUE NOT NULL,
+    suite_name VARCHAR(120) NOT NULL,
+    source VARCHAR(40) NOT NULL DEFAULT 'simulator',
+    db_snapshot VARCHAR(255),
+    baseline_ref VARCHAR(255),
+    git_sha VARCHAR(80),
+    status VARCHAR(30) NOT NULL DEFAULT 'running',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    summary_json JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE simulation_scenarios (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    seed_id VARCHAR(150) NOT NULL,
+    persona_id VARCHAR(120),
+    category VARCHAR(100) NOT NULL,
+    intent VARCHAR(200) NOT NULL,
+    linked_order_id VARCHAR(50) REFERENCES orders(order_id) ON DELETE SET NULL,
+    linked_user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+    linked_subscription_email VARCHAR(255) REFERENCES subscription_accounts(account_email) ON DELETE SET NULL,
+    expected_outcome VARCHAR(80),
+    actual_outcome VARCHAR(80),
+    passed BOOLEAN,
+    assertions_json JSONB,
+    trace_json JSONB,
+    evaluated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE coverage_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
+    total_pairs INTEGER NOT NULL,
+    covered_pairs INTEGER NOT NULL,
+    known_gaps INTEGER NOT NULL DEFAULT 0,
+    unexpected_gaps INTEGER NOT NULL DEFAULT 0,
+    coverage_ratio NUMERIC(6, 4),
+    gap_details JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX idx_agent_spans_session_id ON agent_spans (session_id);
 CREATE INDEX idx_agent_spans_timestamp ON agent_spans ("timestamp");
 CREATE INDEX idx_outcomes_session_id ON outcomes (session_id);
 CREATE INDEX idx_outcomes_created_at ON outcomes (created_at);
 CREATE INDEX idx_eval_scores_session_id ON evaluation_scores (session_id);
 CREATE INDEX idx_eval_scores_evaluated_at ON evaluation_scores (evaluated_at);
+CREATE INDEX idx_procedure_blueprints_lookup ON procedure_blueprints (category, intent, is_active, version DESC);
+CREATE INDEX idx_escalation_handoffs_status ON escalation_handoffs (queue_status, queued_at DESC);
+CREATE INDEX idx_escalation_handoffs_session ON escalation_handoffs (session_id);
+CREATE INDEX idx_session_entities_session ON session_entities (session_id, relation);
+CREATE INDEX idx_tool_invocations_session ON tool_invocations (session_id, invoked_at DESC);
+CREATE INDEX idx_tool_invocations_run ON tool_invocations (run_id, invoked_at DESC);
+CREATE INDEX idx_tool_invocations_tool ON tool_invocations (tool_name, success);
+CREATE INDEX idx_llm_metrics_session ON llm_metrics (session_id, measured_at DESC);
+CREATE INDEX idx_llm_metrics_run ON llm_metrics (run_id, measured_at DESC);
+CREATE INDEX idx_audit_log_session ON audit_log (session_id, occurred_at DESC);
+CREATE INDEX idx_audit_log_entity ON audit_log (entity_type, entity_id, occurred_at DESC);
+CREATE INDEX idx_simulation_runs_status ON simulation_runs (status, started_at DESC);
+CREATE INDEX idx_simulation_scenarios_run ON simulation_scenarios (run_id, category, intent);
+CREATE INDEX idx_coverage_snapshots_run ON coverage_snapshots (run_id);
 
 CREATE OR REPLACE VIEW v_automation_rate AS
 SELECT
@@ -295,5 +472,58 @@ CREATE OR REPLACE VIEW v_hallucination_rate AS
 SELECT
   COALESCE(AVG(CASE WHEN hallucination THEN 1.0 ELSE 0.0 END), 0.0) AS hallucination_rate
 FROM evaluation_scores;
+
+CREATE OR REPLACE VIEW v_handoff_queue_status AS
+SELECT
+  queue_status,
+  COUNT(*)::INT AS handoff_count
+FROM escalation_handoffs
+GROUP BY queue_status
+ORDER BY queue_status;
+
+CREATE OR REPLACE VIEW v_llm_performance_summary AS
+SELECT
+  model_name,
+  stage_name,
+  COUNT(*)::INT AS call_count,
+  ROUND(COALESCE(AVG(latency_ms), 0)::NUMERIC, 3) AS avg_latency_ms,
+  ROUND(COALESCE(SUM(total_tokens), 0)::NUMERIC, 0) AS total_tokens,
+  ROUND(COALESCE(SUM(estimated_cost_usd), 0)::NUMERIC, 6) AS total_estimated_cost_usd
+FROM llm_metrics
+GROUP BY model_name, stage_name
+ORDER BY model_name, stage_name;
+
+CREATE OR REPLACE VIEW v_simulation_run_summary AS
+SELECT
+  sr.run_id,
+  sr.suite_name,
+  sr.status,
+  COUNT(ss.id)::INT AS scenario_count,
+  COALESCE(COUNT(ss.id) FILTER (WHERE ss.passed = TRUE), 0)::INT AS passed_count,
+  COALESCE(COUNT(ss.id) FILTER (WHERE ss.actual_outcome = 'escalated'), 0)::INT AS escalated_count,
+  ROUND(
+    COALESCE(
+      COUNT(ss.id) FILTER (WHERE ss.passed = TRUE)::NUMERIC
+      / NULLIF(COUNT(ss.id), 0),
+      0
+    ),
+    4
+  ) AS pass_rate
+FROM simulation_runs sr
+LEFT JOIN simulation_scenarios ss ON ss.run_id = sr.id
+GROUP BY sr.id, sr.run_id, sr.suite_name, sr.status
+ORDER BY sr.started_at DESC;
+
+CREATE OR REPLACE VIEW v_simulation_outcome_breakdown AS
+SELECT
+  sr.run_id,
+  ss.category,
+  ss.intent,
+  ss.actual_outcome,
+  COUNT(*)::INT AS scenario_count
+FROM simulation_scenarios ss
+JOIN simulation_runs sr ON sr.id = ss.run_id
+GROUP BY sr.run_id, ss.category, ss.intent, ss.actual_outcome
+ORDER BY sr.run_id, ss.category, ss.intent, ss.actual_outcome;
 
 COMMIT;

@@ -18,7 +18,16 @@ UNION ALL SELECT 'messages', COUNT(*)::int FROM messages
 UNION ALL SELECT 'tickets', COUNT(*)::int FROM tickets
 UNION ALL SELECT 'agent_spans', COUNT(*)::int FROM agent_spans
 UNION ALL SELECT 'outcomes', COUNT(*)::int FROM outcomes
-UNION ALL SELECT 'evaluation_scores', COUNT(*)::int FROM evaluation_scores;
+UNION ALL SELECT 'evaluation_scores', COUNT(*)::int FROM evaluation_scores
+UNION ALL SELECT 'procedure_blueprints', COUNT(*)::int FROM procedure_blueprints
+UNION ALL SELECT 'escalation_handoffs', COUNT(*)::int FROM escalation_handoffs
+UNION ALL SELECT 'session_entities', COUNT(*)::int FROM session_entities
+UNION ALL SELECT 'tool_invocations', COUNT(*)::int FROM tool_invocations
+UNION ALL SELECT 'llm_metrics', COUNT(*)::int FROM llm_metrics
+UNION ALL SELECT 'audit_log', COUNT(*)::int FROM audit_log
+UNION ALL SELECT 'simulation_runs', COUNT(*)::int FROM simulation_runs
+UNION ALL SELECT 'simulation_scenarios', COUNT(*)::int FROM simulation_scenarios
+UNION ALL SELECT 'coverage_snapshots', COUNT(*)::int FROM coverage_snapshots;
 
 -- Issue types: one ticket per category from issue_required_fields.json (+ security)
 SELECT issue_type, COUNT(*)::int AS tickets
@@ -92,6 +101,10 @@ SELECT * FROM v_automation_rate;
 SELECT * FROM v_escalation_rate;
 SELECT * FROM v_tool_success_rate;
 SELECT * FROM v_hallucination_rate;
+SELECT * FROM v_handoff_queue_status;
+SELECT * FROM v_llm_performance_summary;
+SELECT * FROM v_simulation_run_summary;
+SELECT * FROM v_simulation_outcome_breakdown;
 
 -- Escalated session has ticket + pending_human_action in latest assistant metadata
 SELECT s.id, t.summary,
@@ -105,3 +118,45 @@ SELECT s.id, t.summary,
 FROM sessions s
 JOIN tickets t ON t.session_id = s.id
 WHERE s.escalated = true;
+
+-- Active blueprint versions per (category, intent)
+SELECT category, intent, procedure_id, version, is_active
+FROM procedure_blueprints
+ORDER BY category, intent, version;
+
+-- Session-to-entity linkage for DB-grounded test traces
+SELECT se.session_id, se.entity_type, se.relation, se.order_id, se.subscription_email, se.confidence
+FROM session_entities se
+ORDER BY se.session_id, se.relation;
+
+-- Handoff queue visibility (queued vs resolved)
+SELECT id, session_id, procedure_id, outcome_status, queue_status, assigned_to
+FROM escalation_handoffs
+ORDER BY queued_at;
+
+-- Tool invocation health and payload traces
+SELECT run_id, tool_name, success, status, error_code, duration_ms
+FROM tool_invocations
+ORDER BY invoked_at;
+
+-- LLM token and latency telemetry
+SELECT run_id, model_name, stage_name, total_tokens, latency_ms, estimated_cost_usd
+FROM llm_metrics
+ORDER BY measured_at;
+
+-- Audit trail sanity for automated actions
+SELECT action, entity_type, entity_id, success, occurred_at
+FROM audit_log
+ORDER BY occurred_at;
+
+-- Simulator scenario results and expected-vs-actual outcomes
+SELECT sr.run_id, ss.seed_id, ss.category, ss.intent, ss.expected_outcome, ss.actual_outcome, ss.passed
+FROM simulation_scenarios ss
+JOIN simulation_runs sr ON sr.id = ss.run_id
+ORDER BY sr.run_id, ss.seed_id;
+
+-- Coverage snapshot sanity (ratio and gap counts)
+SELECT sr.run_id, cs.total_pairs, cs.covered_pairs, cs.known_gaps, cs.unexpected_gaps, cs.coverage_ratio
+FROM coverage_snapshots cs
+JOIN simulation_runs sr ON sr.id = cs.run_id
+ORDER BY sr.run_id;
