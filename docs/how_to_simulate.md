@@ -17,6 +17,13 @@ The simulator:
 1. Start the BitBot API server so `POST /classify` is reachable.
 2. Ensure Postgres is configured (the simulator hydrator reads live DB rows).
 3. Make sure procedure YAMLs are available under `backend/procedures/`.
+4. (Recommended) Refresh local test data with:
+
+```bash
+psql -f db/postgres/01_schema.sql
+psql -f db/postgres/02_seed.sql
+psql -f db/postgres/03_smoke_checks.sql
+```
 
 Required environment variables (minimum):
 
@@ -90,6 +97,25 @@ Console output also includes:
 - coverage table (`covered`, `known_gap`, `gap`)
 - per-seed PASS/FAIL summary
 - artifact file path
+
+The simulator remains artifact-first (JSON files under `testing/simulator/results/`), but the local Postgres test schema now also includes spec-aligned observability tables and reporting views for querying runs in SQL.
+
+## Optional: inspect run telemetry in Postgres
+
+If you seed `db/postgres/02_seed.sql`, you can quickly inspect SQL-backed run/telemetry data with:
+
+```bash
+psql -c "SELECT * FROM v_simulation_run_summary;"
+psql -c "SELECT * FROM v_simulation_outcome_breakdown;"
+psql -c "SELECT * FROM v_llm_performance_summary;"
+psql -c "SELECT * FROM v_handoff_queue_status;"
+```
+
+Useful tables for deeper inspection:
+
+- `simulation_runs`, `simulation_scenarios`, `coverage_snapshots`
+- `tool_invocations`, `llm_metrics`, `audit_log`
+- `escalation_handoffs`, `session_entities`, `procedure_blueprints`
 
 ## How to interpret results
 
