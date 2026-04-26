@@ -150,7 +150,7 @@ The Bento service expects a Hugging Face-compatible exported directory (includin
 - `POST /classify` -> `{ "category": "<label>", "confidence": <float> }`
 - `POST /health` -> `{ "status": "ok" }`
 
-Docker Compose currently mounts `./training/models` read-only and points `MODERNBERT_MODEL_DIR` to a `.../winner` checkpoint path by default. In this repo, `.env.example` defaults `MODERNBERT_MODEL_SOURCE` to `./training/models/bitext_multiclass_finetuned_20260415T120000Z/winner`.
+Docker Compose mounts the full model directory read-only using `MODERNBERT_MODELS_HOST_DIR` -> `MODERNBERT_MODELS_CONTAINER_DIR` and selects the active `.../winner` checkpoint with `MODERNBERT_MODEL_DIR`.
 
 Run:
 

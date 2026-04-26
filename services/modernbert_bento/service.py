@@ -9,24 +9,25 @@ import bentoml
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, PreTrainedTokenizerFast
 
-MODEL_DIR = os.getenv("MODERNBERT_MODEL_DIR", "/models/modernbert_winner")
+MODEL_DIR = os.getenv("MODERNBERT_MODEL_DIR", "").strip()
 
 
 def _resolve_model_dir() -> str:
-    primary = Path(MODEL_DIR)
+    primary = Path(MODEL_DIR) if MODEL_DIR else None
     fallback_dirs = sorted(
         Path("/training/models").glob("*/winner"),
         key=lambda p: p.stat().st_mtime if p.exists() else 0,
         reverse=True,
     )
-    candidates = [primary, *fallback_dirs, Path("/models/modernbert_winner")]
+    candidates = [primary, *fallback_dirs] if primary is not None else fallback_dirs
 
     for candidate in candidates:
         if (candidate / "config.json").exists() and (candidate / "model.safetensors").exists():
             return str(candidate)
     raise FileNotFoundError(
         "No valid ModernBERT model directory found. "
-        f"Checked primary path '{MODEL_DIR}' and fallback paths under /training/models."
+        "Set MODERNBERT_MODEL_DIR in .env "
+        f"(checked: '{MODEL_DIR or 'not set'}' and /training/models/*/winner)."
     )
 
 

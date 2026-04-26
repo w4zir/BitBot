@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import uuid
@@ -29,6 +30,8 @@ from backend.llm.providers import chat_completion, extract_json_object
 from backend.rag.policy_retriever import search_policy_docs
 from backend.rag.query_classifier import ClassificationResult, get_query_classifier
 from backend.rag.required_fields import normalize_category_key
+
+logger = logging.getLogger(__name__)
 
 
 class IssueGraphState(TypedDict, total=False):
@@ -105,6 +108,7 @@ def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
 
     return {
         **state,
+        "category": "no_issue",
         "intent": "no_issue_chat",
         "problem_to_solve": "",
         "procedure_id": "no_issue_chat",
@@ -113,6 +117,42 @@ def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
         "final_response": reply,
         "assistant_metadata": meta,
     }
+
+
+def _generate_ineligibility_response(
+    *,
+    reason: str,
+    messages: list[dict[str, Any]],
+    text: str,
+) -> str:
+    provider = os.getenv("NO_ISSUE_MODEL_PROVIDER", "ollama").strip().lower()
+    model = os.getenv("NO_ISSUE_MODEL", "llama3.2").strip()
+    system = (
+        "You are a customer support assistant. Explain policy ineligibility clearly and politely, "
+        "and provide a concise next step when possible. Do not mention internal system details."
+    )
+    transcript = json.dumps(_messages_for_llm(messages), ensure_ascii=False)
+    user_prompt = (
+        f"Latest user message: {text or '(empty)'}\n"
+        f"Policy ineligibility reason: {reason or 'Not eligible under current policy.'}\n"
+        f"Conversation transcript JSON: {transcript}\n"
+        "Write one concise customer-facing response."
+    )
+    try:
+        return chat_completion(
+            provider=provider,
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+    except Exception:  # noqa: BLE001
+        fallback_reason = reason.strip() or "this request is not eligible under our current policy."
+        return (
+            "I am sorry, but I cannot complete that request because "
+            f"{fallback_reason} Please let me know if you want help with an alternative next step."
+        )
 
 
 def _messages_for_llm(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -281,14 +321,20 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
     problem_to_solve = str(state.get("problem_to_solve") or "").strip()
     query = " ".join(x for x in [category, intent, problem_to_solve, text] if x).strip() or "policy"
     docs = search_policy_docs(query)
+    if not docs:
+        logger.warning("Policy load returned no docs for query=%r", query)
+    raw_chunks = [str(d.get("content") or "") for d in docs]
+    status = _extract_order_status_hint(state)
+    eligible, reason = _derive_order_cancellation_eligibility(raw_chunks, status)
     constraints = {
-        "eligible": True,
-        "reason": "",
+        "eligible": eligible,
+        "reason": reason,
         "conditions": [],
         "time_limit_hours": None,
         "requires_evidence": False,
         "auto_resolvable": True,
-        "raw_chunks": [str(d.get("content") or "") for d in docs],
+        "raw_chunks": raw_chunks,
+        "order_status_hint": status,
     }
     return {
         **state,
@@ -298,6 +344,9 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
             "policy_found": bool(docs),
             "policy_query": query,
             "retrieved_docs": docs,
+            "policy_eligible": eligible,
+            "policy_ineligibility_reason": reason,
+            "order_status_hint": status,
         },
     }
 
@@ -405,6 +454,12 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
     if validated.get("validation_ok") is False:
         out["outcome_status"] = "needs_more_data"
     elif not eligibility_ok:
+        reason = str(policy_constraints.get("reason") or "").strip()
+        out["final_response"] = _generate_ineligibility_response(
+            reason=reason,
+            messages=validated.get("messages") or [],
+            text=str(validated.get("text") or ""),
+        )
         out["outcome_status"] = "policy_ineligible"
     return out
 
@@ -520,6 +575,37 @@ def _extract_escalation_decision(messages: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _extract_order_status_hint(state: IssueGraphState) -> str:
+    context = dict(state.get("context_data") or {})
+    raw = str(context.get("order_status") or "").strip().lower()
+    if raw:
+        return raw
+    text = str(state.get("text") or "").strip().lower()
+    mo = re.search(r"\bstatus\s*(?:is|=|:)\s*([a-z_]+)\b", text)
+    if mo:
+        return mo.group(1).strip().lower()
+    return ""
+
+
+def _derive_order_cancellation_eligibility(raw_chunks: list[str], order_status: str) -> tuple[bool, str]:
+    if not raw_chunks:
+        return True, ""
+    status = (order_status or "").strip().lower()
+    if not status:
+        return True, ""
+    policy_text = "\n".join(chunk.lower() for chunk in raw_chunks)
+    has_cancellation_rule = "not in shipped, delivered or cancelled" in policy_text
+    if not has_cancellation_rule:
+        return True, ""
+    blocked_statuses = {"shipped", "delivered", "cancelled"}
+    if status in blocked_statuses:
+        return (
+            False,
+            f"Order cancellation policy blocks status '{status}'; allowed statuses exclude shipped, delivered, and cancelled.",
+        )
+    return True, ""
+
+
 def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     """Populate context for order status from DB-backed repository."""
     oid = _extract_order_id_from_conversation(
@@ -572,11 +658,19 @@ def _retrieve_policy(step: dict[str, Any], state: IssueGraphState) -> dict[str, 
 
     query = " ".join(deduped_parts).strip() or text or "policy"
     docs = search_policy_docs(query)
+    if not docs:
+        logger.warning("Procedure retrieval returned no docs for query=%r", query)
+    raw_chunks = [str(d.get("content") or "") for d in docs]
+    status = _extract_order_status_hint(state)
+    eligible, reason = _derive_order_cancellation_eligibility(raw_chunks, status)
     return {
         "policy_found": bool(docs),
         "policy_tool": tool_name,
         "policy_query": query,
         "retrieved_docs": docs,
+        "policy_eligible": eligible,
+        "policy_ineligibility_reason": reason,
+        "order_status_hint": status,
     }
 
 
@@ -1042,5 +1136,8 @@ def run_conversation_graph(
             "outcome_status": out.get("outcome_status"),
             "specialist_agent_id": out.get("specialist_agent_id"),
         },
+        "context_data": dict(out.get("context_data") or {}),
+        "policy_constraints": dict(out.get("policy_constraints") or {}),
+        "eligibility_ok": out.get("eligibility_ok"),
         "session_resolved_by_graph": resolved_by_graph,
     }

@@ -82,6 +82,7 @@ def search_policy_docs(query: str, *, size: int = 3) -> list[dict[str, Any]]:
     out = _parse_hits(data)
     if out:
         return out
+    logger.info("Primary policy search returned zero hits for query=%r index=%r", query, index)
 
     fallback_tags = ["policy", "foodpanda"]
     query_lc = query.lower()
@@ -128,4 +129,12 @@ def search_policy_docs(query: str, *, size: int = 3) -> list[dict[str, Any]]:
         logger.warning("Policy fallback search request failed: %s", e)
         return []
 
-    return _parse_hits(fallback_data)
+    out = _parse_hits(fallback_data)
+    if not out:
+        logger.warning(
+            "Policy search returned zero hits after fallback for query=%r index=%r tags=%s",
+            query,
+            index,
+            fallback_tags,
+        )
+    return out
