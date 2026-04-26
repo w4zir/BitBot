@@ -234,6 +234,17 @@ def _fetch_procedure_node(state: IssueGraphState) -> IssueGraphState:
     intent = (state.get("intent") or "").strip()
     bp = get_blueprint_with_fallback_chain(category, intent)
     if bp is None:
+        text = str(state.get("text") or "").lower()
+        inferred: tuple[str, str] | None = None
+        if "refund" in text:
+            inferred = ("refund", "get_refund")
+        elif "cancel" in text:
+            inferred = ("order", "cancel_order")
+        elif _ORDER_NUMBER_RE.search(text) and any(k in text for k in ("status", "track", "where is")):
+            inferred = ("order", "order_status")
+        if inferred is not None:
+            bp = get_blueprint_by_category_intent(*inferred)
+    if bp is None:
         return {
             **state,
             "procedure_id": "",

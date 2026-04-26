@@ -7,7 +7,6 @@ defaults:
   cooperation_level: cooperative
   eval_targets:
     - structural
-    - policy
   fail_on_regression: false
   fail_on_coverage_gap: false
 

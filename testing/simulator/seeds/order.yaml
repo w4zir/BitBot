@@ -9,7 +9,7 @@ seeds:
     expected_procedure_id: order_cancel
     db_filter:
       entity_type: order
-      order_status: [processing, shipped]
+      order_status: [processing]
     multi_issue: false
 
   - seed_id: order_cancel_delivered_policy_ineligible

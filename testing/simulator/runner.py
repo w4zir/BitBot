@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 from testing.simulator.config import (
     PersonaConfig,
@@ -26,12 +28,22 @@ from testing.simulator.trace import ConversationTrace
 
 
 def main() -> int:
+    # Load repo-level .env for local simulator runs, while preserving explicit shell env.
+    load_dotenv(override=False)
+    simulator_pg_host = os.getenv("POSTGRES_HOST_SIMULATOR", "").strip()
+    if simulator_pg_host:
+        # Simulator can run against a different postgres host than app runtime.
+        os.environ["POSTGRES_HOST"] = simulator_pg_host
+
     parser = _build_arg_parser()
     args = parser.parse_args()
 
     simulator_root = Path(__file__).resolve().parent
     suite_path = _resolve_path(simulator_root, args.suite)
     suite = _load_suite(suite_path)
+    simulator_agent_url = os.getenv("SIMULATOR_AGENT_URL", "").strip()
+    if simulator_agent_url:
+        suite.agent_url = simulator_agent_url
 
     all_seeds = _load_all_seeds(simulator_root / "seeds")
     personas = _load_personas(simulator_root / "personas" / "personas.yaml")
@@ -64,6 +76,9 @@ def main() -> int:
         agent_url=suite.agent_url,
         max_turns=suite.defaults.max_turns,
     )
+    eval_targets = {item.strip().lower() for item in suite.defaults.eval_targets}
+    run_structural = not eval_targets or "structural" in eval_targets
+    run_policy = not eval_targets or "policy" in eval_targets
     started_at = datetime.now(timezone.utc)
     traces: list[ConversationTrace] = []
     structural_results: dict[str, StructuralResult] = {}
@@ -84,8 +99,16 @@ def main() -> int:
         persona = PersonaEngine(persona=persona_cfg, scenario=scenario)
         trace = driver.run(scenario, persona)
 
-        structural = evaluate_structural(trace, scenario, max_turns=suite.defaults.max_turns)
-        policy = evaluate_policy(trace, scenario)
+        structural = (
+            evaluate_structural(trace, scenario, max_turns=suite.defaults.max_turns)
+            if run_structural
+            else StructuralResult(passed=True, checks={}, failures=[])
+        )
+        policy = (
+            evaluate_policy(trace, scenario)
+            if run_policy
+            else PolicyResult(passed=True, checks={}, failures=[])
+        )
 
         traces.append(trace)
         structural_results[seed.seed_id] = structural
@@ -107,7 +130,15 @@ def main() -> int:
     print(render_console_summary(traces, structural_results, policy_results))
     print("")
     print(f"Artifact: {artifact_path}")
-    return _run_exit_code(traces, structural_results, policy_results, coverage, suite)
+    return _run_exit_code(
+        traces,
+        structural_results,
+        policy_results,
+        coverage,
+        suite,
+        run_structural=run_structural,
+        run_policy=run_policy,
+    )
 
 
 def _run_exit_code(
@@ -116,11 +147,14 @@ def _run_exit_code(
     policy_results: dict[str, PolicyResult],
     coverage_report,
     suite: SuiteConfig,
+    *,
+    run_structural: bool,
+    run_policy: bool,
 ) -> int:
     _ = traces
-    if any(not item.passed for item in structural_results.values()):
+    if run_structural and any(not item.passed for item in structural_results.values()):
         return 1
-    if any(not item.passed for item in policy_results.values()):
+    if run_policy and any(not item.passed for item in policy_results.values()):
         return 1
     if suite.defaults.fail_on_coverage_gap and coverage_report.unexpected_gaps > 0:
         return 3

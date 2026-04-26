@@ -162,6 +162,208 @@ ON CONFLICT (refund_id) DO UPDATE SET
   decision = EXCLUDED.decision,
   decision_reason = EXCLUDED.decision_reason;
 
+-- ---------------------------------------------------------------------------
+-- Bulk expansion dataset: +20 users and +100 orders with related entities
+-- ---------------------------------------------------------------------------
+
+INSERT INTO users (user_id, email, status, created_at)
+SELECT
+  user_id,
+  format('bulk_user_%s@example.com', lpad((user_id - 8)::text, 2, '0')) AS email,
+  CASE WHEN user_id IN (13, 26) THEN 'suspended' ELSE 'active' END AS status,
+  TIMESTAMP '2026-01-01' + ((user_id - 9) || ' days')::interval AS created_at
+FROM generate_series(9, 28) AS g(user_id)
+ON CONFLICT (user_id) DO UPDATE SET
+  email = EXCLUDED.email,
+  status = EXCLUDED.status,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO loyalty_accounts (user_id, annual_spend, tier, benefits_json)
+SELECT
+  t.user_id,
+  t.annual_spend,
+  t.tier,
+  CASE
+    WHEN t.tier = 'Gold' THEN '{"discount": 0.10, "priority_support": true, "free_shipping_tier": "expedited"}'::jsonb
+    WHEN t.tier = 'Silver' THEN '{"discount": 0.05, "free_shipping_tier": "standard"}'::jsonb
+    ELSE '{"discount": 0.02, "free_shipping_tier": "standard"}'::jsonb
+  END AS benefits_json
+FROM (
+  VALUES
+    (10, 780.00, 'Bronze'),
+    (12, 1280.00, 'Silver'),
+    (15, 2360.00, 'Gold'),
+    (18, 930.00, 'Bronze'),
+    (20, 1440.00, 'Silver'),
+    (22, 2550.00, 'Gold'),
+    (24, 1010.00, 'Bronze'),
+    (27, 1660.00, 'Silver')
+) AS t(user_id, annual_spend, tier)
+ON CONFLICT (user_id) DO UPDATE SET
+  annual_spend = EXCLUDED.annual_spend,
+  tier = EXCLUDED.tier,
+  benefits_json = EXCLUDED.benefits_json;
+
+INSERT INTO orders (
+  order_id, user_id, order_date, status, total_amount,
+  shipping_address_line, shipping_city, shipping_postal_code, shipping_country
+)
+SELECT
+  format('ORD-%s', 2000 + seq) AS order_id,
+  9 + ((seq - 1) % 20) AS user_id,
+  TIMESTAMP '2026-04-01 08:00:00' + (seq || ' hours')::interval AS order_date,
+  CASE
+    WHEN seq <= 25 THEN 'processing'
+    WHEN seq <= 45 THEN 'shipped'
+    WHEN seq <= 85 THEN 'delivered'
+    ELSE 'cancelled'
+  END AS status,
+  round((19.95 + seq * 3.17)::numeric, 2) AS total_amount,
+  format('%s Seed Lane', seq) AS shipping_address_line,
+  (ARRAY['Seattle', 'Austin', 'Boston', 'Denver', 'Miami', 'Chicago', 'Phoenix', 'Dallas', 'Portland', 'Atlanta'])[((seq - 1) % 10) + 1] AS shipping_city,
+  lpad((90000 + seq)::text, 5, '0') AS shipping_postal_code,
+  'US' AS shipping_country
+FROM generate_series(1, 100) AS s(seq)
+ON CONFLICT (order_id) DO UPDATE SET
+  user_id = EXCLUDED.user_id,
+  order_date = EXCLUDED.order_date,
+  status = EXCLUDED.status,
+  total_amount = EXCLUDED.total_amount,
+  shipping_address_line = EXCLUDED.shipping_address_line,
+  shipping_city = EXCLUDED.shipping_city,
+  shipping_postal_code = EXCLUDED.shipping_postal_code,
+  shipping_country = EXCLUDED.shipping_country;
+
+INSERT INTO order_items (item_id, order_id, item_name, category, is_opened, qty, price)
+SELECT
+  10 + seq AS item_id,
+  format('ORD-%s', 2000 + seq) AS order_id,
+  CASE ((seq - 1) % 7)
+    WHEN 0 THEN 'Smart Toaster'
+    WHEN 1 THEN 'High-End Laptop'
+    WHEN 2 THEN 'Coffee Beans'
+    WHEN 3 THEN 'Phone Case'
+    WHEN 4 THEN 'Desk Lamp'
+    WHEN 5 THEN 'Notebook Set'
+    ELSE 'Widget Pro'
+  END AS item_name,
+  CASE ((seq - 1) % 7)
+    WHEN 0 THEN 'appliances'
+    WHEN 1 THEN 'electronics'
+    WHEN 2 THEN 'food'
+    WHEN 3 THEN 'accessories'
+    WHEN 4 THEN 'home'
+    WHEN 5 THEN 'stationery'
+    ELSE 'general'
+  END AS category,
+  (seq % 11 = 0) AS is_opened,
+  1 + (seq % 3) AS qty,
+  round((19.95 + seq * 3.17)::numeric, 2) AS price
+FROM generate_series(1, 100) AS s(seq)
+ON CONFLICT (item_id) DO UPDATE SET
+  order_id = EXCLUDED.order_id,
+  item_name = EXCLUDED.item_name,
+  category = EXCLUDED.category,
+  is_opened = EXCLUDED.is_opened,
+  qty = EXCLUDED.qty,
+  price = EXCLUDED.price;
+
+INSERT INTO payments (transaction_id, order_id, amount, method, payment_status, charged_at)
+SELECT
+  format('TXN-%s', 9010 + seq) AS transaction_id,
+  format('ORD-%s', 2000 + seq) AS order_id,
+  round((19.95 + seq * 3.17)::numeric, 2) AS amount,
+  CASE (seq % 3)
+    WHEN 0 THEN 'credit_card'
+    WHEN 1 THEN 'paypal'
+    ELSE 'apple_pay'
+  END AS method,
+  CASE
+    WHEN seq > 85 THEN 'refunded'
+    WHEN seq <= 25 AND seq % 10 = 0 THEN 'pending'
+    ELSE 'captured'
+  END AS payment_status,
+  TIMESTAMP '2026-04-01 08:05:00' + (seq || ' hours')::interval AS charged_at
+FROM generate_series(1, 100) AS s(seq)
+ON CONFLICT (transaction_id) DO UPDATE SET
+  order_id = EXCLUDED.order_id,
+  amount = EXCLUDED.amount,
+  method = EXCLUDED.method,
+  payment_status = EXCLUDED.payment_status,
+  charged_at = EXCLUDED.charged_at;
+
+WITH shipment_candidates AS (
+  SELECT
+    o.order_id,
+    o.order_date,
+    o.status,
+    row_number() OVER (ORDER BY o.order_id) AS rn
+  FROM orders o
+  WHERE o.order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+    AND o.status IN ('shipped', 'delivered')
+)
+INSERT INTO shipments (tracking_id, order_id, shipping_tier, promised_delivery_at, actual_delivery_at, delay_reason)
+SELECT
+  format('TRK-B%s', lpad(rn::text, 3, '0')) AS tracking_id,
+  order_id,
+  CASE WHEN rn % 3 = 0 THEN 'priority' ELSE 'standard' END AS shipping_tier,
+  order_date + INTERVAL '3 days' AS promised_delivery_at,
+  CASE
+    WHEN status = 'delivered' THEN order_date
+      + CASE WHEN rn % 8 = 0 OR rn % 15 = 0 THEN INTERVAL '4 days' ELSE INTERVAL '2 days' END
+    ELSE NULL
+  END AS actual_delivery_at,
+  CASE
+    WHEN status = 'delivered' AND rn % 15 = 0 THEN 'blizzard'
+    WHEN status = 'delivered' AND rn % 8 = 0 THEN 'carrier_error'
+    ELSE NULL
+  END AS delay_reason
+FROM shipment_candidates
+ON CONFLICT (tracking_id) DO UPDATE SET
+  order_id = EXCLUDED.order_id,
+  shipping_tier = EXCLUDED.shipping_tier,
+  promised_delivery_at = EXCLUDED.promised_delivery_at,
+  actual_delivery_at = EXCLUDED.actual_delivery_at,
+  delay_reason = EXCLUDED.delay_reason;
+
+WITH delivered_orders AS (
+  SELECT
+    o.order_id,
+    o.order_date,
+    row_number() OVER (ORDER BY o.order_id) AS rn
+  FROM orders o
+  WHERE o.order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+    AND o.status = 'delivered'
+)
+INSERT INTO refund_requests (refund_id, order_id, reason, requested_at, decision, decision_reason)
+SELECT
+  4 + rn AS refund_id,
+  order_id,
+  CASE
+    WHEN rn % 5 = 0 THEN 'Late delivery and no longer needed'
+    WHEN rn % 3 = 0 THEN 'Damaged packaging on arrival'
+    ELSE 'Changed mind after delivery'
+  END AS reason,
+  order_date + INTERVAL '1 day' AS requested_at,
+  CASE
+    WHEN rn % 5 = 0 THEN 'denied'
+    WHEN rn % 3 = 0 THEN 'approved'
+    ELSE 'pending'
+  END AS decision,
+  CASE
+    WHEN rn % 5 = 0 THEN 'Outside policy window for this category'
+    WHEN rn % 3 = 0 THEN 'Approved under quality exception policy'
+    ELSE NULL
+  END AS decision_reason
+FROM delivered_orders
+WHERE rn <= 15
+ON CONFLICT (refund_id) DO UPDATE SET
+  order_id = EXCLUDED.order_id,
+  reason = EXCLUDED.reason,
+  requested_at = EXCLUDED.requested_at,
+  decision = EXCLUDED.decision,
+  decision_reason = EXCLUDED.decision_reason;
+
 -- Support tickets: one per issue_type in issue_required_fields (+ security); explicit IDs for stable smoke tests
 INSERT INTO support_tickets (ticket_id, issue_type, user_id, payload_json, validation_passed, routing_result) VALUES
 (101, 'order', 1, '{"order_id": "ORD-1001", "email": "silver_user@example.com", "item_name": "Smart Toaster"}'::jsonb, true, 'order_queue'),

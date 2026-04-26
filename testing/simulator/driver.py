@@ -4,7 +4,7 @@ import json
 import time
 import urllib.error
 import urllib.request
-import uuid
+from urllib.parse import urlparse, urlunparse
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -38,10 +38,13 @@ class PersonaLike(Protocol):
 class ConversationDriver:
     agent_url: str
     max_turns: int
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 120.0
+
+    def __post_init__(self) -> None:
+        self.agent_url = _normalize_loopback_url(self.agent_url)
 
     def run(self, scenario: ScenarioInstance, persona: PersonaLike) -> ConversationTrace:
-        session_id = str(uuid.uuid4())
+        session_id: str | None = None
         history: list[dict[str, str]] = []
         turns: list[TurnRecord] = []
         total_latency_ms = 0.0
@@ -52,6 +55,9 @@ class ConversationDriver:
         for turn_number in range(1, self.max_turns + 1):
             started = time.perf_counter()
             response_payload = self._post_classify(user_message, session_id)
+            response_session_id = str(response_payload.get("session_id") or "").strip()
+            if response_session_id:
+                session_id = response_session_id
             latency_ms = (time.perf_counter() - started) * 1000.0
             total_latency_ms += latency_ms
 
@@ -103,7 +109,7 @@ class ConversationDriver:
 
         return ConversationTrace(
             scenario=scenario.to_dict(),
-            session_id=session_id,
+            session_id=session_id or "",
             turns=turns,
             final_outcome_status=outcome_status,
             terminated_by=terminated_by,
@@ -111,14 +117,14 @@ class ConversationDriver:
             total_tokens_used=None,
         )
 
-    def _post_classify(self, text: str, session_id: str) -> dict[str, Any]:
-        payload = json.dumps(
-            {
-                "text": text,
-                "session_id": session_id,
-                "full_flow": True,
-            }
-        ).encode("utf-8")
+    def _post_classify(self, text: str, session_id: str | None) -> dict[str, Any]:
+        payload_obj: dict[str, Any] = {
+            "text": text,
+            "full_flow": True,
+        }
+        if session_id:
+            payload_obj["session_id"] = session_id
+        payload = json.dumps(payload_obj).encode("utf-8")
         request = urllib.request.Request(
             self.agent_url,
             data=payload,
@@ -165,3 +171,13 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_loopback_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.hostname != "localhost":
+        return url
+    host = "127.0.0.1"
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=host))

@@ -160,3 +160,53 @@ SELECT sr.run_id, cs.total_pairs, cs.covered_pairs, cs.known_gaps, cs.unexpected
 FROM coverage_snapshots cs
 JOIN simulation_runs sr ON sr.id = cs.run_id
 ORDER BY sr.run_id;
+
+-- ---------------------------------------------------------------------------
+-- Bulk seed dataset checks (ORD-2001..ORD-2100, users 9..28)
+-- ---------------------------------------------------------------------------
+
+-- Expected fixed counts from bulk expansion block
+SELECT 'bulk_users_9_28' AS check_name, COUNT(*)::int AS n
+FROM users
+WHERE user_id BETWEEN 9 AND 28
+UNION ALL
+SELECT 'bulk_orders_2001_2100', COUNT(*)::int
+FROM orders
+WHERE order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+UNION ALL
+SELECT 'bulk_order_items_11_110', COUNT(*)::int
+FROM order_items
+WHERE item_id BETWEEN 11 AND 110
+UNION ALL
+SELECT 'bulk_payments_txn_9011_9110', COUNT(*)::int
+FROM payments
+WHERE transaction_id BETWEEN 'TXN-9011' AND 'TXN-9110'
+UNION ALL
+SELECT 'bulk_shipments_trk_b001_b060', COUNT(*)::int
+FROM shipments
+WHERE tracking_id BETWEEN 'TRK-B001' AND 'TRK-B060'
+UNION ALL
+SELECT 'bulk_refunds_5_19', COUNT(*)::int
+FROM refund_requests
+WHERE refund_id BETWEEN 5 AND 19;
+
+-- Bulk order status distribution should be 25/20/40/15
+SELECT status, COUNT(*)::int AS n
+FROM orders
+WHERE order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+GROUP BY status
+ORDER BY status;
+
+-- Coverage per new user: each user should own exactly five bulk orders
+SELECT user_id, COUNT(*)::int AS order_count
+FROM orders
+WHERE order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+GROUP BY user_id
+ORDER BY user_id;
+
+-- Late shipment scenarios in bulk set (delay_reason populated)
+SELECT tracking_id, order_id, shipping_tier, delay_reason
+FROM shipments
+WHERE tracking_id BETWEEN 'TRK-B001' AND 'TRK-B060'
+  AND delay_reason IS NOT NULL
+ORDER BY tracking_id;

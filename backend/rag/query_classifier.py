@@ -40,7 +40,7 @@ class QueryClassifier:
             payload = resp.json() or {}
 
         return ClassificationResult(
-            category=str(payload.get("category", "unknown")),
+            category=str(payload.get("category", "unknown")).strip().lower(),
             confidence=float(payload.get("confidence", 0.0) or 0.0),
         )
 

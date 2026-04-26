@@ -210,6 +210,14 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         "problem_to_solve": problem_to_solve,
         "procedure_id": procedure_id,
         "confidence": conf,
+        "context_data": graph_out.get("context_data") if isinstance(graph_out.get("context_data"), dict) else {},
+        "policy_constraints": graph_out.get("policy_constraints")
+        if isinstance(graph_out.get("policy_constraints"), dict)
+        else {},
+        "eligibility_ok": graph_out.get("eligibility_ok")
+        if isinstance(graph_out.get("eligibility_ok"), bool)
+        else None,
+        "outcome_status": str(graph_out.get("outcome_status") or ""),
         **(meta if isinstance(meta, dict) else {}),
     }
     if val_ok is not None:
