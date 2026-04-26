@@ -142,7 +142,8 @@ training/**/outputs/
 training/**/lightning_logs/
 runs/
 mlruns/
-training/experiments/results/
+testing/**/results/
+training/**/results/
 
 # Generated dataset artifacts (optional local outputs)
 training/data/bitext/
