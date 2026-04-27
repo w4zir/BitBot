@@ -849,6 +849,44 @@ def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> str:
         return f"(Model error: {e})"
 
 
+def _draft_order_cancel_terminal_response(state: IssueGraphState, step: dict[str, Any]) -> str | None:
+    """Deterministic terminal replies for cancellation procedure outcomes."""
+    if str(state.get("procedure_id") or "") != "order_cancel":
+        return None
+    step_id = str(step.get("id") or "")
+    context = dict(state.get("context_data") or {})
+    order_id = str(context.get("order_id_extracted") or "your order").strip() or "your order"
+    cancel_succeeded = bool(context.get("cancel_succeeded"))
+    cancel_reason = str(context.get("cancel_reason") or "").strip()
+
+    if step_id == "confirm_cancelled":
+        if not cancel_succeeded:
+            return None
+        return (
+            f"Your order {order_id} has been cancelled successfully.\n\n"
+            "Any eligible refund will be processed to your original payment method based on your payment provider timeline."
+        )
+
+    if step_id == "cancellation_not_allowed":
+        if cancel_succeeded:
+            return (
+                f"Your order {order_id} has already been cancelled successfully.\n\n"
+                "You do not need to submit another cancellation request."
+            )
+        reason = cancel_reason.replace("_", " ").strip() or "the cancellation could not be completed"
+        return (
+            f"I could not cancel order {order_id} because {reason}.\n\n"
+            "If you want, I can help you with the next best option (for example, checking refund eligibility or escalating to support)."
+        )
+
+    if step_id == "order_not_found":
+        return (
+            "I could not find that order in our system.\n\n"
+            "Please double-check the order number and share it again (example: ORD-12345)."
+        )
+    return None
+
+
 def _jump_to_step(state: IssueGraphState, next_step_id: str) -> IssueGraphState:
     todo = state.get("todo_list") or []
     for idx, item in enumerate(todo):
@@ -901,7 +939,11 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
     elif step_type == "interrupt":
         return _handle_interrupt_step(step, {**state, "context_data": context}, idx, todo)
     elif step_type == "llm_response":
-        reply = _draft_response(state, step)
+        deterministic_reply = _draft_order_cancel_terminal_response(
+            {**state, "context_data": context},
+            step,
+        )
+        reply = deterministic_reply if deterministic_reply is not None else _draft_response(state, step)
         return {
             **state,
             "context_data": context,

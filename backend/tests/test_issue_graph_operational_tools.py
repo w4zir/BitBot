@@ -72,3 +72,50 @@ def test_update_shipping_address_tool_step_updates_context(monkeypatch) -> None:
     assert out["current_step_index"] == 1
     assert out["context_data"]["shipping_address_updated"] is True
     assert out["context_data"]["shipping_address"]["line"] == "101 New St"
+
+
+def test_order_cancel_confirm_cancelled_reply_is_deterministic() -> None:
+    state = {
+        "procedure_id": "order_cancel",
+        "text": "cancel my order",
+        "messages": [{"role": "user", "content": "cancel ORD-2019"}],
+        "todo_list": [{"id": "confirm_cancelled", "type": "llm_response"}],
+        "current_step_index": 0,
+        "context_data": {
+            "order_id_extracted": "ORD-2019",
+            "order_data": {"order_id": "ORD-2019", "status": "processing"},
+            "order_status": "cancelled",
+            "cancel_succeeded": True,
+            "cancel_reason": "",
+        },
+        "assistant_metadata": {},
+    }
+
+    out = _structured_executor_node(state)
+    reply = str(out.get("final_response") or "").lower()
+    assert out["current_step_index"] == 1
+    assert "cancelled successfully" in reply
+    assert "unable to process the cancellation" not in reply
+    assert "could not cancel" not in reply
+
+
+def test_order_cancel_failure_reply_uses_cancel_reason() -> None:
+    state = {
+        "procedure_id": "order_cancel",
+        "text": "cancel my order",
+        "messages": [{"role": "user", "content": "cancel ORD-2019"}],
+        "todo_list": [{"id": "cancellation_not_allowed", "type": "llm_response"}],
+        "current_step_index": 0,
+        "context_data": {
+            "order_id_extracted": "ORD-2019",
+            "cancel_succeeded": False,
+            "cancel_reason": "order_delivered",
+        },
+        "assistant_metadata": {},
+    }
+
+    out = _structured_executor_node(state)
+    reply = str(out.get("final_response") or "").lower()
+    assert out["current_step_index"] == 1
+    assert "could not cancel order ord-2019" in reply
+    assert "order delivered" in reply
