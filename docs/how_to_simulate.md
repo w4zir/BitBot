@@ -43,6 +43,9 @@ SIMULATOR_AGENT_URL=http://localhost:8000/classify
 
 # Confidence check used by structural evaluator
 CATEGORY_CONFIDENCE_THRESHOLD=0.5
+
+# Validation wait loop escalation threshold (agent graph)
+AGENT_VALIDATION_MAX_USER_WAITS=5
 ```
 
 ## Run commands
@@ -117,6 +120,8 @@ Useful tables for deeper inspection:
 - `tool_invocations`, `llm_metrics`, `audit_log`
 - `escalation_handoffs`, `session_entities`, `procedure_blueprints`
 
+The schema in `db/postgres/01_schema.sql` now includes JSON columns in `outcomes` for spec-aligned runtime artifacts (`agent_state_json`, `stage_metadata_json`, `output_validation_json`, `context_summary_json`).
+
 ## How to interpret results
 
 Use this order when triaging a failed run:
@@ -137,7 +142,10 @@ Use this order when triaging a failed run:
      - `procedure_id`
      - `validation_missing`
      - `eligibility_ok`
-     - `context_data` / `policy_constraints`
+     - `agent_state` / `stage_metadata`
+     - `context_data` / `context_summary`
+     - `policy_constraints` (`variables` + `validation_results`)
+     - `output_validation`
    - this is the fastest way to see whether failure came from classification, validation, policy gating, tool execution, or escalation routing.
 
 4. **Verify hydration assumptions**

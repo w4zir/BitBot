@@ -249,6 +249,10 @@ CREATE TABLE outcomes (
     completed BOOLEAN NOT NULL,
     escalated BOOLEAN NOT NULL DEFAULT FALSE,
     verified BOOLEAN NOT NULL DEFAULT FALSE,
+    agent_state_json JSONB,
+    stage_metadata_json JSONB,
+    output_validation_json JSONB,
+    context_summary_json JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

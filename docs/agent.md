@@ -16,7 +16,8 @@ flowchart TD
   specialist_router --> fetch_procedure
   fetch_procedure --> policy_load
   policy_load --> validate_required
-  validate_required -->|needs_more_data| endNode
+  validate_required -->|needs_more_data_under_limit| endNode
+  validate_required -->|needs_more_data_limit_exceeded| outcome_validator
   validate_required -->|policy_ineligible| outcome_validator
   validate_required -->|gates_pass| structured_executor
   structured_executor -->|steps_remain| structured_executor
@@ -28,14 +29,14 @@ flowchart TD
 
 ## State model
 
-`IssueGraphState` includes both legacy compatibility fields and spec-aligned orchestration fields.
+`IssueGraphState` keeps spec-aligned orchestration fields plus concise runtime snapshots and per-stage debug metadata.
 
 - Session: `text`, `session_id`, `messages`, `issue_locked`
 - Classification + intent: `category`, `confidence`, `intent`, `problem_to_solve`
 - Routing + procedure: `specialist_agent_id`, `tool_registry_scope`, `procedure_namespace`, `procedure_id`, `todo_list`, `current_step_index`
-- Policy + gates: `policy_constraints`, `validation_ok`, `validation_missing`, `eligibility_ok`
-- Outcome + handoff: `outcome_status`, `escalation_bundle`
-- Legacy output compatibility: `final_response`, `assistant_metadata`, `context_data`
+- Policy + gates: `policy_constraints`, `validation_ok`, `validation_missing`, `eligibility_ok`, `validation_wait_count`, `validation_wait_limit`
+- Outcome + handoff: `outcome_status`, `output_validation`, `context_summary`, `escalation_bundle`
+- Debug + UI JSON: `agent_state`, `stage_metadata`, `assistant_metadata`, concise `context_data`
 
 ## Stage contracts (implemented)
 
@@ -64,17 +65,20 @@ flowchart TD
 ### 6. `policy_load`
 - Builds policy query from category/intent/problem/user text.
 - Retrieves docs through [`backend/rag/policy_retriever.py`](../backend/rag/policy_retriever.py).
-- Produces typed `policy_constraints` plus policy evidence in `context_data`.
+- Produces `policy_constraints` as JSON variable maps:
+  - `variables: {variable_name: value}`
+  - `validation_results: {check_name: {valid, reason, actual_value, ...}}`
+- Uses deterministic validation helpers for duration/date checks, set-membership checks, and arithmetic threshold checks.
 
 ### 7. `validate_required`
 - Runs required-data validation (`validation_ok`, `validation_missing`).
 - Applies eligibility gate (`eligibility_ok`) from `policy_constraints`.
+- Keeps waiting for user data across turns with a bounded counter (`AGENT_VALIDATION_MAX_USER_WAITS`, default `5`).
 - Routes to `END`, `outcome_validator`, or `structured_executor`.
 
 ### 8. `structured_executor`
 - Deterministic procedure execution loop across step types:
   - `retrieval`
-  - `validate_required_data` (compat no-op in executor)
   - `tool_call`
   - `logic_gate`
   - `interrupt`
@@ -83,6 +87,8 @@ flowchart TD
 
 ### 9. `outcome_validator`
 - Assigns final `outcome_status` (`resolved`, `needs_more_data`, `policy_ineligible`, `tool_error`, `step_error`, `pending_escalation`, `unresolvable`).
+- Verifies execution outcomes against source-of-truth data where needed (example: cancellation is confirmed with DB order status).
+- Generates `output_validation` and `context_summary` for follow-up turns and debugging.
 - Decides terminal vs escalation routing.
 
 ### 9a. `human_escalation`
@@ -95,7 +101,7 @@ flowchart TD
 
 - `full_flow=false`: Bento classifier only (no graph invoke).
 - `full_flow=true`: session-aware graph invoke with lock semantics.
-- Existing response shape is preserved; richer internal outcomes are surfaced through `assistant_metadata`.
+- Existing response shape is preserved; richer internal outcomes are surfaced through `assistant_metadata` (`agent_state`, `stage_metadata`, `output_validation`, `context_summary`).
 - Session resolution behavior remains unchanged (`user_confirms_resolution` short-circuit + `graph_suggests_session_resolved`).
 
 ## Procedure compatibility

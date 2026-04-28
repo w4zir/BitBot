@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 
 StepType = Literal[
-    "validate_required_data",
     "retrieval",
     "tool_call",
     "logic_gate",

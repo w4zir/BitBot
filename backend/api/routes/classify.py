@@ -81,6 +81,16 @@ def _strip_messages(rows: list[dict[str, Any]]) -> list[ChatMessage]:
     return out
 
 
+def _latest_assistant_metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    for row in reversed(rows):
+        if str(row.get("role") or "") != "assistant":
+            continue
+        metadata = row.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+    return {}
+
+
 @router.post("/classify", response_model=ClassifyResponse)
 async def classify(req: ClassifyRequest) -> ClassifyResponse:
     """
@@ -126,6 +136,11 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
     append_message(session_id, "user", text, metadata={"source": "user"})
 
     history_rows = list_messages(session_id)
+    prior_meta = _latest_assistant_metadata(history_rows)
+    prior_wait_count = int(prior_meta.get("validation_wait_count") or 0)
+    prior_wait_limit = prior_meta.get("validation_wait_limit")
+    if not isinstance(prior_wait_limit, int):
+        prior_wait_limit = None
     messages_for_graph: list[dict[str, Any]] = []
     for m in history_rows:
         messages_for_graph.append(
@@ -191,6 +206,8 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         locked_confidence=float(pre["issue_confidence"])
         if issue_locked and pre.get("issue_confidence") is not None
         else None,
+        initial_validation_wait_count=prior_wait_count,
+        initial_validation_wait_limit=prior_wait_limit,
     )
 
     cat = graph_out.get("category") or "unknown"
@@ -218,6 +235,20 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         if isinstance(graph_out.get("eligibility_ok"), bool)
         else None,
         "outcome_status": str(graph_out.get("outcome_status") or ""),
+        "agent_state": graph_out.get("agent_state")
+        if isinstance(graph_out.get("agent_state"), dict)
+        else {},
+        "stage_metadata": graph_out.get("stage_metadata")
+        if isinstance(graph_out.get("stage_metadata"), dict)
+        else {},
+        "output_validation": graph_out.get("output_validation")
+        if isinstance(graph_out.get("output_validation"), dict)
+        else {},
+        "context_summary": graph_out.get("context_summary")
+        if isinstance(graph_out.get("context_summary"), dict)
+        else {},
+        "validation_wait_count": int(graph_out.get("validation_wait_count") or 0),
+        "validation_wait_limit": int(graph_out.get("validation_wait_limit") or 0),
         **(meta if isinstance(meta, dict) else {}),
     }
     if val_ok is not None:

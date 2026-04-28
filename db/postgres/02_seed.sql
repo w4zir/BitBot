@@ -625,7 +625,10 @@ ON CONFLICT (id) DO UPDATE SET
   "timestamp" = EXCLUDED."timestamp",
   created_at = EXCLUDED.created_at;
 
-INSERT INTO outcomes (id, session_id, task, completed, escalated, verified, created_at) VALUES
+INSERT INTO outcomes (
+    id, session_id, task, completed, escalated, verified,
+    agent_state_json, stage_metadata_json, output_validation_json, context_summary_json, created_at
+) VALUES
 (
     '66666666-6666-4666-8666-666666666601',
     '11111111-1111-4111-8111-111111111101',
@@ -633,6 +636,10 @@ INSERT INTO outcomes (id, session_id, task, completed, escalated, verified, crea
     false,
     false,
     false,
+    '{"stage":"validate_required","validation_wait_count":1}'::jsonb,
+    '{"validate_required":{"validation_ok":false}}'::jsonb,
+    '{}'::jsonb,
+    '{"outcome_status":"needs_more_data"}'::jsonb,
     '2026-04-17 09:01:00+00'
 ),
 (
@@ -642,6 +649,10 @@ INSERT INTO outcomes (id, session_id, task, completed, escalated, verified, crea
     true,
     false,
     true,
+    '{"stage":"outcome_validator","outcome_status":"resolved"}'::jsonb,
+    '{"structured_executor":{"step_id":"confirm"}}'::jsonb,
+    '{"checks":{"resolution":{"valid":true}},"all_valid":true}'::jsonb,
+    '{"outcome_status":"resolved"}'::jsonb,
     '2026-04-16 14:02:00+00'
 ),
 (
@@ -651,6 +662,10 @@ INSERT INTO outcomes (id, session_id, task, completed, escalated, verified, crea
     false,
     true,
     false,
+    '{"stage":"human_escalation","outcome_status":"pending_escalation"}'::jsonb,
+    '{"outcome_validator":{"outcome_status":"pending_escalation"}}'::jsonb,
+    '{"checks":{},"all_valid":true}'::jsonb,
+    '{"outcome_status":"pending_escalation"}'::jsonb,
     '2026-04-15 11:05:00+00'
 )
 ON CONFLICT (id) DO UPDATE SET
@@ -659,6 +674,10 @@ ON CONFLICT (id) DO UPDATE SET
   completed = EXCLUDED.completed,
   escalated = EXCLUDED.escalated,
   verified = EXCLUDED.verified,
+  agent_state_json = EXCLUDED.agent_state_json,
+  stage_metadata_json = EXCLUDED.stage_metadata_json,
+  output_validation_json = EXCLUDED.output_validation_json,
+  context_summary_json = EXCLUDED.context_summary_json,
   created_at = EXCLUDED.created_at;
 
 INSERT INTO evaluation_scores (id, session_id, groundedness, hallucination, helpfulness, metadata, evaluated_at) VALUES

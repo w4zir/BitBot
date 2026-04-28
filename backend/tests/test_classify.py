@@ -406,3 +406,101 @@ def test_escalation_decision_endpoint(client: TestClient, monkeypatch: pytest.Mo
     assert out["ok"] is True
     assert out["decision"] == "accept"
     assert inserted and inserted[0]["metadata"]["pending_human_action"] is False
+
+
+def test_classify_exposes_agent_state_and_policy_variable_maps(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
+) -> None:
+    messages_store: list[dict] = []
+    monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
+    monkeypatch.setattr(
+        "backend.api.routes.classify.create_session",
+        lambda: "00000000-0000-0000-0000-000000000101",
+    )
+    monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
+    monkeypatch.setattr(
+        "backend.api.routes.classify.append_message",
+        lambda sid, role, content, metadata=None: messages_store.append(
+            {"role": role, "content": content, "metadata": metadata or {}}
+        ),
+    )
+    monkeypatch.setattr("backend.api.routes.classify.list_messages", lambda _sid: list(messages_store))
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_query_classifier",
+        lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.95)),
+    )
+    monkeypatch.setattr(
+        "backend.api.routes.classify.get_query_classifier",
+        lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.95)),
+    )
+    monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [{"content": "policy rule"}])
+    monkeypatch.setattr("backend.agent.issue_graph.get_intents_for_category", lambda _category: ["order_status"])
+
+    def chat_completion(**kwargs):
+        msgs = kwargs.get("messages") or []
+        system = str(msgs[0].get("content") if msgs else "")
+        if "classify a customer support session" in system:
+            return '{"intent":"order_status","problem_to_solve":"Track order status"}'
+        return '{"valid": false, "missing_field_names": ["order_id"], "notes": "need id"}'
+
+    monkeypatch.setattr("backend.agent.issue_graph.chat_completion", chat_completion)
+    r = client.post("/classify", json={"text": "Track ORD-1004", "full_flow": True})
+    assert r.status_code == 200
+    data = r.json()
+    md = data["assistant_metadata"]
+    assert isinstance(md.get("agent_state"), dict)
+    assert isinstance(md.get("stage_metadata"), dict)
+    policy_constraints = md.get("policy_constraints") or {}
+    assert isinstance(policy_constraints.get("variables"), dict)
+    assert isinstance(policy_constraints.get("validation_results"), dict)
+
+
+def test_classify_validation_wait_limit_escalates(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
+) -> None:
+    messages_store: list[dict] = []
+    sid = "00000000-0000-0000-0000-000000000102"
+    monkeypatch.setenv("AGENT_VALIDATION_MAX_USER_WAITS", "2")
+    monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
+    monkeypatch.setattr("backend.api.routes.classify.create_session", lambda: sid)
+    monkeypatch.setattr("backend.api.routes.classify.get_session", lambda _sid: {"id": _sid})
+    monkeypatch.setattr(
+        "backend.api.routes.classify.append_message",
+        lambda _sid, role, content, metadata=None: messages_store.append(
+            {"role": role, "content": content, "metadata": metadata or {}}
+        ),
+    )
+    monkeypatch.setattr("backend.api.routes.classify.list_messages", lambda _sid: list(messages_store))
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_query_classifier",
+        lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.9)),
+    )
+    monkeypatch.setattr(
+        "backend.api.routes.classify.get_query_classifier",
+        lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.9)),
+    )
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_intents_for_category",
+        lambda _category: ["order_status"],
+    )
+    monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
+
+    def chat_completion(**kwargs):
+        msgs = kwargs.get("messages") or []
+        system = str(msgs[0].get("content") if msgs else "")
+        if "classify a customer support session" in system:
+            return '{"intent":"order_status","problem_to_solve":"Track order status"}'
+        return '{"valid": false, "missing_field_names": ["order_id"], "notes": "need order id"}'
+
+    monkeypatch.setattr("backend.agent.issue_graph.chat_completion", chat_completion)
+
+    r1 = client.post("/classify", json={"text": "Need help", "full_flow": True})
+    assert r1.status_code == 200
+    assert r1.json()["assistant_metadata"]["validation_wait_count"] == 1
+    assert r1.json()["assistant_metadata"]["outcome_status"] == "needs_more_data"
+
+    r2 = client.post("/classify", json={"text": "still help", "full_flow": True, "session_id": sid})
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["assistant_metadata"]["validation_wait_count"] == 2
+    assert d2["assistant_metadata"]["outcome_status"] == "pending_escalation"

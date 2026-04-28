@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.agent.issue_graph import _structured_executor_node
+from backend.agent.issue_graph import _outcome_validator_node, _structured_executor_node
 
 
 def test_cancel_order_tool_step_updates_context(monkeypatch) -> None:
@@ -119,3 +119,57 @@ def test_order_cancel_failure_reply_uses_cancel_reason() -> None:
     assert out["current_step_index"] == 1
     assert "could not cancel order ord-2019" in reply
     assert "order delivered" in reply
+
+
+def test_order_cancel_fallback_success_copy_does_not_say_already() -> None:
+    state = {
+        "procedure_id": "order_cancel",
+        "text": "cancel my order",
+        "messages": [{"role": "user", "content": "cancel ORD-2014"}],
+        "todo_list": [{"id": "cancellation_not_allowed", "type": "llm_response"}],
+        "current_step_index": 0,
+        "context_data": {
+            "order_id_extracted": "ORD-2014",
+            "cancel_succeeded": True,
+            "cancel_reason": "",
+        },
+        "assistant_metadata": {},
+    }
+
+    out = _structured_executor_node(state)
+    reply = str(out.get("final_response") or "").lower()
+    assert out["current_step_index"] == 1
+    assert "has been cancelled successfully" in reply
+    assert "already been cancelled successfully" not in reply
+
+
+def test_legacy_validate_required_data_step_is_not_supported() -> None:
+    state = {
+        "todo_list": [{"id": "legacy_validate", "type": "validate_required_data"}],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 1
+    assert "unsupported procedure step" in str(out.get("final_response") or "").lower()
+    assert "step_error" in (out.get("assistant_metadata") or {})
+
+
+def test_outcome_validator_adds_output_validation_for_cancel(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_order_status",
+        lambda order_id: {"order_id": order_id, "status": "cancelled"},
+    )
+    state = {
+        "intent": "cancel_order",
+        "context_data": {"order_id_extracted": "ORD-12345", "cancel_succeeded": True},
+        "assistant_metadata": {},
+        "validation_ok": True,
+        "todo_list": [],
+        "current_step_index": 0,
+    }
+    out = _outcome_validator_node(state)
+    checks = (out.get("output_validation") or {}).get("checks") or {}
+    assert "order_cancel_db_verification" in checks
+    assert checks["order_cancel_db_verification"]["valid"] is True

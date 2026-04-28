@@ -20,6 +20,12 @@ class TurnRecord:
     category: str | None = None
     intent: str | None = None
     issue_locked: bool | None = None
+    agent_state: dict[str, Any] | None = None
+    stage_metadata: dict[str, Any] | None = None
+    output_validation: dict[str, Any] | None = None
+    context_summary: dict[str, Any] | None = None
+    validation_wait_count: int | None = None
+    validation_wait_limit: int | None = None
     latency_ms: float = 0.0
 
 

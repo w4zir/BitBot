@@ -278,8 +278,23 @@ def main() -> None:
                     st.error(f"Escalation request failed: {e}")
 
     if st.session_state.last_classify_json is not None:
+        assistant_meta = st.session_state.last_classify_json.get("assistant_metadata") or {}
+        if not isinstance(assistant_meta, dict):
+            assistant_meta = {}
         with st.expander("Last response (JSON)"):
             st.json(st.session_state.last_classify_json)
+        with st.expander("Agent state (JSON)"):
+            st.json(
+                assistant_meta.get("agent_state")
+                if isinstance(assistant_meta.get("agent_state"), dict)
+                else {}
+            )
+        with st.expander("Agent metadata by stage (JSON)"):
+            st.json(
+                assistant_meta.get("stage_metadata")
+                if isinstance(assistant_meta.get("stage_metadata"), dict)
+                else {}
+            )
 
 
 if __name__ == "__main__":

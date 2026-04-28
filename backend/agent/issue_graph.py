@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -58,20 +59,201 @@ class IssueGraphState(TypedDict, total=False):
     escalation_bundle: dict[str, Any] | None
     final_response: str | None
     assistant_metadata: dict[str, Any]
+    stage_metadata: dict[str, Any]
+    agent_state: dict[str, Any]
+    validation_wait_count: int
+    validation_wait_limit: int
+    output_validation: dict[str, Any]
+    context_summary: dict[str, Any]
+
+
+DEFAULT_VALIDATION_WAIT_LIMIT = 5
+
+
+def _validation_wait_limit() -> int:
+    raw = os.getenv("AGENT_VALIDATION_MAX_USER_WAITS", str(DEFAULT_VALIDATION_WAIT_LIMIT)).strip()
+    try:
+        val = int(raw)
+    except ValueError:
+        return DEFAULT_VALIDATION_WAIT_LIMIT
+    return max(1, val)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _stage_name_from_state(state: IssueGraphState) -> str:
+    return str((state.get("agent_state") or {}).get("stage") or "unknown_stage")
+
+
+def _with_stage_metadata(
+    state: IssueGraphState,
+    stage_name: str,
+    details: dict[str, Any] | None = None,
+) -> IssueGraphState:
+    stage_metadata = dict(state.get("stage_metadata") or {})
+    stage_metadata[stage_name] = {
+        "ts": _utc_now_iso(),
+        **(details or {}),
+    }
+    return {
+        **state,
+        "stage_metadata": stage_metadata,
+        "agent_state": {
+            **dict(state.get("agent_state") or {}),
+            "stage": stage_name,
+        },
+    }
+
+
+def _compact_context_data(context_data: dict[str, Any]) -> dict[str, Any]:
+    keep_keys = {
+        "order_id_extracted",
+        "order_status",
+        "order_found",
+        "cancel_succeeded",
+        "cancel_reason",
+        "refund_request_created",
+        "refund_request_reason",
+        "refund_request_id",
+        "shipping_address_updated",
+        "policy_found",
+        "policy_query",
+        "policy_eligible",
+        "policy_ineligibility_reason",
+        "tool_call",
+    }
+    return {k: v for k, v in context_data.items() if k in keep_keys}
+
+
+def _build_agent_state_snapshot(state: IssueGraphState) -> dict[str, Any]:
+    todo = state.get("todo_list") or []
+    idx = int(state.get("current_step_index") or 0)
+    before_step = todo[idx - 1]["id"] if idx > 0 and idx - 1 < len(todo) else None
+    after_step = todo[idx]["id"] if idx < len(todo) else None
+    return {
+        "stage": str((state.get("agent_state") or {}).get("stage") or "unknown_stage"),
+        "category": str(state.get("category") or ""),
+        "intent": str(state.get("intent") or ""),
+        "problem_to_solve": str(state.get("problem_to_solve") or ""),
+        "procedure_id": str(state.get("procedure_id") or ""),
+        "validation_ok": state.get("validation_ok"),
+        "validation_missing": list(state.get("validation_missing") or []),
+        "eligibility_ok": state.get("eligibility_ok"),
+        "outcome_status": state.get("outcome_status"),
+        "order_state_before": before_step,
+        "order_state_after": after_step,
+        "current_step_index": idx,
+        "validation_wait_count": int(state.get("validation_wait_count") or 0),
+        "validation_wait_limit": int(state.get("validation_wait_limit") or _validation_wait_limit()),
+    }
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_duration_hours(
+    *,
+    start: Any,
+    end: Any,
+    op: str,
+    threshold_hours: Any,
+) -> dict[str, Any]:
+    start_dt = _parse_iso_datetime(start)
+    end_dt = _parse_iso_datetime(end) or datetime.now(timezone.utc)
+    threshold = _as_float(threshold_hours)
+    if start_dt is None or threshold is None:
+        return {"valid": False, "actual_value": None, "reason": "invalid_duration_inputs"}
+    elapsed_hours = (end_dt - start_dt).total_seconds() / 3600.0
+    checks = {
+        "lte": elapsed_hours <= threshold,
+        "lt": elapsed_hours < threshold,
+        "gte": elapsed_hours >= threshold,
+        "gt": elapsed_hours > threshold,
+        "eq": abs(elapsed_hours - threshold) < 1e-9,
+    }
+    return {
+        "valid": bool(checks.get(op, False)),
+        "actual_value": elapsed_hours,
+        "reason": f"duration_hours_{op}_{threshold}",
+    }
+
+
+def _validate_set_membership(*, value: Any, allowed_values: Any) -> dict[str, Any]:
+    allowed = {str(v).strip().lower() for v in (allowed_values or []) if str(v).strip()}
+    probe = str(value or "").strip().lower()
+    return {
+        "valid": bool(probe and probe in allowed),
+        "actual_value": probe,
+        "reason": "value_not_in_allow_set" if probe not in allowed else "ok",
+        "set_difference": sorted({probe} - allowed) if probe else [],
+    }
+
+
+def _validate_arithmetic(*, lhs: Any, rhs: Any, op: str) -> dict[str, Any]:
+    left = _as_float(lhs)
+    right = _as_float(rhs)
+    if left is None or right is None:
+        return {"valid": False, "actual_value": None, "reason": "invalid_numeric_inputs"}
+    checks = {
+        "lte": left <= right,
+        "lt": left < right,
+        "gte": left >= right,
+        "gt": left > right,
+        "eq": abs(left - right) < 1e-9,
+    }
+    return {
+        "valid": bool(checks.get(op, False)),
+        "actual_value": left,
+        "reason": f"arithmetic_{op}_{right}",
+    }
 
 
 def _classify_category_node(state: IssueGraphState) -> IssueGraphState:
     text = state.get("text") or ""
     if state.get("issue_locked"):
-        return {**state, "text": text}
+        return _with_stage_metadata(
+            {**state, "text": text},
+            "classify_category",
+            {"issue_locked": True, "category": state.get("category"), "confidence": state.get("confidence")},
+        )
     qc = get_query_classifier()
     result: ClassificationResult = qc.classify(text)
-    return {
+    out: IssueGraphState = {
         **state,
         "text": text,
         "category": result.category,
         "confidence": result.confidence,
     }
+    return _with_stage_metadata(
+        out,
+        "classify_category",
+        {"issue_locked": False, "category": result.category, "confidence": result.confidence},
+    )
 
 
 def _category_confidence_threshold() -> float:
@@ -106,7 +288,7 @@ def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
         reply = f"(Model error: {e})"
         meta["error"] = str(e)
 
-    return {
+    out: IssueGraphState = {
         **state,
         "category": "no_issue",
         "intent": "no_issue_chat",
@@ -117,6 +299,11 @@ def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
         "final_response": reply,
         "assistant_metadata": meta,
     }
+    return _with_stage_metadata(
+        out,
+        "no_issue_direct",
+        {"model_provider": provider, "model": model, "response_generated": bool(reply)},
+    )
 
 
 def _generate_ineligibility_response(
@@ -192,12 +379,17 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
     if state.get("issue_locked"):
         meta["intent_classifier"] = "session_locked"
         meta["intent_candidates"] = [state.get("intent") or ""]
-        return {
+        out_locked: IssueGraphState = {
             **state,
             "intent": (state.get("intent") or "").strip(),
             "problem_to_solve": str(state.get("problem_to_solve") or "").strip(),
             "assistant_metadata": meta,
         }
+        return _with_stage_metadata(
+            out_locked,
+            "classify_intent",
+            {"intent_classifier": "session_locked", "intent": out_locked.get("intent")},
+        )
 
     provider = os.getenv("INTENT_MODEL_PROVIDER", "ollama").strip().lower()
     model = os.getenv("INTENT_MODEL", "llama3.2").strip()
@@ -261,12 +453,22 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
     meta["intent_model"] = model
     meta["intent_allowed_list_used"] = bool(allowed_intents)
     meta["intent_candidates"] = allowed_intents if allowed_intents else [intent]
-    return {
+    out: IssueGraphState = {
         **state,
         "intent": intent,
         "problem_to_solve": problem_to_solve,
         "assistant_metadata": meta,
     }
+    return _with_stage_metadata(
+        out,
+        "classify_intent",
+        {
+            "intent_classifier": "llm",
+            "intent": intent,
+            "problem_to_solve": problem_to_solve,
+            "allowed_intents_count": len(allowed_intents),
+        },
+    )
 
 
 def _fetch_procedure_node(state: IssueGraphState) -> IssueGraphState:
@@ -285,14 +487,15 @@ def _fetch_procedure_node(state: IssueGraphState) -> IssueGraphState:
         if inferred is not None:
             bp = get_blueprint_by_category_intent(*inferred)
     if bp is None:
-        return {
+        out_missing: IssueGraphState = {
             **state,
             "procedure_id": "",
             "todo_list": [],
             "current_step_index": 0,
             "final_response": "I could not map this request to a procedure.",
         }
-    return {
+        return _with_stage_metadata(out_missing, "fetch_procedure", {"procedure_found": False})
+    out: IssueGraphState = {
         **state,
         "procedure_id": bp.id,
         "intent": bp.intent,
@@ -300,18 +503,32 @@ def _fetch_procedure_node(state: IssueGraphState) -> IssueGraphState:
         "current_step_index": 0,
         "context_data": dict(state.get("context_data") or {}),
     }
+    return _with_stage_metadata(
+        out,
+        "fetch_procedure",
+        {"procedure_found": True, "procedure_id": bp.id, "todo_count": len(out.get("todo_list") or [])},
+    )
 
 
 def _specialist_router_node(state: IssueGraphState) -> IssueGraphState:
     category = normalize_category_key(state.get("category") or "unknown")
     intent = str(state.get("intent") or "").strip()
     specialist = f"{category}_agent" if category and category != "unknown" else "general_agent"
-    return {
+    out: IssueGraphState = {
         **state,
         "specialist_agent_id": specialist,
         "tool_registry_scope": specialist,
         "procedure_namespace": f"{category}:{intent or 'general'}",
     }
+    return _with_stage_metadata(
+        out,
+        "specialist_router",
+        {
+            "specialist_agent_id": specialist,
+            "tool_registry_scope": specialist,
+            "procedure_namespace": out.get("procedure_namespace"),
+        },
+    )
 
 
 def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
@@ -326,21 +543,48 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
     raw_chunks = [str(d.get("content") or "") for d in docs]
     status = _extract_order_status_hint(state)
     eligible, reason = _derive_order_cancellation_eligibility(raw_chunks, status)
+    context = dict(state.get("context_data") or {})
+    variables = {
+        "policy_query": query,
+        "order_status": status,
+        "allowed_cancel_statuses": ["processing", "pending"],
+        "order_created_at": (context.get("order_data") or {}).get("order_date"),
+        "now_utc": _utc_now_iso(),
+        "cancel_window_hours": 24,
+    }
+    validation_results = {
+        "order_status_in_allowed_set": _validate_set_membership(
+            value=variables["order_status"],
+            allowed_values=variables["allowed_cancel_statuses"],
+        ),
+        "order_cancel_window_hours_lte": _validate_duration_hours(
+            start=variables["order_created_at"],
+            end=variables["now_utc"],
+            op="lte",
+            threshold_hours=variables["cancel_window_hours"],
+        ),
+        "minimum_policy_docs_found": _validate_arithmetic(
+            lhs=len(raw_chunks),
+            rhs=1,
+            op="gte",
+        ),
+    }
     constraints = {
         "eligible": eligible,
         "reason": reason,
-        "conditions": [],
+        "variables": variables,
+        "validation_results": validation_results,
         "time_limit_hours": None,
         "requires_evidence": False,
         "auto_resolvable": True,
         "raw_chunks": raw_chunks,
         "order_status_hint": status,
     }
-    return {
+    out: IssueGraphState = {
         **state,
         "policy_constraints": constraints,
         "context_data": {
-            **dict(state.get("context_data") or {}),
+            **context,
             "policy_found": bool(docs),
             "policy_query": query,
             "retrieved_docs": docs,
@@ -349,6 +593,11 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
             "order_status_hint": status,
         },
     }
+    return _with_stage_metadata(
+        out,
+        "policy_load",
+        {"policy_found": bool(docs), "eligible": eligible, "policy_query": query},
+    )
 
 
 def _build_missing_prompts(required_fields: list[dict[str, Any]], missing_names: list[str]) -> str:
@@ -367,10 +616,14 @@ def _build_missing_prompts(required_fields: list[dict[str, Any]], missing_names:
 def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
     bp = get_blueprint_by_category_intent(state.get("category") or "", state.get("intent") or "")
     if bp is None:
-        return state
+        return _with_stage_metadata(state, "validate_required", {"blueprint_found": False})
     required = [as_dict(x) for x in bp.required_data]
     if not required:
-        return {**state, "validation_ok": True, "validation_missing": []}
+        return _with_stage_metadata(
+            {**state, "validation_ok": True, "validation_missing": []},
+            "validate_required",
+            {"required_fields_count": 0, "validation_ok": True},
+        )
 
     provider = os.getenv("VALIDATION_MODEL_PROVIDER", "ollama").strip().lower()
     model = os.getenv("VALIDATION_MODEL", "llama3.2").strip()
@@ -393,7 +646,7 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
     try:
         raw = chat_completion(provider=provider, model=model, messages=msgs)
     except Exception as e:  # noqa: BLE001
-        return {
+        out_err: IssueGraphState = {
             **state,
             "validation_ok": False,
             "validation_missing": [],
@@ -404,6 +657,11 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
                 "error": str(e),
             },
         }
+        return _with_stage_metadata(
+            out_err,
+            "validate_required",
+            {"required_fields_count": len(required), "validation_ok": False, "error": str(e)},
+        )
     data = extract_json_object(raw)
     valid = bool(data.get("valid"))
     missing = data.get("missing_field_names") or data.get("missing_fields") or []
@@ -440,19 +698,41 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
     }
     if not valid:
         out["current_step_index"] = len(state.get("todo_list") or [])
-    return out
+    return _with_stage_metadata(
+        out,
+        "validate_required",
+        {
+            "required_fields_count": len(required),
+            "validation_ok": valid,
+            "validation_missing": missing_strs,
+        },
+    )
 
 
 def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphState:
     validated = _validate_required_data_node(state)
     policy_constraints = dict(validated.get("policy_constraints") or {})
     eligibility_ok = bool(policy_constraints.get("eligible", True))
+    wait_limit = int(validated.get("validation_wait_limit") or _validation_wait_limit())
+    wait_count = int(validated.get("validation_wait_count") or 0)
     out: IssueGraphState = {
         **validated,
         "eligibility_ok": eligibility_ok,
+        "validation_wait_limit": wait_limit,
     }
     if validated.get("validation_ok") is False:
+        wait_count += 1
+        out["validation_wait_count"] = wait_count
         out["outcome_status"] = "needs_more_data"
+        meta = dict(out.get("assistant_metadata") or {})
+        if wait_count >= wait_limit:
+            out["final_response"] = (
+                "I still do not have the required details to proceed. "
+                "I am escalating this to a human support agent."
+            )
+            out["outcome_status"] = "pending_escalation"
+            meta["validation_wait_limit_reached"] = True
+        out["assistant_metadata"] = meta
     elif not eligibility_ok:
         reason = str(policy_constraints.get("reason") or "").strip()
         out["final_response"] = _generate_ineligibility_response(
@@ -461,7 +741,19 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
             text=str(validated.get("text") or ""),
         )
         out["outcome_status"] = "policy_ineligible"
-    return out
+        out["validation_wait_count"] = 0
+    else:
+        out["validation_wait_count"] = 0
+    return _with_stage_metadata(
+        out,
+        "validate_required",
+        {
+            "validation_ok": out.get("validation_ok"),
+            "eligibility_ok": eligibility_ok,
+            "validation_wait_count": out.get("validation_wait_count"),
+            "validation_wait_limit": wait_limit,
+        },
+    )
 
 
 _ORDER_NUMBER_RE = re.compile(r"\b(ORD-[A-Z0-9]+)\b", re.IGNORECASE)
@@ -870,8 +1162,8 @@ def _draft_order_cancel_terminal_response(state: IssueGraphState, step: dict[str
     if step_id == "cancellation_not_allowed":
         if cancel_succeeded:
             return (
-                f"Your order {order_id} has already been cancelled successfully.\n\n"
-                "You do not need to submit another cancellation request."
+                f"Your order {order_id} has been cancelled successfully.\n\n"
+                "No further cancellation action is needed."
             )
         reason = cancel_reason.replace("_", " ").strip() or "the cancellation could not be completed"
         return (
@@ -899,7 +1191,7 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
     todo = state.get("todo_list") or []
     idx = int(state.get("current_step_index") or 0)
     if idx >= len(todo):
-        return state
+        return _with_stage_metadata(state, "structured_executor", {"done": True, "current_step_index": idx})
     step = todo[idx]
     context = dict(state.get("context_data") or {})
     step_type = str(step.get("type") or "")
@@ -914,9 +1206,6 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
 
     if step_type == "retrieval":
         context.update(_retrieve_policy(step, state))
-    elif step_type == "validate_required_data":
-        # Required-data validation is already handled by graph node; keep compatibility if present in YAML.
-        context["validate_required_data"] = True
     elif step_type == "tool_call":
         tool_name = str(step.get("tool") or "unknown_tool")
         context["tool_call"] = tool_name
@@ -924,50 +1213,114 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
         if not runner:
             meta = dict(state.get("assistant_metadata") or {})
             meta["tool_error"] = f"Unknown tool '{tool_name}'"
-            return {
-                **state,
-                "assistant_metadata": meta,
-                "final_response": "I could not run a required backend tool for this request.",
-                "current_step_index": len(todo),
-            }
+            return _with_stage_metadata(
+                {
+                    **state,
+                    "assistant_metadata": meta,
+                    "final_response": "I could not run a required backend tool for this request.",
+                    "current_step_index": len(todo),
+                    "context_data": context,
+                },
+                "structured_executor",
+                {"step_id": step.get("id"), "step_type": step_type, "error": meta["tool_error"]},
+            )
         context.update(runner(step, state))
     elif step_type == "logic_gate":
         cond = step.get("condition") or {}
         branch = _evaluate_condition(cond, context)
         target = str(step.get("on_true") if branch else step.get("on_false") or "")
-        return _jump_to_step({**state, "context_data": context}, target)
+        return _with_stage_metadata(
+            _jump_to_step({**state, "context_data": context}, target),
+            "structured_executor",
+            {"step_id": step.get("id"), "step_type": step_type, "branch_target": target},
+        )
     elif step_type == "interrupt":
-        return _handle_interrupt_step(step, {**state, "context_data": context}, idx, todo)
+        return _with_stage_metadata(
+            _handle_interrupt_step(step, {**state, "context_data": context}, idx, todo),
+            "structured_executor",
+            {"step_id": step.get("id"), "step_type": step_type},
+        )
     elif step_type == "llm_response":
         deterministic_reply = _draft_order_cancel_terminal_response(
             {**state, "context_data": context},
             step,
         )
         reply = deterministic_reply if deterministic_reply is not None else _draft_response(state, step)
-        return {
+        return _with_stage_metadata(
+            {
             **state,
             "context_data": context,
             "final_response": reply,
             "current_step_index": idx + 1,
-        }
+            },
+            "structured_executor",
+            {"step_id": step.get("id"), "step_type": step_type},
+        )
     else:
         meta = dict(state.get("assistant_metadata") or {})
         meta["step_error"] = f"Unknown step type '{step_type}'"
-        return {
+        return _with_stage_metadata(
+            {
             **state,
             "context_data": context,
             "assistant_metadata": meta,
             "final_response": "I hit an unsupported procedure step and cannot continue safely.",
             "current_step_index": len(todo),
-        }
+            },
+            "structured_executor",
+            {"step_id": step.get("id"), "step_type": step_type, "error": meta["step_error"]},
+        )
 
-    return {**state, "context_data": context, "current_step_index": idx + 1}
+    return _with_stage_metadata(
+        {**state, "context_data": context, "current_step_index": idx + 1},
+        "structured_executor",
+        {"step_id": step.get("id"), "step_type": step_type},
+    )
+
+
+def _run_output_validation(state: IssueGraphState) -> dict[str, Any]:
+    context = dict(state.get("context_data") or {})
+    checks: dict[str, Any] = {}
+    intent = str(state.get("intent") or "")
+    if intent == "cancel_order":
+        order_id = str(context.get("order_id_extracted") or "").strip()
+        if order_id:
+            db_row = get_order_status(order_id)
+            db_status = str((db_row or {}).get("status") or "").strip().lower()
+            expected_status = "cancelled" if bool(context.get("cancel_succeeded")) else db_status
+            checks["order_cancel_db_verification"] = {
+                "valid": bool(expected_status == db_status),
+                "expected_status": expected_status,
+                "actual_status": db_status,
+                "order_id": order_id,
+            }
+    all_valid = all(bool(item.get("valid")) for item in checks.values()) if checks else True
+    return {"checks": checks, "all_valid": all_valid}
+
+
+def _build_context_summary(state: IssueGraphState) -> dict[str, Any]:
+    context = _compact_context_data(dict(state.get("context_data") or {}))
+    return {
+        "session_id": str(state.get("session_id") or ""),
+        "category": str(state.get("category") or ""),
+        "intent": str(state.get("intent") or ""),
+        "problem_to_solve": str(state.get("problem_to_solve") or ""),
+        "procedure_id": str(state.get("procedure_id") or ""),
+        "outcome_status": str(state.get("outcome_status") or ""),
+        "validation_missing": list(state.get("validation_missing") or []),
+        "context_data": context,
+    }
 
 
 def _outcome_validator_node(state: IssueGraphState) -> IssueGraphState:
     status = state.get("outcome_status")
-    if status in {"needs_more_data", "policy_ineligible"}:
-        return state
+    if status in {"needs_more_data", "policy_ineligible", "pending_escalation"}:
+        out_terminal = {
+            **state,
+            "output_validation": _run_output_validation(state),
+        }
+        out_terminal["context_summary"] = _build_context_summary(out_terminal)  # type: ignore[index]
+        return _with_stage_metadata(out_terminal, "outcome_validator", {"outcome_status": status})
     meta = dict(state.get("assistant_metadata") or {})
     if meta.get("pending_human_action") or meta.get("escalation_decision") == "accept":
         status = "pending_escalation"
@@ -979,7 +1332,20 @@ def _outcome_validator_node(state: IssueGraphState) -> IssueGraphState:
         status = "resolved"
     else:
         status = "unresolvable"
-    return {**state, "outcome_status": status}
+    out: IssueGraphState = {**state, "outcome_status": status}
+    output_validation = _run_output_validation(out)
+    if not output_validation.get("all_valid"):
+        out["outcome_status"] = "unresolvable"
+    out["output_validation"] = output_validation
+    out["context_summary"] = _build_context_summary(out)
+    return _with_stage_metadata(
+        out,
+        "outcome_validator",
+        {
+            "outcome_status": out.get("outcome_status"),
+            "output_validation_all_valid": bool(output_validation.get("all_valid")),
+        },
+    )
 
 
 def _human_escalation_node(state: IssueGraphState) -> IssueGraphState:
@@ -990,6 +1356,7 @@ def _human_escalation_node(state: IssueGraphState) -> IssueGraphState:
         "problem_to_solve": str(state.get("problem_to_solve") or ""),
         "transcript": state.get("messages") or [],
         "context_data": dict(state.get("context_data") or {}),
+        "context_summary": dict(state.get("context_summary") or {}),
         "policy_constraints": state.get("policy_constraints") or {},
         "procedure_id": str(state.get("procedure_id") or ""),
         "last_step_id": (
@@ -1002,7 +1369,11 @@ def _human_escalation_node(state: IssueGraphState) -> IssueGraphState:
     }
     meta = dict(state.get("assistant_metadata") or {})
     meta["escalated"] = True
-    return {**state, "escalation_bundle": bundle, "assistant_metadata": meta}
+    return _with_stage_metadata(
+        {**state, "escalation_bundle": bundle, "assistant_metadata": meta},
+        "human_escalation",
+        {"escalated": True, "outcome_status": state.get("outcome_status")},
+    )
 
 
 def _should_continue(state: IssueGraphState) -> Literal["continue", "end"]:
@@ -1022,10 +1393,10 @@ def _route_after_category(state: IssueGraphState) -> Literal["no_issue_direct", 
 
 
 def _route_after_validation(state: IssueGraphState) -> Literal["structured_executor", "outcome_validator", "end"]:
+    if str(state.get("outcome_status") or "") in {"pending_escalation", "policy_ineligible"}:
+        return "outcome_validator"
     if state.get("validation_ok") is False:
         return "end"
-    if state.get("eligibility_ok") is False:
-        return "outcome_validator"
     return "structured_executor"
 
 
@@ -1096,23 +1467,6 @@ def get_issue_classification_graph():
     return _COMPILED
 
 
-def run_issue_classification(text: str) -> dict[str, Any]:
-    """Backward-compatible: Bento classification only (no LLM branches)."""
-    qc = get_query_classifier()
-    result: ClassificationResult = qc.classify(text or "")
-    return {
-        "text": text or "",
-        "category": result.category,
-        "intent": "",
-        "confidence": result.confidence,
-        "procedure_id": "",
-        "validation_ok": None,
-        "validation_missing": [],
-        "assistant_reply": None,
-        "assistant_metadata": {},
-    }
-
-
 def run_conversation_graph(
     *,
     text: str,
@@ -1123,6 +1477,8 @@ def run_conversation_graph(
     locked_intent: str | None = None,
     locked_problem_to_solve: str | None = None,
     locked_confidence: float | None = None,
+    initial_validation_wait_count: int = 0,
+    initial_validation_wait_limit: int | None = None,
 ) -> dict[str, Any]:
     graph = get_issue_classification_graph()
     cat0 = "unknown"
@@ -1135,6 +1491,7 @@ def run_conversation_graph(
         problem0 = str(locked_problem_to_solve or "").strip()
         conf0 = float(locked_confidence) if locked_confidence is not None else 1.0
 
+    wait_limit = initial_validation_wait_limit or _validation_wait_limit()
     out = graph.invoke(
         {
             "text": text or "",
@@ -1160,9 +1517,30 @@ def run_conversation_graph(
             "escalation_bundle": None,
             "final_response": None,
             "assistant_metadata": {},
+            "stage_metadata": {},
+            "agent_state": {"stage": "classify_category"},
+            "validation_wait_count": max(0, int(initial_validation_wait_count)),
+            "validation_wait_limit": max(1, int(wait_limit)),
+            "output_validation": {},
+            "context_summary": {},
         }
     )
     resolved_by_graph = graph_suggests_session_resolved(out)  # type: ignore[arg-type]
+    context_data = _compact_context_data(dict(out.get("context_data") or {}))
+    policy_constraints = dict(out.get("policy_constraints") or {})
+    agent_state = _build_agent_state_snapshot(out)  # type: ignore[arg-type]
+    stage_metadata = dict(out.get("stage_metadata") or {})
+    assistant_metadata = {
+        **(out.get("assistant_metadata") or {}),
+        "outcome_status": out.get("outcome_status"),
+        "specialist_agent_id": out.get("specialist_agent_id"),
+        "agent_state": agent_state,
+        "stage_metadata": stage_metadata,
+        "validation_wait_count": out.get("validation_wait_count"),
+        "validation_wait_limit": out.get("validation_wait_limit"),
+        "output_validation": dict(out.get("output_validation") or {}),
+        "context_summary": dict(out.get("context_summary") or {}),
+    }
     return {
         "text": out.get("text", ""),
         "category": str(out.get("category", "unknown")),
@@ -1173,13 +1551,15 @@ def run_conversation_graph(
         "validation_ok": out.get("validation_ok"),
         "validation_missing": list(out.get("validation_missing") or []),
         "assistant_reply": out.get("final_response"),
-        "assistant_metadata": {
-            **(out.get("assistant_metadata") or {}),
-            "outcome_status": out.get("outcome_status"),
-            "specialist_agent_id": out.get("specialist_agent_id"),
-        },
-        "context_data": dict(out.get("context_data") or {}),
-        "policy_constraints": dict(out.get("policy_constraints") or {}),
+        "assistant_metadata": assistant_metadata,
+        "context_data": context_data,
+        "policy_constraints": policy_constraints,
+        "agent_state": agent_state,
+        "stage_metadata": stage_metadata,
+        "output_validation": dict(out.get("output_validation") or {}),
+        "context_summary": dict(out.get("context_summary") or {}),
+        "validation_wait_count": int(out.get("validation_wait_count") or 0),
+        "validation_wait_limit": int(out.get("validation_wait_limit") or _validation_wait_limit()),
         "eligibility_ok": out.get("eligibility_ok"),
         "session_resolved_by_graph": resolved_by_graph,
     }

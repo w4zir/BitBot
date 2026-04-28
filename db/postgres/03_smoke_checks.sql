@@ -106,6 +106,16 @@ SELECT * FROM v_llm_performance_summary;
 SELECT * FROM v_simulation_run_summary;
 SELECT * FROM v_simulation_outcome_breakdown;
 
+-- Outcome JSON artifacts present
+SELECT
+  id,
+  agent_state_json,
+  stage_metadata_json,
+  output_validation_json,
+  context_summary_json
+FROM outcomes
+ORDER BY created_at;
+
 -- Escalated session has ticket + pending_human_action in latest assistant metadata
 SELECT s.id, t.summary,
   (

@@ -92,6 +92,19 @@ def evaluate_structural(
     if not checks["max_turns_not_breached"]:
         failures.append(f"Conversation exceeded max_turns={max_turns}.")
 
+    wait_limit_ok = True
+    for turn in trace.turns:
+        if (
+            turn.validation_wait_count is not None
+            and turn.validation_wait_limit is not None
+            and turn.validation_wait_count > turn.validation_wait_limit
+        ):
+            wait_limit_ok = False
+            break
+    checks["validation_wait_limit_respected"] = wait_limit_ok
+    if not wait_limit_ok:
+        failures.append("Validation wait counter exceeded configured limit.")
+
     return StructuralResult(
         passed=all(checks.values()),
         checks=checks,

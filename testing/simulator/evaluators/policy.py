@@ -20,7 +20,10 @@ def evaluate_policy(trace: ConversationTrace, scenario: ScenarioInstance) -> Pol
     final_turn = trace.turns[-1] if trace.turns else None
 
     context_data = final_turn.context_data if final_turn else {}
-    checks["policy_docs_retrieved"] = bool((context_data or {}).get("retrieved_docs"))
+    policy_constraints = final_turn.policy_constraints if final_turn else {}
+    checks["policy_docs_retrieved"] = bool((context_data or {}).get("retrieved_docs")) or bool(
+        (policy_constraints or {}).get("raw_chunks")
+    )
     if not checks["policy_docs_retrieved"]:
         failures.append("No retrieved policy documents were captured in context_data.")
 
@@ -38,6 +41,12 @@ def evaluate_policy(trace: ConversationTrace, scenario: ScenarioInstance) -> Pol
     checks["boundary_handling"] = not has_boundary or (final_turn is not None and final_turn.eligibility_ok is not None)
     if not checks["boundary_handling"]:
         failures.append("Boundary scenario did not produce a deterministic eligibility signal.")
+
+    variables_ok = isinstance((policy_constraints or {}).get("variables"), dict)
+    validation_results_ok = isinstance((policy_constraints or {}).get("validation_results"), dict)
+    checks["policy_variables_shape"] = variables_ok and validation_results_ok
+    if not checks["policy_variables_shape"]:
+        failures.append("Policy constraints did not include JSON variables and validation_results maps.")
 
     ineligible = trace.final_outcome_status == "policy_ineligible"
     final_agent_message = (final_turn.agent_response if final_turn else "").lower()

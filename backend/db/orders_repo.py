@@ -21,6 +21,7 @@ def get_order_status(order_id: str) -> dict[str, Any] | None:
                     o.order_id,
                     o.status,
                     o.total_amount,
+                    o.order_date,
                     o.shipping_address_line,
                     o.shipping_city,
                     o.shipping_postal_code,
@@ -44,13 +45,14 @@ def get_order_status(order_id: str) -> dict[str, Any] | None:
         "order_id": row[0],
         "status": row[1],
         "total_amount": float(row[2]) if row[2] is not None else None,
+        "order_date": row[3].isoformat() if row[3] else None,
         "shipping_address": {
-            "line": row[3],
-            "city": row[4],
-            "postal_code": row[5],
-            "country": row[6],
+            "line": row[4],
+            "city": row[5],
+            "postal_code": row[6],
+            "country": row[7],
         },
-        "estimated_delivery": row[7].isoformat() if row[7] else None,
+        "estimated_delivery": row[8].isoformat() if row[8] else None,
     }
 
 

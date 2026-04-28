@@ -84,6 +84,12 @@ class ConversationDriver:
                 category=_string_or_none(assistant_metadata.get("category")),
                 intent=_string_or_none(assistant_metadata.get("intent")),
                 issue_locked=_bool_or_none(assistant_metadata.get("issue_locked")),
+                agent_state=_dict_or_none(assistant_metadata.get("agent_state")),
+                stage_metadata=_dict_or_none(assistant_metadata.get("stage_metadata")),
+                output_validation=_dict_or_none(assistant_metadata.get("output_validation")),
+                context_summary=_dict_or_none(assistant_metadata.get("context_summary")),
+                validation_wait_count=_int_or_none(assistant_metadata.get("validation_wait_count")),
+                validation_wait_limit=_int_or_none(assistant_metadata.get("validation_wait_limit")),
                 latency_ms=latency_ms,
             )
             turns.append(turn)
@@ -169,6 +175,15 @@ def _float_or_none(value: Any) -> float | None:
         if value is None:
             return None
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
     except (TypeError, ValueError):
         return None
 
