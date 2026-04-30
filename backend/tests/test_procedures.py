@@ -3,6 +3,15 @@ from __future__ import annotations
 from backend.agent import procedures
 
 
+def test_canonical_intent_track_order_maps_to_order_status() -> None:
+    assert procedures.canonical_procedure_intent("order", "track_order") == "order_status"
+    procedures.load_blueprints.cache_clear()
+    bp = procedures.get_blueprint_with_fallback_chain("order", "track_order")
+    assert bp is not None
+    assert bp.id == "order_status"
+    assert bp.intent == "order_status"
+
+
 def test_blueprints_load() -> None:
     procedures.load_blueprints.cache_clear()
     data = procedures.load_blueprints()

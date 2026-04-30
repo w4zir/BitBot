@@ -1,25 +1,26 @@
 # How to run the BitBot simulator
 
-This guide explains how to run the simulator in `testing/simulator/` and how to interpret output artifacts.
+This guide is aligned with the current simulator spec and implementation in `testing/simulator/`.
 
 ## What the simulator does
 
 The simulator:
 
-- loads scenario seeds from `testing/simulator/seeds/*.yaml`
-- hydrates each seed with real DB entities (orders/users/subscriptions)
-- runs multi-turn conversations against `POST /classify`
-- evaluates each trace with structural + policy checks
-- can evaluate quality with an optional LLM judge (`eval_targets: [llm_judge]`)
-- writes a JSON artifact under `testing/simulator/results/`
-- can persist runs, turns, messages, evaluations, and training examples to Postgres
+- loads seed definitions from `testing/simulator/seeds/*.yaml`
+- hydrates each seed with live Postgres entities (`order`, `user`, `subscription`)
+- runs multi-turn conversations against `POST /classify` with `full_flow=true`
+- evaluates traces with structural and policy checks by default
+- optionally runs an LLM judge (`eval_targets: [llm_judge]`)
+- supports deterministic loops, randomized selection, and continuous mode
+- writes JSON artifacts to `testing/simulator/results/`
+- can persist run/scenario/turn/message/evaluation/training data to Postgres
 
 ## Prerequisites
 
 1. Start the BitBot API server so `POST /classify` is reachable.
-2. Ensure Postgres is configured (the simulator hydrator reads live DB rows).
-3. Make sure procedure YAMLs are available under `backend/procedures/`.
-4. (Recommended) Refresh local test data with:
+2. Ensure Postgres is configured and populated enough for seed filters.
+3. Ensure procedure blueprints are available (`backend/procedures/`) for coverage checks.
+4. (Recommended) refresh local DB fixtures:
 
 ```bash
 psql -f db/postgres/01_schema.sql
@@ -37,180 +38,139 @@ POSTGRES_USER=admin
 POSTGRES_PASSWORD=...
 ```
 
-Optional simulator variables:
+Common simulator variables:
 
 ```bash
-# Override if you do not use localhost:8000/classify
+# Override classify endpoint if needed
 SIMULATOR_AGENT_URL=http://localhost:8000/classify
 
-# Confidence check used by structural evaluator
-CATEGORY_CONFIDENCE_THRESHOLD=0.5
+# Optional dedicated DB host for simulator process
+POSTGRES_HOST_SIMULATOR=localhost
 
-# Validation wait loop escalation threshold (agent graph)
-AGENT_VALIDATION_MAX_USER_WAITS=5
+# LLM judge provider/model when llm_judge is enabled
+SIMULATOR_LLM_PROVIDER=ollama
+SIMULATOR_LLM_TIMEOUT_SECONDS=120
 ```
 
-## Run commands
+## Runtime modes and CLI
 
 From repo root:
 
 ```bash
-# Smoke suite (fastest way to validate end-to-end flow)
+# Deterministic suite run (default: one full pass over selected scenarios)
 python -m testing.simulator.runner --suite testing/simulator/suites/smoke.yaml
 ```
 
 ```bash
-# Core regression suite
-python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml
+# Repeat deterministic passes N times
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --iterations 3
 ```
 
 ```bash
-# Run one seed from the selected suite
+# Randomized selection mode (N sampled scenarios)
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --randomize --iterations 20
+```
+
+```bash
+# Continuous mode until interrupted
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --forever --randomize
+```
+
+```bash
+# Single seed
 python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --seed order_cancel_processing_easy
 ```
 
 ```bash
-# Run only selected categories
-python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --category order refund
+# Filter by category/intent/persona/difficulty
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --category order --intent cancel_order --persona policy_prober --difficulty hard
 ```
 
 ```bash
-# Run only selected difficulty levels
-python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --difficulty hard adversarial
-```
-
-```bash
-# Run randomized samples from filtered scenarios
-python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --randomize --iterations 20 --category order --intent cancel_order
-```
-
-```bash
-# Run continuously until interrupted (Ctrl+C)
-python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --forever --randomize --persona impatient_escalator
-```
-
-```bash
-# Persist run telemetry + training examples to Postgres
-python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --iterations 1 --persist-db
-```
-
-```bash
-# Coverage check only (no conversations)
+# Coverage only (no conversations)
 python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --coverage-only
 ```
+
+```bash
+# Persist run data to Postgres
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --persist-db
+```
+
+## Evaluators and current status
+
+- `structural`: enabled and implemented
+- `policy`: enabled and implemented
+- `llm_judge`: optional and implemented
+- `regression`: config keyword exists, but runtime evaluator is not yet wired (artifact field is currently `null` and `regressions=0`)
 
 ## Exit codes
 
 - `0`: all executed scenarios passed evaluator checks
-- `1`: one or more scenario evaluator failures (structural and/or policy)
-- `3`: coverage gaps found while `fail_on_coverage_gap: true`
-- `4`: hydration failure (no matching DB entity for at least one seed)
+- `1`: one or more executed scenarios failed structural/policy/llm_judge checks
+- `3`: unexpected coverage gaps while `fail_on_coverage_gap: true`
+- `4`: hydration failure (no matching DB entity for a required filter)
 
-## Where results are written
+## Artifacts and persistence
 
-Each run writes an artifact:
+Every run writes:
 
 - `testing/simulator/results/run_<timestamp>.json`
 
-Console output also includes:
+Console output includes:
 
-- coverage table (`covered`, `known_gap`, `gap`)
-- per-seed PASS/FAIL summary
-- artifact file path
+- category/intent coverage table
+- per-scenario PASS/FAIL lines
+- artifact path
 
-The simulator remains artifact-first (JSON files under `testing/simulator/results/`), and can also persist run records into Postgres tables for analytics and future model training:
+When DB persistence is enabled (`--persist-db` or suite default), the simulator writes:
 
-- `simulation_runs`, `simulation_scenarios`, `coverage_snapshots`
+- `simulation_runs`, `coverage_snapshots`, `simulation_scenarios`
 - `simulation_turns`, `simulation_messages`
 - `simulation_evaluations`, `simulation_llm_judgements`
 - `simulation_training_examples`
 
-### Docker Compose simulator service
+Token and latency metrics are captured when available:
 
-You can run the simulator as a Compose service:
+- per turn: `input_tokens`, `output_tokens`, `cache_tokens`, `total_tokens`, `latency_ms`
+- per LLM judge call: provider/model + token usage + latency
+
+## Docker Compose usage
+
+The `simulator` service in `docker-compose.yml` is an idle container when brought up with `docker compose up`.
+Run the CLI manually inside it:
+
+```bash
+docker compose exec simulator python -m testing.simulator.runner --suite testing/simulator/suites/smoke.yaml --iterations 1
+```
+
+One-off Compose execution is also available:
 
 ```bash
 docker compose run --rm simulator
 ```
 
-Override the default suite and behavior with environment variables:
+## Reading failures quickly
 
-```bash
-SIMULATOR_SUITE_PATH=testing/simulator/suites/regression.yaml \
-SIMULATOR_ITERATIONS=5 \
-SIMULATOR_EXTRA_ARGS="--randomize --persist-db" \
-docker compose run --rm simulator
-```
+Use this sequence:
 
-## Optional: inspect run telemetry in Postgres
-
-If you seed `db/postgres/02_seed.sql`, you can quickly inspect SQL-backed run/telemetry data with:
-
-```bash
-psql -c "SELECT * FROM v_simulation_run_summary;"
-psql -c "SELECT * FROM v_simulation_outcome_breakdown;"
-psql -c "SELECT * FROM v_llm_performance_summary;"
-psql -c "SELECT * FROM v_handoff_queue_status;"
-```
-
-Useful tables for deeper inspection:
-
-- `simulation_runs`, `simulation_scenarios`, `coverage_snapshots`
-- `tool_invocations`, `llm_metrics`, `audit_log`
-- `escalation_handoffs`, `session_entities`, `procedure_blueprints`
-
-The schema in `db/postgres/01_schema.sql` now includes JSON columns in `outcomes` for spec-aligned runtime artifacts (`agent_state_json`, `stage_metadata_json`, `output_validation_json`, `context_summary_json`).
-
-## How to interpret results
-
-Use this order when triaging a failed run:
-
-1. **Start with `summary`**
-   - `structural_failures` means the graph behavior/outcome mismatched expectations.
-   - `policy_failures` means policy evidence or eligibility assertions failed.
-
-2. **Inspect failing entries in `scenarios[]`**
-   - check `seed_id`, `final_outcome_status`, `expected_outcome`
-   - inspect `structural.failures` and `policy.failures` (human-readable reasons)
-
-3. **Read the `trace` for the failing scenario**
-   - each turn includes:
-     - `user_message`
-     - `agent_response`
-     - `outcome_status`
-     - `procedure_id`
-     - `validation_missing`
-     - `eligibility_ok`
-     - `agent_state` / `stage_metadata`
-     - `context_data` / `context_summary`
-     - `policy_constraints` (`variables` + `validation_results`)
-     - `output_validation`
-   - this is the fastest way to see whether failure came from classification, validation, policy gating, tool execution, or escalation routing.
-
-4. **Verify hydration assumptions**
-   - confirm `entity_id` and scenario entity fields match the seed filter expectations.
-   - if entity selection drifts due to live DB changes, update seed filters or run against a controlled fixture DB.
+1. Check artifact `summary` (`structural_failures`, `policy_failures`, `llm_judge_failures`).
+2. Open failing `scenarios[]` entries (`seed_id`, `expected_outcome`, `final_outcome_status`).
+3. Inspect `trace[]` turn-by-turn for:
+   - `outcome_status`, `procedure_id`, `validation_missing`
+   - `eligibility_ok`, `policy_constraints`, `context_data`
+   - `agent_state`, `stage_metadata`, `output_validation`, `context_summary`
+4. Validate hydration assumptions (`entity_id` and selected entity fields) against seed `db_filter`.
 
 ## Common failure patterns
 
-- **Hydration error (`exit 4`)**
-  - seed `db_filter` no longer matches current DB contents.
-  - fix by widening status/age filters or refreshing seed data.
-
-- **Unexpected `policy_ineligible`**
-  - check final turn `policy_constraints` and `eligibility_ok`.
-  - verify seed expected outcome aligns with current procedure/policy behavior.
-
-- **Validation loop never resolves**
-  - inspect `validation_missing` across turns.
-  - verify persona behavior and required fields in relevant procedure YAML.
-
-- **Coverage gaps**
-  - add seeds for uncovered `(category, intent)` pairs, or record intentional gaps in `testing/simulator/seeds/gaps.yaml`.
+- Hydration errors (`exit 4`): DB filters too narrow for current data.
+- Unexpected `policy_ineligible`: outcome drifted due to policy/procedure changes.
+- Validation loops: missing fields stay unresolved across turns.
+- Coverage gaps: add seeds or document intentional holes in `testing/simulator/seeds/gaps.yaml`.
 
 ## Suggested workflow
 
-1. Run smoke suite first.
-2. Fix structural failures before policy tuning.
-3. Re-run a single failing seed with `--seed`.
-4. Run regression suite only after smoke is clean.
+1. Run `smoke.yaml` first.
+2. Fix structural/policy failures before enabling LLM judge.
+3. Re-run failing seed with `--seed`.
+4. Use randomized `--iterations`/`--forever` mode for broader scenario sampling.

@@ -80,6 +80,15 @@ def get_blueprint_by_category_intent(category: str, intent: str) -> ProcedureBlu
     return None
 
 
+def canonical_procedure_intent(category: str, intent: str) -> str:
+    """Map legacy classifier intents to blueprint intents."""
+    cat = (category or "").strip().lower()
+    it = (intent or "").strip().lower()
+    if cat == "order" and it == "track_order":
+        return "order_status"
+    return str(intent or "").strip()
+
+
 def get_fallback_blueprint(category: str) -> ProcedureBlueprint | None:
     cat = (category or "").strip().lower()
     for bp in load_blueprints().values():
@@ -98,6 +107,7 @@ def get_blueprint_with_fallback_chain(category: str, intent: str) -> ProcedureBl
     2) (category, *_general fallback)
     3) (unknown, *_general fallback)
     """
+    intent = canonical_procedure_intent(category, intent)
     direct = get_blueprint_by_category_intent(category, intent)
     if direct is not None:
         return direct

@@ -1341,6 +1341,35 @@ def _draft_order_cancel_terminal_response(state: IssueGraphState, step: dict[str
     return None
 
 
+def _draft_order_status_terminal_response(state: IssueGraphState, step: dict[str, Any]) -> str | None:
+    """Deterministic terminal replies for order status lookup (no LLM paraphrase)."""
+    if str(state.get("procedure_id") or "") != "order_status":
+        return None
+    step_id = str(step.get("id") or "")
+    context = dict(state.get("context_data") or {})
+    order_id = str(context.get("order_id_extracted") or "your order").strip() or "your order"
+    order_found = bool(context.get("order_found"))
+    status_raw = str(context.get("order_status") or "").strip()
+    status_disp = status_raw.replace("_", " ").strip().lower() or "available"
+
+    if step_id == "share_status":
+        if not order_found:
+            return (
+                "I could not find that order in our system.\n\n"
+                "Please double-check the order number and share it again (example: ORD-12345)."
+            )
+        return f"Order {order_id} is currently {status_disp}."
+
+    if step_id == "order_not_found":
+        if order_found:
+            return f"Order {order_id} is currently {status_disp}."
+        return (
+            "I could not find that order in our system.\n\n"
+            "Please double-check the order number and share it again (example: ORD-12345)."
+        )
+    return None
+
+
 def _jump_to_step(state: IssueGraphState, next_step_id: str) -> IssueGraphState:
     todo = state.get("todo_list") or []
     for idx, item in enumerate(todo):
@@ -1419,10 +1448,10 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             {"step_id": step.get("id"), "step_type": step_type, "executor_turn_count": turn_count},
         )
     elif step_type == "llm_response":
-        deterministic_reply = _draft_order_cancel_terminal_response(
-            {**state, "context_data": context},
-            step,
-        )
+        state_with_ctx = {**state, "context_data": context}
+        deterministic_reply = _draft_order_cancel_terminal_response(state_with_ctx, step)
+        if deterministic_reply is None:
+            deterministic_reply = _draft_order_status_terminal_response(state_with_ctx, step)
         reply = deterministic_reply if deterministic_reply is not None else _draft_response(state, step)
         return _with_stage_metadata(
             {

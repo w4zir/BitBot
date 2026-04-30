@@ -3,8 +3,8 @@ category: order
 intent: order_status
 keywords:
   - status
-  - track
-  - where is
+  - order status
+  - current status
 required_data:
   - name: order_id
     prompt: Please share your order number (for example ORD-12345) so I can check the status.
@@ -28,4 +28,4 @@ steps:
     message: >
       The order was not found (order_found is false). Tell the customer we could not find this
       order in our system, and ask them to verify their order ID and try again.
-fallback_response: I can track your order once you share your order number.
+fallback_response: I can check your order status once you share your order number.

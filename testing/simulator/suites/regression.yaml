@@ -18,9 +18,3 @@ scenarios:
   - seed_id: order_status_cooperative
   - seed_id: refund_delivered_easy
   - seed_id: refund_missing_data_resistant
-  - seed_id: order_cancel_processing_easy
-  - seed_id: order_cancel_delivered_policy_ineligible
-  - seed_id: order_status_cooperative
-  - seed_id: refund_delivered_easy
-  - seed_id: refund_missing_data_resistant
-  

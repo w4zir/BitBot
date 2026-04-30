@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 from testing.simulator.hydrator import ScenarioInstance
-from testing.simulator.trace import ConversationTrace
+from testing.simulator.trace import ConversationTrace, TurnRecord
 
 
 @dataclass
@@ -12,6 +13,68 @@ class StructuralResult:
     passed: bool
     checks: dict[str, bool]
     failures: list[str]
+
+
+_RESPONSE_DENIES_ORDER_EXISTS_MARKERS = (
+    "could not find an order",
+    "could not find that order",
+    "couldn't find an order",
+    "couldn't find that order",
+    "cannot find an order",
+    "can't find an order",
+    "unable to find an order",
+    "unable to find that order",
+    "no order with",
+    "not find this order",
+    "not find that order",
+)
+
+_ORDER_STATUS_TOKEN_RE = re.compile(
+    r"\b(shipped|delivered|processing|pending|cancelled|canceled)\b",
+    re.IGNORECASE,
+)
+
+
+def _response_denies_order_exists(text: str) -> bool:
+    low = text.lower()
+    return any(marker in low for marker in _RESPONSE_DENIES_ORDER_EXISTS_MARKERS)
+
+
+def _response_mentions_known_order_status(agent_response: str) -> bool:
+    return bool(_ORDER_STATUS_TOKEN_RE.search(agent_response))
+
+
+def _evaluate_order_status_response_context_consistency(
+    final_turn: TurnRecord | None,
+    failures: list[str],
+) -> bool:
+    """Fail when user-facing reply contradicts tool-backed order_found for order_status."""
+    if final_turn is None:
+        return True
+    if str(final_turn.procedure_id or "").strip().lower() != "order_status":
+        return True
+    ctx = final_turn.context_data or {}
+    if "order_found" not in ctx:
+        return True
+    order_found = bool(ctx["order_found"])
+    msg = str(final_turn.agent_response or "")
+    if order_found and _response_denies_order_exists(msg):
+        failures.append(
+            "order_status contradiction: assistant said order was not found but "
+            "context_data.order_found is true."
+        )
+        return False
+    if (
+        not order_found
+        and _response_mentions_known_order_status(msg)
+        and not _response_denies_order_exists(msg)
+    ):
+        failures.append(
+            "order_status contradiction: assistant asserted a fulfillment status "
+            "but context_data.order_found is false."
+        )
+        return False
+    return True
 
 
 def evaluate_structural(
@@ -104,6 +167,9 @@ def evaluate_structural(
     checks["validation_wait_limit_respected"] = wait_limit_ok
     if not wait_limit_ok:
         failures.append("Validation wait counter exceeded configured limit.")
+
+    order_ctx_ok = _evaluate_order_status_response_context_consistency(final_turn, failures)
+    checks["order_status_reply_matches_context"] = order_ctx_ok
 
     return StructuralResult(
         passed=all(checks.values()),

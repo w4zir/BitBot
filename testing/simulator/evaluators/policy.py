@@ -48,6 +48,22 @@ def evaluate_policy(trace: ConversationTrace, scenario: ScenarioInstance) -> Pol
     if not checks["policy_variables_shape"]:
         failures.append("Policy constraints did not include JSON variables and validation_results maps.")
 
+    pc_con = dict(policy_constraints) if isinstance(policy_constraints, dict) else {}
+    pc_elig = pc_con.get("eligible")
+    ctx = dict(context_data) if isinstance(context_data, dict) else {}
+    ctx_elig = ctx.get("policy_eligible") if "policy_eligible" in ctx else None
+    checks["policy_eligibility_fields_consistent"] = True
+    if (
+        pc_elig is not None
+        and ctx_elig is not None
+        and bool(pc_elig) != bool(ctx_elig)
+    ):
+        checks["policy_eligibility_fields_consistent"] = False
+        failures.append(
+            f"policy_constraints.eligible ({pc_elig!r}) disagrees with "
+            f"context_data.policy_eligible ({ctx_elig!r})."
+        )
+
     ineligible = trace.final_outcome_status == "policy_ineligible"
     final_agent_message = (final_turn.agent_response if final_turn else "").lower()
     checks["ineligible_explanation_present"] = (

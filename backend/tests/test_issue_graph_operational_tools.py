@@ -244,3 +244,63 @@ def test_stage_metadata_has_state_context_without_policy_content(monkeypatch) ->
     assert isinstance(state_context, dict)
     assert state_context.get("context_data", {}).get("order_status_before") == "processing"
     assert state_context.get("policy", {}).get("policy_doc_names") == ["Order Policy"]
+
+
+def test_order_status_share_status_reply_is_deterministic() -> None:
+    state = {
+        "procedure_id": "order_status",
+        "text": "status ORD-123",
+        "messages": [{"role": "user", "content": "status ORD-123"}],
+        "todo_list": [{"id": "share_status", "type": "llm_response"}],
+        "current_step_index": 0,
+        "context_data": {
+            "order_id_extracted": "ORD-123",
+            "order_found": True,
+            "order_status": "shipped",
+        },
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    reply = str(out.get("final_response") or "").lower()
+    assert out["current_step_index"] == 1
+    assert "ord-123" in reply
+    assert "shipped" in reply
+    assert "could not find" not in reply
+
+
+def test_order_status_not_found_reply_is_deterministic() -> None:
+    state = {
+        "procedure_id": "order_status",
+        "text": "status ORD-999",
+        "messages": [{"role": "user", "content": "status ORD-999"}],
+        "todo_list": [{"id": "order_not_found", "type": "llm_response"}],
+        "current_step_index": 0,
+        "context_data": {"order_id_extracted": "ORD-999", "order_found": False},
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    reply = str(out.get("final_response") or "").lower()
+    assert out["current_step_index"] == 1
+    assert "could not find" in reply
+
+
+def test_order_status_not_found_step_reports_status_when_order_found() -> None:
+    """If branch id is wrong but context says order was found, still report factual status."""
+    state = {
+        "procedure_id": "order_status",
+        "text": "status ORD-1",
+        "messages": [{"role": "user", "content": "status ORD-1"}],
+        "todo_list": [{"id": "order_not_found", "type": "llm_response"}],
+        "current_step_index": 0,
+        "context_data": {
+            "order_id_extracted": "ORD-1",
+            "order_found": True,
+            "order_status": "delivered",
+        },
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    reply = str(out.get("final_response") or "").lower()
+    assert out["current_step_index"] == 1
+    assert "delivered" in reply
+    assert "could not find" not in reply
