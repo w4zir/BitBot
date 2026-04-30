@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, HTTPException
+from psycopg2 import OperationalError
 
 from backend.agent.issue_graph import (
     run_conversation_graph,
     user_confirms_resolution,
 )
+from backend.agent.persistent_agent import run_persistent_conversation
 from backend.db.messages_repo import (
     append_message,
     create_session,
@@ -125,176 +128,184 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             detail="Postgres not configured; set POSTGRES_HOST (and related env) for full_flow.",
         )
 
-    session_id = (req.session_id or "").strip() or create_session()
-    if req.session_id and not get_session(session_id):
-        raise HTTPException(status_code=404, detail="session_id not found")
+    try:
+        session_id = (req.session_id or "").strip() or create_session()
+        if req.session_id and not get_session(session_id):
+            raise HTTPException(status_code=404, detail="session_id not found")
 
-    pre = get_session_issue_state(session_id) or {}
-    had_resolved = pre.get("resolved_at") is not None
-    issue_locked = bool(pre.get("intent") and not had_resolved)
+        pre = get_session_issue_state(session_id) or {}
+        had_resolved = pre.get("resolved_at") is not None
+        issue_locked = bool(pre.get("intent") and not had_resolved)
 
-    append_message(session_id, "user", text, metadata={"source": "user"})
+        append_message(session_id, "user", text, metadata={"source": "user"})
 
-    history_rows = list_messages(session_id)
-    prior_meta = _latest_assistant_metadata(history_rows)
-    prior_wait_count = int(prior_meta.get("validation_wait_count") or 0)
-    prior_wait_limit = prior_meta.get("validation_wait_limit")
-    if not isinstance(prior_wait_limit, int):
-        prior_wait_limit = None
-    messages_for_graph: list[dict[str, Any]] = []
-    for m in history_rows:
-        messages_for_graph.append(
-            {
-                "role": m["role"],
-                "content": m["content"],
-                "metadata": m.get("metadata") or {},
+        history_rows = list_messages(session_id)
+        prior_meta = _latest_assistant_metadata(history_rows)
+        prior_wait_count = int(prior_meta.get("validation_wait_count") or 0)
+        prior_wait_limit = prior_meta.get("validation_wait_limit")
+        if not isinstance(prior_wait_limit, int):
+            prior_wait_limit = None
+        messages_for_graph: list[dict[str, Any]] = []
+        for m in history_rows:
+            messages_for_graph.append(
+                {
+                    "role": m["role"],
+                    "content": m["content"],
+                    "metadata": m.get("metadata") or {},
+                }
+            )
+
+        # Explicit user confirmation ends the active issue without re-running the graph.
+        if issue_locked and user_confirms_resolution(text):
+            mark_session_resolved(session_id)
+            assistant = (
+                "Great — I've marked this issue as resolved. "
+                "Let me know if you need help with anything else."
+            )
+            assistant_meta = {
+                "category": pre.get("issue_category") or "",
+                "intent": str(pre.get("intent") or ""),
+                "procedure_id": "",
+                "confidence": float(pre.get("issue_confidence") or 0.0),
+                "problem_to_solve": str(pre.get("problem_to_solve") or ""),
+                "resolution": "user_confirmed",
             }
+            append_message(
+                session_id,
+                "assistant",
+                assistant,
+                metadata=assistant_meta,
+            )
+            final_rows = list_messages(session_id)
+            ur = str(pre.get("user_request") or "")
+            problem_to_solve = str(pre.get("problem_to_solve") or "")
+            return ClassifyResponse(
+                session_id=session_id,
+                text=text,
+                category=str(pre.get("issue_category") or ""),
+                intent=str(pre.get("intent") or ""),
+                confidence=float(pre.get("issue_confidence") or 0.0),
+                procedure_id="",
+                validation_ok=None,
+                validation_missing=[],
+                assistant_reply=assistant,
+                messages=_strip_messages(final_rows),
+                assistant_metadata=assistant_meta,
+                session_issue=SessionIssue(
+                    intent=str(pre.get("intent") or ""),
+                    user_request=ur,
+                    problem_to_solve=problem_to_solve,
+                    is_resolved=True,
+                ),
+            )
+
+        persistent_mode = os.getenv("AGENT_PERSISTENT_MODE", "0").strip().lower() not in {"0", "false", "no"}
+        runner = run_persistent_conversation if persistent_mode else run_conversation_graph
+        graph_out = runner(
+            text=text,
+            session_id=session_id,
+            messages=messages_for_graph,
+            issue_locked=issue_locked,
+            locked_category=str(pre.get("issue_category") or "") if issue_locked else None,
+            locked_intent=str(pre.get("intent") or "") if issue_locked else None,
+            locked_problem_to_solve=str(pre.get("problem_to_solve") or "") if issue_locked else None,
+            locked_confidence=float(pre["issue_confidence"])
+            if issue_locked and pre.get("issue_confidence") is not None
+            else None,
+            initial_validation_wait_count=prior_wait_count,
+            initial_validation_wait_limit=prior_wait_limit,
         )
 
-    # Explicit user confirmation ends the active issue without re-running the graph.
-    if issue_locked and user_confirms_resolution(text):
-        mark_session_resolved(session_id)
-        assistant = (
-            "Great — I've marked this issue as resolved. "
-            "Let me know if you need help with anything else."
-        )
-        assistant_meta = {
-            "category": pre.get("issue_category") or "",
-            "intent": str(pre.get("intent") or ""),
-            "procedure_id": "",
-            "confidence": float(pre.get("issue_confidence") or 0.0),
-            "problem_to_solve": str(pre.get("problem_to_solve") or ""),
-            "resolution": "user_confirmed",
+        cat = graph_out.get("category") or "unknown"
+        conf = float(graph_out.get("confidence") or 0.0)
+        intent = str(graph_out.get("intent") or "")
+        problem_to_solve = str(graph_out.get("problem_to_solve") or "")
+        procedure_id = str(graph_out.get("procedure_id") or "")
+        val_ok = graph_out.get("validation_ok")
+        val_missing = list(graph_out.get("validation_missing") or [])
+        assistant = graph_out.get("assistant_reply")
+        meta = graph_out.get("assistant_metadata") or {}
+        resolved_by_graph = bool(graph_out.get("session_resolved_by_graph"))
+
+        assistant_meta: dict[str, Any] = {
+            "category": cat,
+            "intent": intent,
+            "problem_to_solve": problem_to_solve,
+            "procedure_id": procedure_id,
+            "confidence": conf,
+            "context_data": graph_out.get("context_data") if isinstance(graph_out.get("context_data"), dict) else {},
+            "policy_constraints": graph_out.get("policy_constraints")
+            if isinstance(graph_out.get("policy_constraints"), dict)
+            else {},
+            "eligibility_ok": graph_out.get("eligibility_ok")
+            if isinstance(graph_out.get("eligibility_ok"), bool)
+            else None,
+            "outcome_status": str(graph_out.get("outcome_status") or ""),
+            "agent_state": graph_out.get("agent_state")
+            if isinstance(graph_out.get("agent_state"), dict)
+            else {},
+            "stage_metadata": graph_out.get("stage_metadata")
+            if isinstance(graph_out.get("stage_metadata"), dict)
+            else {},
+            "output_validation": graph_out.get("output_validation")
+            if isinstance(graph_out.get("output_validation"), dict)
+            else {},
+            "context_summary": graph_out.get("context_summary")
+            if isinstance(graph_out.get("context_summary"), dict)
+            else {},
+            "validation_wait_count": int(graph_out.get("validation_wait_count") or 0),
+            "validation_wait_limit": int(graph_out.get("validation_wait_limit") or 0),
+            **(meta if isinstance(meta, dict) else {}),
         }
-        append_message(
-            session_id,
-            "assistant",
-            assistant,
-            metadata=assistant_meta,
-        )
+        if val_ok is not None:
+            assistant_meta["validation_ok"] = val_ok
+            assistant_meta["validation_missing"] = val_missing
+
+        if assistant:
+            append_message(
+                session_id,
+                "assistant",
+                assistant,
+                metadata=assistant_meta,
+            )
+
+        # Persist / update session-level issue tracking (new or post-resolution issue only).
+        if not issue_locked:
+            update_session_active_issue(
+                session_id,
+                intent=intent,
+                user_request=text,
+                problem_to_solve=problem_to_solve,
+                issue_category=str(cat),
+                issue_confidence=conf,
+            )
+        if resolved_by_graph:
+            mark_session_resolved(session_id)
+
         final_rows = list_messages(session_id)
-        ur = str(pre.get("user_request") or "")
-        problem_to_solve = str(pre.get("problem_to_solve") or "")
+        post = get_session_issue_state(session_id) or {}
+
         return ClassifyResponse(
             session_id=session_id,
             text=text,
-            category=str(pre.get("issue_category") or ""),
-            intent=str(pre.get("intent") or ""),
-            confidence=float(pre.get("issue_confidence") or 0.0),
-            procedure_id="",
-            validation_ok=None,
-            validation_missing=[],
+            category=str(cat),
+            intent=intent,
+            confidence=conf,
+            procedure_id=procedure_id,
+            validation_ok=val_ok if isinstance(val_ok, bool) else None,
+            validation_missing=val_missing,
             assistant_reply=assistant,
             messages=_strip_messages(final_rows),
-            assistant_metadata=assistant_meta,
+            assistant_metadata=assistant_meta if isinstance(assistant_meta, dict) else {},
             session_issue=SessionIssue(
-                intent=str(pre.get("intent") or ""),
-                user_request=ur,
-                problem_to_solve=problem_to_solve,
-                is_resolved=True,
+                intent=str(post.get("intent") or ""),
+                user_request=str(post.get("user_request") or ""),
+                problem_to_solve=str(post.get("problem_to_solve") or ""),
+                is_resolved=post.get("resolved_at") is not None,
             ),
         )
-
-    graph_out = run_conversation_graph(
-        text=text,
-        session_id=session_id,
-        messages=messages_for_graph,
-        issue_locked=issue_locked,
-        locked_category=str(pre.get("issue_category") or "") if issue_locked else None,
-        locked_intent=str(pre.get("intent") or "") if issue_locked else None,
-        locked_problem_to_solve=str(pre.get("problem_to_solve") or "") if issue_locked else None,
-        locked_confidence=float(pre["issue_confidence"])
-        if issue_locked and pre.get("issue_confidence") is not None
-        else None,
-        initial_validation_wait_count=prior_wait_count,
-        initial_validation_wait_limit=prior_wait_limit,
-    )
-
-    cat = graph_out.get("category") or "unknown"
-    conf = float(graph_out.get("confidence") or 0.0)
-    intent = str(graph_out.get("intent") or "")
-    problem_to_solve = str(graph_out.get("problem_to_solve") or "")
-    procedure_id = str(graph_out.get("procedure_id") or "")
-    val_ok = graph_out.get("validation_ok")
-    val_missing = list(graph_out.get("validation_missing") or [])
-    assistant = graph_out.get("assistant_reply")
-    meta = graph_out.get("assistant_metadata") or {}
-    resolved_by_graph = bool(graph_out.get("session_resolved_by_graph"))
-
-    assistant_meta: dict[str, Any] = {
-        "category": cat,
-        "intent": intent,
-        "problem_to_solve": problem_to_solve,
-        "procedure_id": procedure_id,
-        "confidence": conf,
-        "context_data": graph_out.get("context_data") if isinstance(graph_out.get("context_data"), dict) else {},
-        "policy_constraints": graph_out.get("policy_constraints")
-        if isinstance(graph_out.get("policy_constraints"), dict)
-        else {},
-        "eligibility_ok": graph_out.get("eligibility_ok")
-        if isinstance(graph_out.get("eligibility_ok"), bool)
-        else None,
-        "outcome_status": str(graph_out.get("outcome_status") or ""),
-        "agent_state": graph_out.get("agent_state")
-        if isinstance(graph_out.get("agent_state"), dict)
-        else {},
-        "stage_metadata": graph_out.get("stage_metadata")
-        if isinstance(graph_out.get("stage_metadata"), dict)
-        else {},
-        "output_validation": graph_out.get("output_validation")
-        if isinstance(graph_out.get("output_validation"), dict)
-        else {},
-        "context_summary": graph_out.get("context_summary")
-        if isinstance(graph_out.get("context_summary"), dict)
-        else {},
-        "validation_wait_count": int(graph_out.get("validation_wait_count") or 0),
-        "validation_wait_limit": int(graph_out.get("validation_wait_limit") or 0),
-        **(meta if isinstance(meta, dict) else {}),
-    }
-    if val_ok is not None:
-        assistant_meta["validation_ok"] = val_ok
-        assistant_meta["validation_missing"] = val_missing
-
-    if assistant:
-        append_message(
-            session_id,
-            "assistant",
-            assistant,
-            metadata=assistant_meta,
-        )
-
-    # Persist / update session-level issue tracking (new or post-resolution issue only).
-    if not issue_locked:
-        update_session_active_issue(
-            session_id,
-            intent=intent,
-            user_request=text,
-            problem_to_solve=problem_to_solve,
-            issue_category=str(cat),
-            issue_confidence=conf,
-        )
-    if resolved_by_graph:
-        mark_session_resolved(session_id)
-
-    final_rows = list_messages(session_id)
-    post = get_session_issue_state(session_id) or {}
-
-    return ClassifyResponse(
-        session_id=session_id,
-        text=text,
-        category=str(cat),
-        intent=intent,
-        confidence=conf,
-        procedure_id=procedure_id,
-        validation_ok=val_ok if isinstance(val_ok, bool) else None,
-        validation_missing=val_missing,
-        assistant_reply=assistant,
-        messages=_strip_messages(final_rows),
-        assistant_metadata=assistant_meta if isinstance(assistant_meta, dict) else {},
-        session_issue=SessionIssue(
-            intent=str(post.get("intent") or ""),
-            user_request=str(post.get("user_request") or ""),
-            problem_to_solve=str(post.get("problem_to_solve") or ""),
-            is_resolved=post.get("resolved_at") is not None,
-        ),
-    )
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Postgres unavailable; verify POSTGRES_HOST and database connectivity for full_flow.",
+        ) from exc

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
 
 from backend.agent.procedures import (
     as_dict,
@@ -65,17 +66,33 @@ class IssueGraphState(TypedDict, total=False):
     validation_wait_limit: int
     output_validation: dict[str, Any]
     context_summary: dict[str, Any]
+    classify_intent_attempts: int
+    policy_load_attempts: int
+    executor_turn_count: int
+    enable_persistent_wait_interrupt: bool
 
 
-DEFAULT_VALIDATION_WAIT_LIMIT = 5
+DEFAULT_MAX_NODE_TURNS = 20
 
 
-def _validation_wait_limit() -> int:
-    raw = os.getenv("AGENT_VALIDATION_MAX_USER_WAITS", str(DEFAULT_VALIDATION_WAIT_LIMIT)).strip()
+def _max_node_turns() -> int:
+    raw = os.getenv("AGENT_MAX_NODE_TURNS", str(DEFAULT_MAX_NODE_TURNS)).strip()
     try:
         val = int(raw)
     except ValueError:
-        return DEFAULT_VALIDATION_WAIT_LIMIT
+        return DEFAULT_MAX_NODE_TURNS
+    return max(1, val)
+
+
+MAX_NODE_TURNS = _max_node_turns()
+
+
+def _validation_wait_limit() -> int:
+    raw = os.getenv("AGENT_VALIDATION_MAX_USER_WAITS", str(MAX_NODE_TURNS)).strip()
+    try:
+        val = int(raw)
+    except ValueError:
+        return MAX_NODE_TURNS
     return max(1, val)
 
 
@@ -93,8 +110,31 @@ def _with_stage_metadata(
     details: dict[str, Any] | None = None,
 ) -> IssueGraphState:
     stage_metadata = dict(state.get("stage_metadata") or {})
+    context = dict(state.get("context_data") or {})
+    policy = dict(state.get("policy_constraints") or {})
     stage_metadata[stage_name] = {
         "ts": _utc_now_iso(),
+        "state_context": {
+            "text": str(state.get("text") or ""),
+            "category": str(state.get("category") or ""),
+            "intent": str(state.get("intent") or ""),
+            "procedure_id": str(state.get("procedure_id") or ""),
+            "current_step_index": int(state.get("current_step_index") or 0),
+            "validation_ok": state.get("validation_ok"),
+            "validation_missing": list(state.get("validation_missing") or []),
+            "validation_wait_count": int(state.get("validation_wait_count") or 0),
+            "validation_wait_limit": int(state.get("validation_wait_limit") or _validation_wait_limit()),
+            "eligibility_ok": state.get("eligibility_ok"),
+            "outcome_status": state.get("outcome_status"),
+            "order_status_before": context.get("order_status_before"),
+            "order_status_after": context.get("order_status_after"),
+            "context_data": _compact_context_data(context),
+            "policy": {
+                "eligible": policy.get("eligible"),
+                "reason": policy.get("reason"),
+                "policy_doc_names": list(policy.get("policy_doc_names") or []),
+            },
+        },
         **(details or {}),
     }
     return {
@@ -122,16 +162,17 @@ def _compact_context_data(context_data: dict[str, Any]) -> dict[str, Any]:
         "policy_query",
         "policy_eligible",
         "policy_ineligibility_reason",
+        "policy_doc_names",
         "tool_call",
+        "order_status_before",
+        "order_status_after",
     }
     return {k: v for k, v in context_data.items() if k in keep_keys}
 
 
 def _build_agent_state_snapshot(state: IssueGraphState) -> dict[str, Any]:
-    todo = state.get("todo_list") or []
     idx = int(state.get("current_step_index") or 0)
-    before_step = todo[idx - 1]["id"] if idx > 0 and idx - 1 < len(todo) else None
-    after_step = todo[idx]["id"] if idx < len(todo) else None
+    context = dict(state.get("context_data") or {})
     return {
         "stage": str((state.get("agent_state") or {}).get("stage") or "unknown_stage"),
         "category": str(state.get("category") or ""),
@@ -142,11 +183,15 @@ def _build_agent_state_snapshot(state: IssueGraphState) -> dict[str, Any]:
         "validation_missing": list(state.get("validation_missing") or []),
         "eligibility_ok": state.get("eligibility_ok"),
         "outcome_status": state.get("outcome_status"),
-        "order_state_before": before_step,
-        "order_state_after": after_step,
+        "order_status_before": context.get("order_status_before"),
+        "order_status_after": context.get("order_status_after"),
         "current_step_index": idx,
         "validation_wait_count": int(state.get("validation_wait_count") or 0),
         "validation_wait_limit": int(state.get("validation_wait_limit") or _validation_wait_limit()),
+        "classify_intent_attempts": int(state.get("classify_intent_attempts") or 0),
+        "policy_load_attempts": int(state.get("policy_load_attempts") or 0),
+        "executor_turn_count": int(state.get("executor_turn_count") or 0),
+        "max_node_turns": MAX_NODE_TURNS,
     }
 
 
@@ -434,12 +479,20 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    try:
-        raw = chat_completion(provider=provider, model=model, messages=llm_messages)
-        data = extract_json_object(raw)
-    except Exception as e:  # noqa: BLE001
-        data = {}
-        meta["intent_classifier_error"] = str(e)
+    data: dict[str, Any] = {}
+    attempt_count = 0
+    for attempt_count in range(1, MAX_NODE_TURNS + 1):
+        try:
+            raw = chat_completion(provider=provider, model=model, messages=llm_messages)
+            candidate = extract_json_object(raw)
+            if isinstance(candidate, dict):
+                data = candidate
+            intent_candidate = str(data.get("intent") or "").strip()
+            problem_candidate = str(data.get("problem_to_solve") or "").strip()
+            if intent_candidate or problem_candidate:
+                break
+        except Exception as e:  # noqa: BLE001
+            meta["intent_classifier_error"] = str(e)
 
     intent = str(data.get("intent") or f"{category}_general").strip()
     if not intent:
@@ -457,6 +510,7 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
         **state,
         "intent": intent,
         "problem_to_solve": problem_to_solve,
+        "classify_intent_attempts": attempt_count,
         "assistant_metadata": meta,
     }
     return _with_stage_metadata(
@@ -467,6 +521,7 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
             "intent": intent,
             "problem_to_solve": problem_to_solve,
             "allowed_intents_count": len(allowed_intents),
+            "attempts": attempt_count,
         },
     )
 
@@ -536,11 +591,33 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
     category = str(state.get("category") or "").strip().replace("_", " ")
     intent = str(state.get("intent") or "").strip().replace("_", " ")
     problem_to_solve = str(state.get("problem_to_solve") or "").strip()
-    query = " ".join(x for x in [category, intent, problem_to_solve, text] if x).strip() or "policy"
-    docs = search_policy_docs(query)
+    query_candidates: list[str] = []
+    for candidate in (
+        " ".join(x for x in [category, intent, problem_to_solve, text] if x).strip(),
+        " ".join(x for x in [category, problem_to_solve, text] if x).strip(),
+        " ".join(x for x in [category, text] if x).strip(),
+        text.strip(),
+        category.strip(),
+        "policy",
+    ):
+        if candidate and candidate not in query_candidates:
+            query_candidates.append(candidate)
+
+    docs: list[dict[str, Any]] = []
+    query = "policy"
+    attempts = 0
+    for idx, candidate in enumerate(query_candidates):
+        if idx >= MAX_NODE_TURNS:
+            break
+        attempts += 1
+        query = candidate
+        docs = search_policy_docs(query)
+        if docs:
+            break
     if not docs:
-        logger.warning("Policy load returned no docs for query=%r", query)
+        logger.warning("Policy load returned no docs for query=%r after %s attempts", query, attempts)
     raw_chunks = [str(d.get("content") or "") for d in docs]
+    policy_doc_names = _policy_doc_names(docs)
     status = _extract_order_status_hint(state)
     eligible, reason = _derive_order_cancellation_eligibility(raw_chunks, status)
     context = dict(state.get("context_data") or {})
@@ -577,17 +654,18 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
         "time_limit_hours": None,
         "requires_evidence": False,
         "auto_resolvable": True,
-        "raw_chunks": raw_chunks,
+        "policy_doc_names": policy_doc_names,
         "order_status_hint": status,
     }
     out: IssueGraphState = {
         **state,
+        "policy_load_attempts": attempts,
         "policy_constraints": constraints,
         "context_data": {
             **context,
             "policy_found": bool(docs),
             "policy_query": query,
-            "retrieved_docs": docs,
+            "policy_doc_names": policy_doc_names,
             "policy_eligible": eligible,
             "policy_ineligibility_reason": reason,
             "order_status_hint": status,
@@ -596,7 +674,12 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
     return _with_stage_metadata(
         out,
         "policy_load",
-        {"policy_found": bool(docs), "eligible": eligible, "policy_query": query},
+        {
+            "policy_found": bool(docs),
+            "eligible": eligible,
+            "policy_query": query,
+            "attempts": attempts,
+        },
     )
 
 
@@ -611,6 +694,17 @@ def _build_missing_prompts(required_fields: list[dict[str, Any]], missing_names:
     if not lines:
         return "Please provide the missing details so we can help."
     return "\n".join(lines)
+
+
+def _policy_doc_names(docs: list[dict[str, Any]]) -> list[str]:
+    names: list[str] = []
+    for doc in docs:
+        title = str(doc.get("title") or "").strip()
+        doc_id = str(doc.get("id") or "").strip()
+        candidate = title or doc_id
+        if candidate and candidate not in names:
+            names.append(candidate)
+    return names
 
 
 def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
@@ -643,27 +737,40 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    try:
-        raw = chat_completion(provider=provider, model=model, messages=msgs)
-    except Exception as e:  # noqa: BLE001
+    raw = ""
+    last_err: Exception | None = None
+    validation_attempts = 0
+    for validation_attempts in range(1, MAX_NODE_TURNS + 1):
+        try:
+            raw = chat_completion(provider=provider, model=model, messages=msgs)
+            last_err = None
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    if last_err is not None:
         out_err: IssueGraphState = {
             **state,
             "validation_ok": False,
             "validation_missing": [],
-            "final_response": f"Validation could not run: {e}",
+            "final_response": f"Validation could not run: {last_err}",
             "assistant_metadata": {
                 **dict(state.get("assistant_metadata") or {}),
                 "branch": "validate",
-                "error": str(e),
+                "error": str(last_err),
             },
         }
         return _with_stage_metadata(
             out_err,
             "validate_required",
-            {"required_fields_count": len(required), "validation_ok": False, "error": str(e)},
+            {
+                "required_fields_count": len(required),
+                "validation_ok": False,
+                "error": str(last_err),
+                "attempts": validation_attempts,
+            },
         )
     data = extract_json_object(raw)
-    valid = bool(data.get("valid"))
+    llm_valid = bool(data.get("valid"))
     missing = data.get("missing_field_names") or data.get("missing_fields") or []
     if not isinstance(missing, list):
         missing = []
@@ -671,6 +778,52 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
     extracted_fields = data.get("extracted_fields")
     if not isinstance(extracted_fields, dict):
         extracted_fields = {}
+    context_data = dict(state.get("context_data") or {})
+
+    required_names = [str(item.get("name") or "").strip() for item in required if str(item.get("name") or "").strip()]
+    required_names_lc = {name.lower() for name in required_names}
+    for field_name in required_names:
+        field_lc = field_name.lower()
+        if field_lc == "order_id":
+            strict_order_id = _extract_order_id_from_conversation(state.get("messages") or [], state.get("text"))
+            if strict_order_id:
+                extracted_fields[field_name] = strict_order_id
+                extracted_fields[field_lc] = strict_order_id
+
+    recomputed_missing: list[str] = []
+    for field_name in required_names:
+        field_lc = field_name.lower()
+        if field_lc == "order_id":
+            oid = str(extracted_fields.get(field_name) or extracted_fields.get(field_lc) or "").strip().upper()
+            if not _ORDER_ID_ONLY_RE.match(oid):
+                recomputed_missing.append(field_name)
+    for candidate in missing_strs:
+        field_lc = candidate.lower().strip()
+        if field_lc == "order_id":
+            oid = str(
+                extracted_fields.get("order_id")
+                or extracted_fields.get("ORDER_ID")
+                or extracted_fields.get("Order_Id")
+                or ""
+            ).strip().upper()
+            if _ORDER_ID_ONLY_RE.match(oid):
+                continue
+        if field_lc and field_lc in required_names_lc and all(field_lc != x.lower() for x in recomputed_missing):
+            recomputed_missing.append(next(x for x in required_names if x.lower() == field_lc))
+    if not missing_strs and not llm_valid:
+        # Recover from malformed validator output by checking deterministic fields first.
+        # If the schema has non-deterministic fields, keep validation blocked.
+        if required_names_lc == {"order_id"} and not recomputed_missing:
+            missing_strs = []
+        elif required_names_lc == {"order_id"} and recomputed_missing:
+            missing_strs = recomputed_missing
+        elif recomputed_missing:
+            missing_strs = recomputed_missing
+        else:
+            missing_strs = required_names
+    else:
+        missing_strs = recomputed_missing
+    valid = not missing_strs
 
     assistant_reply: str | None = None
     if not valid:
@@ -684,6 +837,8 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
         "model_provider": provider,
         "model": model,
         "validation_notes": data.get("notes"),
+        "validation_attempts": validation_attempts,
+        "validation_llm_valid": llm_valid,
     }
     out: IssueGraphState = {
         **state,
@@ -691,7 +846,7 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
         "validation_missing": missing_strs,
         "final_response": assistant_reply or state.get("final_response"),
         "context_data": {
-            **dict(state.get("context_data") or {}),
+            **context_data,
             **{str(k): v for k, v in extracted_fields.items() if k},
         },
         "assistant_metadata": meta,
@@ -732,6 +887,8 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
             )
             out["outcome_status"] = "pending_escalation"
             meta["validation_wait_limit_reached"] = True
+        elif bool(out.get("enable_persistent_wait_interrupt")):
+            meta["validation_interrupt_pending"] = True
         out["assistant_metadata"] = meta
     elif not eligibility_ok:
         reason = str(policy_constraints.get("reason") or "").strip()
@@ -913,10 +1070,14 @@ def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[st
     row = get_order_status(oid)
     if not row:
         return {**base, "order_found": False, "order_status": None}
+    prior_context = dict(state.get("context_data") or {})
+    prior_status_before = prior_context.get("order_status_before")
+    status_now = row.get("status")
     return {
         **base,
         "order_found": True,
-        "order_status": row.get("status"),
+        "order_status": status_now,
+        "order_status_before": prior_status_before if prior_status_before is not None else status_now,
         "order_total_amount": row.get("total_amount"),
         "order_data": row,
     }
@@ -953,13 +1114,14 @@ def _retrieve_policy(step: dict[str, Any], state: IssueGraphState) -> dict[str, 
     if not docs:
         logger.warning("Procedure retrieval returned no docs for query=%r", query)
     raw_chunks = [str(d.get("content") or "") for d in docs]
+    policy_doc_names = _policy_doc_names(docs)
     status = _extract_order_status_hint(state)
     eligible, reason = _derive_order_cancellation_eligibility(raw_chunks, status)
     return {
         "policy_found": bool(docs),
         "policy_tool": tool_name,
         "policy_query": query,
-        "retrieved_docs": docs,
+        "policy_doc_names": policy_doc_names,
         "policy_eligible": eligible,
         "policy_ineligibility_reason": reason,
         "order_status_hint": status,
@@ -1190,8 +1352,13 @@ def _jump_to_step(state: IssueGraphState, next_step_id: str) -> IssueGraphState:
 def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
     todo = state.get("todo_list") or []
     idx = int(state.get("current_step_index") or 0)
+    turn_count = int(state.get("executor_turn_count") or 0) + 1
     if idx >= len(todo):
-        return _with_stage_metadata(state, "structured_executor", {"done": True, "current_step_index": idx})
+        return _with_stage_metadata(
+            {**state, "executor_turn_count": turn_count},
+            "structured_executor",
+            {"done": True, "current_step_index": idx, "executor_turn_count": turn_count},
+        )
     step = todo[idx]
     context = dict(state.get("context_data") or {})
     step_type = str(step.get("type") or "")
@@ -1220,9 +1387,15 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
                     "final_response": "I could not run a required backend tool for this request.",
                     "current_step_index": len(todo),
                     "context_data": context,
+                    "executor_turn_count": turn_count,
                 },
                 "structured_executor",
-                {"step_id": step.get("id"), "step_type": step_type, "error": meta["tool_error"]},
+                {
+                    "step_id": step.get("id"),
+                    "step_type": step_type,
+                    "error": meta["tool_error"],
+                    "executor_turn_count": turn_count,
+                },
             )
         context.update(runner(step, state))
     elif step_type == "logic_gate":
@@ -1230,15 +1403,20 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
         branch = _evaluate_condition(cond, context)
         target = str(step.get("on_true") if branch else step.get("on_false") or "")
         return _with_stage_metadata(
-            _jump_to_step({**state, "context_data": context}, target),
+            _jump_to_step({**state, "context_data": context, "executor_turn_count": turn_count}, target),
             "structured_executor",
-            {"step_id": step.get("id"), "step_type": step_type, "branch_target": target},
+            {
+                "step_id": step.get("id"),
+                "step_type": step_type,
+                "branch_target": target,
+                "executor_turn_count": turn_count,
+            },
         )
     elif step_type == "interrupt":
         return _with_stage_metadata(
-            _handle_interrupt_step(step, {**state, "context_data": context}, idx, todo),
+            _handle_interrupt_step(step, {**state, "context_data": context, "executor_turn_count": turn_count}, idx, todo),
             "structured_executor",
-            {"step_id": step.get("id"), "step_type": step_type},
+            {"step_id": step.get("id"), "step_type": step_type, "executor_turn_count": turn_count},
         )
     elif step_type == "llm_response":
         deterministic_reply = _draft_order_cancel_terminal_response(
@@ -1252,9 +1430,10 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             "context_data": context,
             "final_response": reply,
             "current_step_index": idx + 1,
+            "executor_turn_count": turn_count,
             },
             "structured_executor",
-            {"step_id": step.get("id"), "step_type": step_type},
+            {"step_id": step.get("id"), "step_type": step_type, "executor_turn_count": turn_count},
         )
     else:
         meta = dict(state.get("assistant_metadata") or {})
@@ -1266,15 +1445,21 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             "assistant_metadata": meta,
             "final_response": "I hit an unsupported procedure step and cannot continue safely.",
             "current_step_index": len(todo),
+            "executor_turn_count": turn_count,
             },
             "structured_executor",
-            {"step_id": step.get("id"), "step_type": step_type, "error": meta["step_error"]},
+            {
+                "step_id": step.get("id"),
+                "step_type": step_type,
+                "error": meta["step_error"],
+                "executor_turn_count": turn_count,
+            },
         )
 
     return _with_stage_metadata(
-        {**state, "context_data": context, "current_step_index": idx + 1},
+        {**state, "context_data": context, "current_step_index": idx + 1, "executor_turn_count": turn_count},
         "structured_executor",
-        {"step_id": step.get("id"), "step_type": step_type},
+        {"step_id": step.get("id"), "step_type": step_type, "executor_turn_count": turn_count},
     )
 
 
@@ -1312,7 +1497,25 @@ def _build_context_summary(state: IssueGraphState) -> dict[str, Any]:
     }
 
 
+def _with_final_order_status(state: IssueGraphState) -> IssueGraphState:
+    context = dict(state.get("context_data") or {})
+    order_id = str(context.get("order_id_extracted") or "").strip()
+    if not order_id:
+        return state
+    row = get_order_status(order_id)
+    if not row:
+        return state
+    return {
+        **state,
+        "context_data": {
+            **context,
+            "order_status_after": row.get("status"),
+        },
+    }
+
+
 def _outcome_validator_node(state: IssueGraphState) -> IssueGraphState:
+    state = _with_final_order_status(state)
     status = state.get("outcome_status")
     if status in {"needs_more_data", "policy_ineligible", "pending_escalation"}:
         out_terminal = {
@@ -1377,11 +1580,39 @@ def _human_escalation_node(state: IssueGraphState) -> IssueGraphState:
 
 
 def _should_continue(state: IssueGraphState) -> Literal["continue", "end"]:
+    if int(state.get("executor_turn_count") or 0) >= MAX_NODE_TURNS:
+        return "end"
     todo = state.get("todo_list") or []
     idx = int(state.get("current_step_index") or 0)
     if idx >= len(todo):
         return "end"
     return "continue"
+
+
+def _await_user_input_node(state: IssueGraphState) -> IssueGraphState:
+    payload = {
+        "type": "needs_more_data",
+        "validation_missing": list(state.get("validation_missing") or []),
+        "prompt": str(state.get("final_response") or ""),
+        "validation_wait_count": int(state.get("validation_wait_count") or 0),
+        "validation_wait_limit": int(state.get("validation_wait_limit") or _validation_wait_limit()),
+    }
+    resumed = interrupt(payload)
+    updates: dict[str, Any] = {}
+    if isinstance(resumed, dict):
+        if "text" in resumed:
+            updates["text"] = str(resumed.get("text") or "")
+        if isinstance(resumed.get("messages"), list):
+            updates["messages"] = resumed.get("messages") or []
+    return _with_stage_metadata(
+        {**state, **updates},
+        "await_user_input",
+        {
+            "validation_wait_count": payload["validation_wait_count"],
+            "validation_wait_limit": payload["validation_wait_limit"],
+            "missing_count": len(payload["validation_missing"]),
+        },
+    )
 
 
 def _route_after_category(state: IssueGraphState) -> Literal["no_issue_direct", "classify_intent"]:
@@ -1392,10 +1623,17 @@ def _route_after_category(state: IssueGraphState) -> Literal["no_issue_direct", 
     return "classify_intent"
 
 
-def _route_after_validation(state: IssueGraphState) -> Literal["structured_executor", "outcome_validator", "end"]:
+def _route_after_validation(
+    state: IssueGraphState,
+) -> Literal["structured_executor", "outcome_validator", "await_user_input", "end"]:
     if str(state.get("outcome_status") or "") in {"pending_escalation", "policy_ineligible"}:
         return "outcome_validator"
     if state.get("validation_ok") is False:
+        if (
+            bool(state.get("enable_persistent_wait_interrupt"))
+            and int(state.get("validation_wait_count") or 0) < int(state.get("validation_wait_limit") or _validation_wait_limit())
+        ):
+            return "await_user_input"
         return "end"
     return "structured_executor"
 
@@ -1411,7 +1649,7 @@ def _route_after_outcome(state: IssueGraphState) -> Literal["human_escalation", 
         return "human_escalation"
     return "end"
 
-def build_issue_classification_graph():
+def build_issue_classification_graph(*, checkpointer: Any | None = None):
     g: StateGraph[IssueGraphState] = StateGraph(IssueGraphState)
     g.add_node("classify_category", _classify_category_node)
     g.add_node("no_issue_direct", _no_issue_direct_node)
@@ -1420,6 +1658,7 @@ def build_issue_classification_graph():
     g.add_node("fetch_procedure", _fetch_procedure_node)
     g.add_node("policy_load", _policy_load_node)
     g.add_node("validate_required", _data_and_eligibility_validator_node)
+    g.add_node("await_user_input", _await_user_input_node)
     g.add_node("structured_executor", _structured_executor_node)
     g.add_node("outcome_validator", _outcome_validator_node)
     g.add_node("human_escalation", _human_escalation_node)
@@ -1440,9 +1679,11 @@ def build_issue_classification_graph():
         {
             "structured_executor": "structured_executor",
             "outcome_validator": "outcome_validator",
+            "await_user_input": "await_user_input",
             "end": END,
         },
     )
+    g.add_edge("await_user_input", "validate_required")
     g.add_conditional_edges(
         "structured_executor",
         _should_continue,
@@ -1454,6 +1695,8 @@ def build_issue_classification_graph():
         {"human_escalation": "human_escalation", "end": END},
     )
     g.add_edge("human_escalation", END)
+    if checkpointer is not None:
+        return g.compile(checkpointer=checkpointer)
     return g.compile()
 
 
@@ -1523,6 +1766,10 @@ def run_conversation_graph(
             "validation_wait_limit": max(1, int(wait_limit)),
             "output_validation": {},
             "context_summary": {},
+            "classify_intent_attempts": 0,
+            "policy_load_attempts": 0,
+            "executor_turn_count": 0,
+            "enable_persistent_wait_interrupt": False,
         }
     )
     resolved_by_graph = graph_suggests_session_resolved(out)  # type: ignore[arg-type]

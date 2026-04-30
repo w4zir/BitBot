@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter
 
+from backend.db.postgres import get_connection
 from backend.rag.policy_retriever import ping_elasticsearch
 
 router = APIRouter(tags=["health"])
@@ -24,7 +25,15 @@ async def ready() -> dict[str, Any]:
 
     pg_host = os.getenv("POSTGRES_HOST", "").strip()
     if pg_host:
-        out["checks"]["postgres"] = "configured"
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            out["checks"]["postgres"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            out["checks"]["postgres"] = f"unreachable: {e!s}"
+            out["status"] = "degraded"
 
     es_host = os.getenv("ES_HOST", "").strip()
     if es_host:

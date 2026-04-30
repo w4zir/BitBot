@@ -6,6 +6,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-ecom_support}
       POSTGRES_USER: ${POSTGRES_USER:-admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-ecom_support}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
     ports:
       - "5432:5432"
     volumes:
@@ -57,9 +63,24 @@ services:
       ES_POLICY_INDEX: ${ES_POLICY_INDEX:-policy_docs}
       ES_TIMEOUT_SECONDS: ${ES_TIMEOUT_SECONDS:-5}
     depends_on:
-      - postgres
-      - elasticsearch
-      - modernbert
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_started
+      modernbert:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys,urllib.request; resp=urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3); sys.exit(0 if resp.getcode()==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     volumes:
       - ./backend:/app/backend
 

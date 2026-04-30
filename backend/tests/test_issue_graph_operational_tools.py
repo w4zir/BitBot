@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from backend.agent.issue_graph import _outcome_validator_node, _structured_executor_node
+from backend.agent.issue_graph import (
+    _build_agent_state_snapshot,
+    _outcome_validator_node,
+    _structured_executor_node,
+)
 
 
 def test_cancel_order_tool_step_updates_context(monkeypatch) -> None:
@@ -173,3 +177,70 @@ def test_outcome_validator_adds_output_validation_for_cancel(monkeypatch) -> Non
     checks = (out.get("output_validation") or {}).get("checks") or {}
     assert "order_cancel_db_verification" in checks
     assert checks["order_cancel_db_verification"]["valid"] is True
+
+
+def test_order_status_before_after_are_db_backed(monkeypatch) -> None:
+    statuses: dict[str, str] = {"ORD-2010": "processing"}
+
+    def _get_order_status(order_id: str):
+        return {"order_id": order_id, "status": statuses.get(order_id, "")}
+
+    def _cancel_order(order_id: str):
+        statuses[order_id] = "cancelled"
+        return {"ok": True, "order_id": order_id, "status": "cancelled"}
+
+    monkeypatch.setattr("backend.agent.issue_graph.get_order_status", _get_order_status)
+    monkeypatch.setattr("backend.agent.issue_graph.cancel_order_record", _cancel_order)
+
+    state = {
+        "intent": "cancel_order",
+        "procedure_id": "order_cancel",
+        "text": "cancel ORD-2010",
+        "messages": [{"role": "user", "content": "cancel ORD-2010"}],
+        "todo_list": [
+            {"id": "lookup_order", "type": "tool_call", "tool": "check_order_status"},
+            {"id": "cancel_order", "type": "tool_call", "tool": "cancel_order"},
+        ],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+        "validation_ok": True,
+    }
+
+    out1 = _structured_executor_node(state)
+    assert out1["context_data"]["order_status_before"] == "processing"
+
+    out2 = _structured_executor_node(out1)
+    out3 = _outcome_validator_node({**out2, "outcome_status": "resolved"})
+    snap = _build_agent_state_snapshot(out3)
+    assert snap["order_status_before"] == "processing"
+    assert snap["order_status_after"] == "cancelled"
+
+
+def test_stage_metadata_has_state_context_without_policy_content(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_order_status",
+        lambda order_id: {"order_id": order_id, "status": "processing", "total_amount": 12.0},
+    )
+    state = {
+        "text": "track ORD-4444",
+        "messages": [{"role": "user", "content": "track ORD-4444"}],
+        "category": "order",
+        "intent": "order_status",
+        "procedure_id": "order_status",
+        "todo_list": [{"id": "lookup_order", "type": "tool_call", "tool": "check_order_status"}],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+        "policy_constraints": {"policy_doc_names": ["Order Policy"], "raw_chunks": ["secret body"]},
+        "validation_missing": [],
+        "validation_wait_count": 0,
+        "validation_wait_limit": 5,
+    }
+
+    out = _structured_executor_node(state)
+    stage = (out.get("stage_metadata") or {}).get("structured_executor") or {}
+    state_context = stage.get("state_context") or {}
+    assert isinstance(state_context, dict)
+    assert state_context.get("context_data", {}).get("order_status_before") == "processing"
+    assert state_context.get("policy", {}).get("policy_doc_names") == ["Order Policy"]

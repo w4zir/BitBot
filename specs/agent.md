@@ -193,6 +193,8 @@ Each stage defines purpose, input contract, output contract, hard rules, and fai
 - Gate B (Eligibility): `policy_constraints.eligible` must be true.
 - Execution may continue to Stage 8 only if both gates pass.
 - If Gate A fails, ask for missing data and wait for user input loop.
+- The wait loop is bounded by `max_node_turns` (config: `AGENT_MAX_NODE_TURNS`).
+- In persistent mode, Stage 7 pauses with interrupt and resumes at the same node on the next user turn.
 
 **Failure Modes**
 - Gate B fails: set `outcome_status="policy_ineligible"` and route to Stage 9.
@@ -226,6 +228,7 @@ Each stage defines purpose, input contract, output contract, hard rules, and fai
 - Unknown tool/step type is a hard execution error.
 - `logic_gate` condition evaluation uses a structured condition object (`op`, `field`, optional `value`) dispatched through an allowlisted operator map.
 - Loop continues until terminal state or interruption.
+- Executor loops are bounded by `executor_turn_count <= max_node_turns`.
 
 **Failure Modes**
 - Tool failures produce `outcome_status="tool_error"`.
@@ -384,11 +387,15 @@ class AgentState(TypedDict):
     # Execution
     context_data: dict[str, Any]
     final_response: str | None
+    executor_turn_count: int
 
     # Outcome and Handoff
     outcome_status: OutcomeStatus | None
     escalation_bundle: EscalationBundle | None
     assistant_metadata: dict[str, Any]
+    max_node_turns: int
+    classify_intent_attempts: int
+    policy_load_attempts: int
 ```
 
 ## 4) Operational Invariants
@@ -410,3 +417,12 @@ class AgentState(TypedDict):
 6. Escalation is first-class: failures and ineligible paths are intentional, not edge cases.
 7. Blueprint assets are governed artifacts: schema-validated, versioned, and reviewable.
 8. Observability is mandatory: every stage emits trace metadata and deterministic outcomes.
+
+## 6) Retry and Persistence Policy
+
+- `AGENT_MAX_NODE_TURNS` defines the default retry and loop ceiling for node-local retries.
+- `classify_intent` retries strict-JSON extraction up to `max_node_turns` before falling back to `{category}_general`.
+- `policy_load` retries retrieval with progressively broader queries up to `max_node_turns`.
+- `validate_required` retries transient validation-model failures up to `max_node_turns`.
+- Persistent mode uses checkpointing + interrupt/resume to keep the flow anchored at Stage 7 until data is complete or wait limit is reached.
+- `structured_executor` enforces a deterministic safety cap via `executor_turn_count`.

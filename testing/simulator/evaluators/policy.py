@@ -21,8 +21,8 @@ def evaluate_policy(trace: ConversationTrace, scenario: ScenarioInstance) -> Pol
 
     context_data = final_turn.context_data if final_turn else {}
     policy_constraints = final_turn.policy_constraints if final_turn else {}
-    checks["policy_docs_retrieved"] = bool((context_data or {}).get("retrieved_docs")) or bool(
-        (policy_constraints or {}).get("raw_chunks")
+    checks["policy_docs_retrieved"] = bool((context_data or {}).get("policy_doc_names")) or bool(
+        (policy_constraints or {}).get("policy_doc_names")
     )
     if not checks["policy_docs_retrieved"]:
         failures.append("No retrieved policy documents were captured in context_data.")
