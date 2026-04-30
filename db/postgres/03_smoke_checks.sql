@@ -172,51 +172,72 @@ JOIN simulation_runs sr ON sr.id = cs.run_id
 ORDER BY sr.run_id;
 
 -- ---------------------------------------------------------------------------
--- Bulk seed dataset checks (ORD-2001..ORD-2100, users 9..28)
+-- Bulk seed dataset checks (ORD-2001..ORD-11989, users 9..1000)
 -- ---------------------------------------------------------------------------
 
--- Expected fixed counts from bulk expansion block
-SELECT 'bulk_users_9_28' AS check_name, COUNT(*)::int AS n
+-- Expected core totals after seed load
+SELECT 'total_users_expected_1000' AS check_name, COUNT(*)::int AS n
 FROM users
-WHERE user_id BETWEEN 9 AND 28
 UNION ALL
-SELECT 'bulk_orders_2001_2100', COUNT(*)::int
-FROM orders
-WHERE order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
-UNION ALL
-SELECT 'bulk_order_items_11_110', COUNT(*)::int
-FROM order_items
-WHERE item_id BETWEEN 11 AND 110
-UNION ALL
-SELECT 'bulk_payments_txn_9011_9110', COUNT(*)::int
-FROM payments
-WHERE transaction_id BETWEEN 'TXN-9011' AND 'TXN-9110'
-UNION ALL
-SELECT 'bulk_shipments_trk_b001_b060', COUNT(*)::int
-FROM shipments
-WHERE tracking_id BETWEEN 'TRK-B001' AND 'TRK-B060'
-UNION ALL
-SELECT 'bulk_refunds_5_19', COUNT(*)::int
-FROM refund_requests
-WHERE refund_id BETWEEN 5 AND 19;
+SELECT 'total_orders_expected_10000', COUNT(*)::int
+FROM orders;
 
--- Bulk order status distribution should be 25/20/40/15
+-- Expected generated-range counts from bulk expansion block
+SELECT 'bulk_users_9_1000' AS check_name, COUNT(*)::int AS n
+FROM users
+WHERE user_id BETWEEN 9 AND 1000
+UNION ALL
+SELECT 'bulk_orders_2001_11989', COUNT(*)::int
+FROM orders
+WHERE split_part(order_id, '-', 2)::int BETWEEN 2001 AND 11989
+UNION ALL
+SELECT 'bulk_order_items_11_9999', COUNT(*)::int
+FROM order_items
+WHERE item_id BETWEEN 11 AND 9999
+UNION ALL
+SELECT 'bulk_payments_txn_9011_18999', COUNT(*)::int
+FROM payments
+WHERE split_part(transaction_id, '-', 2)::int BETWEEN 9011 AND 18999
+UNION ALL
+SELECT 'bulk_products_7_306', COUNT(*)::int
+FROM products
+WHERE product_id BETWEEN 7 AND 306
+UNION ALL
+SELECT 'bulk_shipments_for_generated_orders', COUNT(*)::int
+FROM shipments s
+JOIN orders o ON o.order_id = s.order_id
+WHERE split_part(o.order_id, '-', 2)::int BETWEEN 2001 AND 11989
+UNION ALL
+SELECT 'bulk_refunds_5_1204', COUNT(*)::int
+FROM refund_requests
+WHERE refund_id BETWEEN 5 AND 1204;
+
+-- Bulk order status distribution should stay close to 25/20/40/15 split.
 SELECT status, COUNT(*)::int AS n
 FROM orders
-WHERE order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+WHERE split_part(order_id, '-', 2)::int BETWEEN 2001 AND 11989
 GROUP BY status
 ORDER BY status;
 
--- Coverage per new user: each user should own exactly five bulk orders
-SELECT user_id, COUNT(*)::int AS order_count
-FROM orders
-WHERE order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
-GROUP BY user_id
-ORDER BY user_id;
+-- Coverage per generated user: min/max generated orders per user should be 10/11.
+SELECT
+  MIN(order_count)::int AS min_orders_per_bulk_user,
+  MAX(order_count)::int AS max_orders_per_bulk_user,
+  ROUND(AVG(order_count)::numeric, 3) AS avg_orders_per_bulk_user
+FROM (
+  SELECT user_id, COUNT(*) AS order_count
+  FROM orders
+  WHERE split_part(order_id, '-', 2)::int BETWEEN 2001 AND 11989
+  GROUP BY user_id
+) per_user;
 
--- Late shipment scenarios in bulk set (delay_reason populated)
-SELECT tracking_id, order_id, shipping_tier, delay_reason
-FROM shipments
-WHERE tracking_id BETWEEN 'TRK-B001' AND 'TRK-B060'
+-- Late shipment scenarios in expanded bulk set (delay_reason populated)
+SELECT
+  delay_reason,
+  COUNT(*)::int AS shipment_count
+FROM shipments s
+JOIN orders o ON o.order_id = s.order_id
+WHERE split_part(o.order_id, '-', 2)::int BETWEEN 2001 AND 11989
   AND delay_reason IS NOT NULL
-ORDER BY tracking_id;
+GROUP BY delay_reason
+ORDER BY delay_reason;

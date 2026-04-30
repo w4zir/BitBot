@@ -163,16 +163,16 @@ ON CONFLICT (refund_id) DO UPDATE SET
   decision_reason = EXCLUDED.decision_reason;
 
 -- ---------------------------------------------------------------------------
--- Bulk expansion dataset: +20 users and +100 orders with related entities
+-- Bulk expansion dataset: +992 users and +9,989 orders with related entities
 -- ---------------------------------------------------------------------------
 
 INSERT INTO users (user_id, email, status, created_at)
 SELECT
   user_id,
-  format('bulk_user_%s@example.com', lpad((user_id - 8)::text, 2, '0')) AS email,
-  CASE WHEN user_id IN (13, 26) THEN 'suspended' ELSE 'active' END AS status,
+  format('bulk_user_%s@example.com', lpad((user_id - 8)::text, 4, '0')) AS email,
+  CASE WHEN user_id % 127 = 0 THEN 'suspended' ELSE 'active' END AS status,
   TIMESTAMP '2026-01-01' + ((user_id - 9) || ' days')::interval AS created_at
-FROM generate_series(9, 28) AS g(user_id)
+FROM generate_series(9, 1000) AS g(user_id)
 ON CONFLICT (user_id) DO UPDATE SET
   email = EXCLUDED.email,
   status = EXCLUDED.status,
@@ -180,29 +180,50 @@ ON CONFLICT (user_id) DO UPDATE SET
 
 INSERT INTO loyalty_accounts (user_id, annual_spend, tier, benefits_json)
 SELECT
-  t.user_id,
-  t.annual_spend,
-  t.tier,
+  user_id,
+  annual_spend,
+  tier,
   CASE
-    WHEN t.tier = 'Gold' THEN '{"discount": 0.10, "priority_support": true, "free_shipping_tier": "expedited"}'::jsonb
-    WHEN t.tier = 'Silver' THEN '{"discount": 0.05, "free_shipping_tier": "standard"}'::jsonb
+    WHEN tier = 'Gold' THEN '{"discount": 0.10, "priority_support": true, "free_shipping_tier": "expedited"}'::jsonb
+    WHEN tier = 'Silver' THEN '{"discount": 0.05, "free_shipping_tier": "standard"}'::jsonb
     ELSE '{"discount": 0.02, "free_shipping_tier": "standard"}'::jsonb
   END AS benefits_json
 FROM (
-  VALUES
-    (10, 780.00, 'Bronze'),
-    (12, 1280.00, 'Silver'),
-    (15, 2360.00, 'Gold'),
-    (18, 930.00, 'Bronze'),
-    (20, 1440.00, 'Silver'),
-    (22, 2550.00, 'Gold'),
-    (24, 1010.00, 'Bronze'),
-    (27, 1660.00, 'Silver')
-) AS t(user_id, annual_spend, tier)
+  SELECT
+    user_id,
+    round((600 + ((user_id - 9) % 450) * 8.25)::numeric, 2) AS annual_spend,
+    CASE
+      WHEN user_id % 10 = 0 THEN 'Gold'
+      WHEN user_id % 3 = 0 THEN 'Silver'
+      ELSE 'Bronze'
+    END AS tier
+  FROM generate_series(9, 1000) AS g(user_id)
+) AS t
 ON CONFLICT (user_id) DO UPDATE SET
   annual_spend = EXCLUDED.annual_spend,
   tier = EXCLUDED.tier,
   benefits_json = EXCLUDED.benefits_json;
+
+INSERT INTO products (product_id, sku, name, price, is_available, metadata)
+SELECT
+  6 + seq AS product_id,
+  format('SKU-BULK-%s', lpad(seq::text, 4, '0')) AS sku,
+  format('Catalog Item %s', lpad(seq::text, 4, '0')) AS name,
+  round((5.00 + seq * 0.85)::numeric, 2) AS price,
+  (seq % 17 <> 0) AS is_available,
+  jsonb_build_object(
+    'category',
+    (ARRAY['electronics', 'home', 'appliances', 'accessories', 'office', 'fitness'])[((seq - 1) % 6) + 1],
+    'seed_group',
+    'bulk_catalog'
+  ) AS metadata
+FROM generate_series(1, 300) AS s(seq)
+ON CONFLICT (product_id) DO UPDATE SET
+  sku = EXCLUDED.sku,
+  name = EXCLUDED.name,
+  price = EXCLUDED.price,
+  is_available = EXCLUDED.is_available,
+  metadata = EXCLUDED.metadata;
 
 INSERT INTO orders (
   order_id, user_id, order_date, status, total_amount,
@@ -210,20 +231,20 @@ INSERT INTO orders (
 )
 SELECT
   format('ORD-%s', 2000 + seq) AS order_id,
-  9 + ((seq - 1) % 20) AS user_id,
+  9 + ((seq - 1) % 992) AS user_id,
   TIMESTAMP '2026-04-01 08:00:00' + (seq || ' hours')::interval AS order_date,
   CASE
-    WHEN seq <= 25 THEN 'processing'
-    WHEN seq <= 45 THEN 'shipped'
-    WHEN seq <= 85 THEN 'delivered'
+    WHEN seq % 20 BETWEEN 0 AND 4 THEN 'processing'
+    WHEN seq % 20 BETWEEN 5 AND 8 THEN 'shipped'
+    WHEN seq % 20 BETWEEN 9 AND 16 THEN 'delivered'
     ELSE 'cancelled'
   END AS status,
-  round((19.95 + seq * 3.17)::numeric, 2) AS total_amount,
+  round((19.95 + ((seq % 500) * 3.17) + ((seq % 7) * 1.25))::numeric, 2) AS total_amount,
   format('%s Seed Lane', seq) AS shipping_address_line,
   (ARRAY['Seattle', 'Austin', 'Boston', 'Denver', 'Miami', 'Chicago', 'Phoenix', 'Dallas', 'Portland', 'Atlanta'])[((seq - 1) % 10) + 1] AS shipping_city,
   lpad((90000 + seq)::text, 5, '0') AS shipping_postal_code,
   'US' AS shipping_country
-FROM generate_series(1, 100) AS s(seq)
+FROM generate_series(1, 9989) AS s(seq)
 ON CONFLICT (order_id) DO UPDATE SET
   user_id = EXCLUDED.user_id,
   order_date = EXCLUDED.order_date,
@@ -258,8 +279,8 @@ SELECT
   END AS category,
   (seq % 11 = 0) AS is_opened,
   1 + (seq % 3) AS qty,
-  round((19.95 + seq * 3.17)::numeric, 2) AS price
-FROM generate_series(1, 100) AS s(seq)
+  round((19.95 + ((seq % 500) * 3.17) + ((seq % 7) * 1.25))::numeric, 2) AS price
+FROM generate_series(1, 9989) AS s(seq)
 ON CONFLICT (item_id) DO UPDATE SET
   order_id = EXCLUDED.order_id,
   item_name = EXCLUDED.item_name,
@@ -272,19 +293,19 @@ INSERT INTO payments (transaction_id, order_id, amount, method, payment_status, 
 SELECT
   format('TXN-%s', 9010 + seq) AS transaction_id,
   format('ORD-%s', 2000 + seq) AS order_id,
-  round((19.95 + seq * 3.17)::numeric, 2) AS amount,
+  round((19.95 + ((seq % 500) * 3.17) + ((seq % 7) * 1.25))::numeric, 2) AS amount,
   CASE (seq % 3)
     WHEN 0 THEN 'credit_card'
     WHEN 1 THEN 'paypal'
     ELSE 'apple_pay'
   END AS method,
   CASE
-    WHEN seq > 85 THEN 'refunded'
-    WHEN seq <= 25 AND seq % 10 = 0 THEN 'pending'
+    WHEN seq % 20 BETWEEN 17 AND 19 THEN 'refunded'
+    WHEN seq % 20 BETWEEN 0 AND 4 AND seq % 10 = 0 THEN 'pending'
     ELSE 'captured'
   END AS payment_status,
   TIMESTAMP '2026-04-01 08:05:00' + (seq || ' hours')::interval AS charged_at
-FROM generate_series(1, 100) AS s(seq)
+FROM generate_series(1, 9989) AS s(seq)
 ON CONFLICT (transaction_id) DO UPDATE SET
   order_id = EXCLUDED.order_id,
   amount = EXCLUDED.amount,
@@ -299,12 +320,12 @@ WITH shipment_candidates AS (
     o.status,
     row_number() OVER (ORDER BY o.order_id) AS rn
   FROM orders o
-  WHERE o.order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+  WHERE split_part(o.order_id, '-', 2)::int BETWEEN 2001 AND 11989
     AND o.status IN ('shipped', 'delivered')
 )
 INSERT INTO shipments (tracking_id, order_id, shipping_tier, promised_delivery_at, actual_delivery_at, delay_reason)
 SELECT
-  format('TRK-B%s', lpad(rn::text, 3, '0')) AS tracking_id,
+  format('TRK-B%s', split_part(order_id, '-', 2)) AS tracking_id,
   order_id,
   CASE WHEN rn % 3 = 0 THEN 'priority' ELSE 'standard' END AS shipping_tier,
   order_date + INTERVAL '3 days' AS promised_delivery_at,
@@ -332,7 +353,7 @@ WITH delivered_orders AS (
     o.order_date,
     row_number() OVER (ORDER BY o.order_id) AS rn
   FROM orders o
-  WHERE o.order_id BETWEEN 'ORD-2001' AND 'ORD-2100'
+  WHERE split_part(o.order_id, '-', 2)::int BETWEEN 2001 AND 11989
     AND o.status = 'delivered'
 )
 INSERT INTO refund_requests (refund_id, order_id, reason, requested_at, decision, decision_reason)
@@ -356,7 +377,7 @@ SELECT
     ELSE NULL
   END AS decision_reason
 FROM delivered_orders
-WHERE rn <= 15
+WHERE rn <= 1200
 ON CONFLICT (refund_id) DO UPDATE SET
   order_id = EXCLUDED.order_id,
   reason = EXCLUDED.reason,
@@ -1277,6 +1298,235 @@ ON CONFLICT (id) DO UPDATE SET
   unexpected_gaps = EXCLUDED.unexpected_gaps,
   coverage_ratio = EXCLUDED.coverage_ratio,
   gap_details = EXCLUDED.gap_details,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO simulation_turns (
+    id, scenario_id, turn_number, request_started_at, response_received_at, latency_ms,
+    outcome_status, procedure_id, category, intent, validation_missing,
+    policy_constraints, context_data, request_payload, response_payload,
+    input_tokens, output_tokens, cache_tokens, total_tokens, created_at
+) VALUES
+(
+    '9a000000-0000-4000-8000-000000000001',
+    '98000000-0000-4000-8000-000000000001',
+    1,
+    '2026-04-17 09:00:10+00',
+    '2026-04-17 09:00:11+00',
+    842.0,
+    'resolved',
+    'order_status_v1',
+    'order',
+    'track_order',
+    '[]'::jsonb,
+    '{"variables":{"order_status":"processing"},"validation_results":{"order_id":true}}'::jsonb,
+    '{"policy_doc_names":["shipping_status_policy"]}'::jsonb,
+    '{"text":"Where is my order ORD-1001?","full_flow":true}'::jsonb,
+    '{"assistant_reply":"Your order is on the way."}'::jsonb,
+    85,
+    36,
+    0,
+    121,
+    '2026-04-17 09:00:11+00'
+),
+(
+    '9a000000-0000-4000-8000-000000000002',
+    '98000000-0000-4000-8000-000000000002',
+    1,
+    '2026-04-15 11:05:01+00',
+    '2026-04-15 11:05:03+00',
+    1564.0,
+    'pending_escalation',
+    'refund_policy_v2',
+    'refund',
+    'get_refund',
+    '[]'::jsonb,
+    '{"variables":{"refund_window_hours":48},"validation_results":{"order_id":true}}'::jsonb,
+    '{"policy_doc_names":["refund_eligibility_policy"]}'::jsonb,
+    '{"text":"I need a refund for ORD-1008.","full_flow":true}'::jsonb,
+    '{"assistant_reply":"I am escalating this to a human specialist."}'::jsonb,
+    110,
+    42,
+    0,
+    152,
+    '2026-04-15 11:05:03+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  scenario_id = EXCLUDED.scenario_id,
+  turn_number = EXCLUDED.turn_number,
+  request_started_at = EXCLUDED.request_started_at,
+  response_received_at = EXCLUDED.response_received_at,
+  latency_ms = EXCLUDED.latency_ms,
+  outcome_status = EXCLUDED.outcome_status,
+  procedure_id = EXCLUDED.procedure_id,
+  category = EXCLUDED.category,
+  intent = EXCLUDED.intent,
+  validation_missing = EXCLUDED.validation_missing,
+  policy_constraints = EXCLUDED.policy_constraints,
+  context_data = EXCLUDED.context_data,
+  request_payload = EXCLUDED.request_payload,
+  response_payload = EXCLUDED.response_payload,
+  input_tokens = EXCLUDED.input_tokens,
+  output_tokens = EXCLUDED.output_tokens,
+  cache_tokens = EXCLUDED.cache_tokens,
+  total_tokens = EXCLUDED.total_tokens,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO simulation_messages (
+    id, scenario_id, turn_id, message_index, role, content, metadata_json,
+    input_tokens, output_tokens, cache_tokens, total_tokens, latency_ms, created_at
+) VALUES
+(
+    '9b000000-0000-4000-8000-000000000001',
+    '98000000-0000-4000-8000-000000000001',
+    '9a000000-0000-4000-8000-000000000001',
+    1,
+    'user',
+    'Where is my order ORD-1001?',
+    '{"seed_id":"order_status_smoke"}'::jsonb,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    '2026-04-17 09:00:10+00'
+),
+(
+    '9b000000-0000-4000-8000-000000000002',
+    '98000000-0000-4000-8000-000000000001',
+    '9a000000-0000-4000-8000-000000000001',
+    2,
+    'assistant',
+    'Your order is on the way.',
+    '{"outcome_status":"resolved"}'::jsonb,
+    85,
+    36,
+    0,
+    121,
+    842.0,
+    '2026-04-17 09:00:11+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  scenario_id = EXCLUDED.scenario_id,
+  turn_id = EXCLUDED.turn_id,
+  message_index = EXCLUDED.message_index,
+  role = EXCLUDED.role,
+  content = EXCLUDED.content,
+  metadata_json = EXCLUDED.metadata_json,
+  input_tokens = EXCLUDED.input_tokens,
+  output_tokens = EXCLUDED.output_tokens,
+  cache_tokens = EXCLUDED.cache_tokens,
+  total_tokens = EXCLUDED.total_tokens,
+  latency_ms = EXCLUDED.latency_ms,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO simulation_evaluations (
+    id, scenario_id, evaluator_name, passed, checks_json, failures_json, details_json, evaluated_at, created_at
+) VALUES
+(
+    '9c000000-0000-4000-8000-000000000001',
+    '98000000-0000-4000-8000-000000000001',
+    'structural',
+    true,
+    '{"outcome_status_match":true,"procedure_id_match":true}'::jsonb,
+    '[]'::jsonb,
+    '{}'::jsonb,
+    '2026-04-17 09:02:00+00',
+    '2026-04-17 09:02:00+00'
+),
+(
+    '9c000000-0000-4000-8000-000000000002',
+    '98000000-0000-4000-8000-000000000002',
+    'llm_judge',
+    false,
+    '{"groundedness":false}'::jsonb,
+    '["LLM judge score below threshold for groundedness."]'::jsonb,
+    '{"scores":{"groundedness":3.0},"thresholds":{"groundedness":4.0}}'::jsonb,
+    '2026-04-15 11:08:00+00',
+    '2026-04-15 11:08:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  scenario_id = EXCLUDED.scenario_id,
+  evaluator_name = EXCLUDED.evaluator_name,
+  passed = EXCLUDED.passed,
+  checks_json = EXCLUDED.checks_json,
+  failures_json = EXCLUDED.failures_json,
+  details_json = EXCLUDED.details_json,
+  evaluated_at = EXCLUDED.evaluated_at,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO simulation_llm_judgements (
+    id, scenario_id, provider, model_name, passed, scores_json, rationales_json,
+    thresholds_json, failures_json, raw_response_json, latency_ms,
+    input_tokens, output_tokens, cache_tokens, total_tokens, created_at
+) VALUES
+(
+    '9d000000-0000-4000-8000-000000000001',
+    '98000000-0000-4000-8000-000000000002',
+    'ollama',
+    'llama3.2',
+    false,
+    '{"tone":4.0,"completeness":3.0,"groundedness":3.0,"escalation_appropriateness":4.0,"resolution_clarity":3.0}'::jsonb,
+    '{"groundedness":"Response referenced details not present in context."}'::jsonb,
+    '{"tone":3.0,"completeness":3.0,"groundedness":4.0,"escalation_appropriateness":3.0,"resolution_clarity":3.0}'::jsonb,
+    '["LLM judge score below threshold for groundedness (3.00 < 4.00)."]'::jsonb,
+    '{"groundedness":{"score":3,"rationale":"..."} }'::jsonb,
+    902.0,
+    220,
+    75,
+    0,
+    295,
+    '2026-04-15 11:08:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  scenario_id = EXCLUDED.scenario_id,
+  provider = EXCLUDED.provider,
+  model_name = EXCLUDED.model_name,
+  passed = EXCLUDED.passed,
+  scores_json = EXCLUDED.scores_json,
+  rationales_json = EXCLUDED.rationales_json,
+  thresholds_json = EXCLUDED.thresholds_json,
+  failures_json = EXCLUDED.failures_json,
+  raw_response_json = EXCLUDED.raw_response_json,
+  latency_ms = EXCLUDED.latency_ms,
+  input_tokens = EXCLUDED.input_tokens,
+  output_tokens = EXCLUDED.output_tokens,
+  cache_tokens = EXCLUDED.cache_tokens,
+  total_tokens = EXCLUDED.total_tokens,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO simulation_training_examples (
+    id, run_id, scenario_id, session_id, example_format, messages_json, prompt_text, response_text,
+    labels_json, modernbert_category, modernbert_intent, outcome_status, metadata_json, created_at
+) VALUES
+(
+    '9e000000-0000-4000-8000-000000000001',
+    '97000000-0000-4000-8000-000000000001',
+    '98000000-0000-4000-8000-000000000001',
+    '11111111-1111-4111-8111-111111111101',
+    'chatml',
+    '[{"role":"user","content":"Where is my order ORD-1001?"},{"role":"assistant","content":"Your order is on the way."}]'::jsonb,
+    'Where is my order ORD-1001?',
+    'Your order is on the way.',
+    '{"category":"order","intent":"track_order","seed_id":"order_status_smoke"}'::jsonb,
+    'order',
+    'track_order',
+    'resolved',
+    '{"source":"seed_data"}'::jsonb,
+    '2026-04-17 09:02:00+00'
+)
+ON CONFLICT (id) DO UPDATE SET
+  run_id = EXCLUDED.run_id,
+  scenario_id = EXCLUDED.scenario_id,
+  session_id = EXCLUDED.session_id,
+  example_format = EXCLUDED.example_format,
+  messages_json = EXCLUDED.messages_json,
+  prompt_text = EXCLUDED.prompt_text,
+  response_text = EXCLUDED.response_text,
+  labels_json = EXCLUDED.labels_json,
+  modernbert_category = EXCLUDED.modernbert_category,
+  modernbert_intent = EXCLUDED.modernbert_intent,
+  outcome_status = EXCLUDED.outcome_status,
+  metadata_json = EXCLUDED.metadata_json,
   created_at = EXCLUDED.created_at;
 
 COMMIT;

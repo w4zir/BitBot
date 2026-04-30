@@ -23,6 +23,11 @@ DROP TABLE IF EXISTS evaluation_scores CASCADE;
 DROP TABLE IF EXISTS outcomes CASCADE;
 DROP TABLE IF EXISTS agent_spans CASCADE;
 DROP TABLE IF EXISTS coverage_snapshots CASCADE;
+DROP TABLE IF EXISTS simulation_training_examples CASCADE;
+DROP TABLE IF EXISTS simulation_llm_judgements CASCADE;
+DROP TABLE IF EXISTS simulation_evaluations CASCADE;
+DROP TABLE IF EXISTS simulation_messages CASCADE;
+DROP TABLE IF EXISTS simulation_turns CASCADE;
 DROP TABLE IF EXISTS simulation_scenarios CASCADE;
 DROP TABLE IF EXISTS simulation_runs CASCADE;
 DROP TABLE IF EXISTS audit_log CASCADE;
@@ -380,6 +385,7 @@ CREATE TABLE simulation_runs (
     status VARCHAR(30) NOT NULL DEFAULT 'running',
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
+    run_metadata_json JSONB,
     summary_json JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -416,6 +422,99 @@ CREATE TABLE coverage_snapshots (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE simulation_turns (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    turn_number INTEGER NOT NULL,
+    request_started_at TIMESTAMPTZ,
+    response_received_at TIMESTAMPTZ,
+    latency_ms NUMERIC(12, 3),
+    outcome_status VARCHAR(80),
+    procedure_id VARCHAR(200),
+    category VARCHAR(100),
+    intent VARCHAR(200),
+    validation_missing JSONB,
+    policy_constraints JSONB,
+    context_data JSONB,
+    agent_state JSONB,
+    stage_metadata JSONB,
+    output_validation JSONB,
+    context_summary JSONB,
+    request_payload JSONB,
+    response_payload JSONB,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_tokens INTEGER,
+    total_tokens INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (scenario_id, turn_number)
+);
+
+CREATE TABLE simulation_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    turn_id UUID REFERENCES simulation_turns(id) ON DELETE SET NULL,
+    message_index INTEGER NOT NULL,
+    role VARCHAR(20) NOT NULL,
+    content TEXT NOT NULL,
+    metadata_json JSONB,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_tokens INTEGER,
+    total_tokens INTEGER,
+    latency_ms NUMERIC(12, 3),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE simulation_evaluations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    evaluator_name VARCHAR(40) NOT NULL,
+    passed BOOLEAN NOT NULL,
+    checks_json JSONB,
+    failures_json JSONB,
+    details_json JSONB,
+    evaluated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (scenario_id, evaluator_name)
+);
+
+CREATE TABLE simulation_llm_judgements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL UNIQUE REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    provider VARCHAR(40) NOT NULL,
+    model_name VARCHAR(120) NOT NULL,
+    passed BOOLEAN NOT NULL,
+    scores_json JSONB,
+    rationales_json JSONB,
+    thresholds_json JSONB,
+    failures_json JSONB,
+    raw_response_json JSONB,
+    latency_ms NUMERIC(12, 3),
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_tokens INTEGER,
+    total_tokens INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE simulation_training_examples (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
+    scenario_id UUID NOT NULL UNIQUE REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    example_format VARCHAR(40) NOT NULL DEFAULT 'chatml',
+    messages_json JSONB NOT NULL,
+    prompt_text TEXT,
+    response_text TEXT,
+    labels_json JSONB,
+    modernbert_category VARCHAR(100),
+    modernbert_intent VARCHAR(200),
+    outcome_status VARCHAR(80),
+    metadata_json JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX idx_agent_spans_session_id ON agent_spans (session_id);
 CREATE INDEX idx_agent_spans_timestamp ON agent_spans ("timestamp");
 CREATE INDEX idx_outcomes_session_id ON outcomes (session_id);
@@ -436,6 +535,11 @@ CREATE INDEX idx_audit_log_entity ON audit_log (entity_type, entity_id, occurred
 CREATE INDEX idx_simulation_runs_status ON simulation_runs (status, started_at DESC);
 CREATE INDEX idx_simulation_scenarios_run ON simulation_scenarios (run_id, category, intent);
 CREATE INDEX idx_coverage_snapshots_run ON coverage_snapshots (run_id);
+CREATE INDEX idx_simulation_turns_scenario ON simulation_turns (scenario_id, turn_number);
+CREATE INDEX idx_simulation_messages_scenario ON simulation_messages (scenario_id, message_index);
+CREATE INDEX idx_simulation_evaluations_scenario ON simulation_evaluations (scenario_id, evaluator_name);
+CREATE INDEX idx_simulation_llm_judgements_scenario ON simulation_llm_judgements (scenario_id);
+CREATE INDEX idx_simulation_training_examples_run ON simulation_training_examples (run_id, modernbert_category, modernbert_intent);
 
 CREATE OR REPLACE VIEW v_automation_rate AS
 SELECT

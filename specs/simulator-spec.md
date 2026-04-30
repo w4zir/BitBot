@@ -12,9 +12,9 @@ The simulator is an end-to-end testing framework that generates realistic custom
 
 - **DB-grounded scenarios**: every test scenario is hydrated with real entities (orders, users, subscriptions) from the database so that tool calls, eligibility gates, and policy constraints are exercised against actual data, not fabricated IDs.
 - **Deterministic seeds, variable instances**: a seed defines the shape of a test (category, intent, difficulty, persona); an instance is the seed hydrated with DB data. Seeds are versioned in git; instances are generated at runtime.
-- **Graph-aware evaluation**: the agent already exposes `outcome_status`, `procedure_id`, `policy_constraints`, and `escalation_bundle` through `assistant_metadata`. Evaluators use these structured signals as primary pass/fail criteria. LLM judges are supplementary.
+- **Graph-aware evaluation**: the agent response includes `outcome_status`, `procedure_id`, `policy_constraints`, `agent_state`, `stage_metadata`, and related metadata through `assistant_metadata`. Evaluators use these structured signals as primary pass/fail criteria. LLM judges are supplementary.
 - **Config-driven runs**: every run is fully specified by a YAML config. No hardcoded scenarios. Configs are diffable, reproducible, and commit-trackable.
-- **Coverage-complete by design**: the framework enforces that every `(category, intent)` pair in `label2id.json` has at least one seed, or is explicitly marked as a known gap.
+- **Coverage-complete by design**: the framework enforces that every supported `(category, intent)` pair from active procedures plus DB intent taxonomy has at least one seed, or is explicitly marked as a known gap.
 
 ---
 
@@ -37,7 +37,7 @@ The simulator is an end-to-end testing framework that generates realistic custom
 │  Scenario  │ │   DB       │ │  Coverage        │
 │  Registry  │ │  Hydrator  │ │  Checker         │
 │            │ │            │ │                  │
-│ seeds/*.yaml│ │ Postgres   │ │ label2id.json    │
+│ seeds/*.yaml│ │ Postgres   │ │ procedures+intents│
 └─────┬──────┘ └─────┬──────┘ └──────────────────┘
       │               │
       └───────┬────────┘
@@ -82,6 +82,18 @@ The simulator is an end-to-end testing framework that generates realistic custom
 
 ---
 
+### 2.1 Runtime and Deployment Modes (Updated)
+
+- The simulator must support:
+  - deterministic suite runs (`--iterations N`, no randomization),
+  - randomized selection runs (`--randomize` with persona/category/intent filters),
+  - continuous mode (`--forever`) until interrupted.
+- A Docker Compose `simulator` service should run the same CLI entrypoint used locally.
+- Simulator output remains artifact-first (`testing/simulator/results/*.json`) and additionally persists run/scenario/turn/evaluation/training rows to Postgres when persistence is enabled.
+- Postgres persistence should include token usage (`input`, `output`, `cache`, `total`) and latency fields at least at turn and judge-call level. If provider metadata is unavailable, fields remain nullable.
+
+---
+
 ## 3. Directory Structure
 
 ```
@@ -94,7 +106,7 @@ testing/
     ├── driver.py                    # Conversation turn loop + HTTP client
     ├── trace.py                     # IssueGraphState trace capture
     ├── reporter.py                  # Run artifact + console output
-    ├── coverage.py                  # label2id.json coverage enforcement
+    ├── coverage.py                  # procedures + intent taxonomy coverage enforcement
     ├── evaluators/
     │   ├── __init__.py
     │   ├── structural.py            # outcome_status, procedure_id assertions
@@ -484,8 +496,7 @@ class ConversationDriver:
 {
     "text": user_message,
     "session_id": session_id,
-    "full_flow": True,
-    "user_confirms_resolution": False
+    "full_flow": True
 }
 ```
 
@@ -497,10 +508,16 @@ class ConversationDriver:
     "procedure_id": str | None,
     "validation_missing": list[str],
     "eligibility_ok": bool | None,
-    "escalation_bundle": dict | None,
+    "escalation_bundle": dict | None,  # optional; may be absent in API response
     "policy_constraints": dict | None,
     "context_data": dict | None,
     "specialist_agent_id": str | None,
+    "agent_state": dict | None,
+    "stage_metadata": dict | None,
+    "output_validation": dict | None,
+    "context_summary": dict | None,
+    "validation_wait_count": int | None,
+    "validation_wait_limit": int | None,
 }
 ```
 
@@ -647,7 +664,7 @@ A scenario fails if any dimension score falls below its threshold.
 
 ### 5.8 `coverage.py` — Coverage Checker
 
-**Purpose:** Enforce that every `(category, intent)` pair in `label2id.json` is either covered by at least one seed or explicitly listed as a known gap.
+**Purpose:** Enforce that every supported `(category, intent)` pair from active procedure blueprints and DB intent taxonomy is either covered by at least one seed or explicitly listed as a known gap.
 
 **Usage:** Runs automatically before each test suite execution. Prints a coverage table and writes it to the run artifact.
 

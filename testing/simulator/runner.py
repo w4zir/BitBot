@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 import yaml
 from dotenv import load_dotenv
@@ -19,10 +21,12 @@ from testing.simulator.config import (
 )
 from testing.simulator.coverage import build_coverage_report, render_coverage_table
 from testing.simulator.driver import ConversationDriver
+from testing.simulator.evaluators.llm_judge import LlmJudgeResult, evaluate_llm_judge
 from testing.simulator.evaluators.policy import PolicyResult, evaluate_policy
 from testing.simulator.evaluators.structural import StructuralResult, evaluate_structural
 from testing.simulator.hydrator import HydrationError, ScenarioHydrator
 from testing.simulator.persona import PersonaEngine
+from testing.simulator.persistence import SimulatorPersistence
 from testing.simulator.reporter import render_console_summary, write_run_artifact
 from testing.simulator.trace import ConversationTrace
 
@@ -41,26 +45,26 @@ def main() -> int:
     simulator_root = Path(__file__).resolve().parent
     suite_path = _resolve_path(simulator_root, args.suite)
     suite = _load_suite(suite_path)
+    if args.db_snapshot:
+        suite.db_snapshot = args.db_snapshot
     simulator_agent_url = os.getenv("SIMULATOR_AGENT_URL", "").strip()
     if simulator_agent_url:
         suite.agent_url = simulator_agent_url
 
     all_seeds = _load_all_seeds(simulator_root / "seeds")
+    seeds_by_id = {seed.seed_id: seed for seed in all_seeds}
     personas = _load_personas(simulator_root / "personas" / "personas.yaml")
-
-    selected_seed_ids = _selected_seed_ids(suite.scenarios, args.seed)
-    selected_seeds = [seed for seed in all_seeds if seed.seed_id in selected_seed_ids]
-
-    if args.category:
-        allowed = {c.strip().lower() for c in args.category}
-        selected_seeds = [seed for seed in selected_seeds if seed.category.strip().lower() in allowed]
-
-    if args.difficulty:
-        allowed = {d.strip().lower() for d in args.difficulty}
-        selected_seeds = [seed for seed in selected_seeds if seed.difficulty.strip().lower() in allowed]
-
-    if not selected_seeds:
-        print("No seeds matched the requested filters.")
+    selected_scenarios = _select_scenarios(
+        suite=suite,
+        seeds_by_id=seeds_by_id,
+        seed_override=args.seed,
+        category_filters=args.category,
+        difficulty_filters=args.difficulty,
+        persona_filters=args.persona,
+        intent_filters=args.intent,
+    )
+    if not selected_scenarios:
+        print("No scenarios matched the requested filters.")
         return 1
 
     coverage = build_coverage_report(
@@ -76,43 +80,107 @@ def main() -> int:
         agent_url=suite.agent_url,
         max_turns=suite.defaults.max_turns,
     )
-    eval_targets = {item.strip().lower() for item in suite.defaults.eval_targets}
-    run_structural = not eval_targets or "structural" in eval_targets
-    run_policy = not eval_targets or "policy" in eval_targets
     started_at = datetime.now(timezone.utc)
     traces: list[ConversationTrace] = []
     structural_results: dict[str, StructuralResult] = {}
     policy_results: dict[str, PolicyResult] = {}
+    llm_judge_results: dict[str, LlmJudgeResult | None] = {}
 
-    for seed in selected_seeds:
-        persona_cfg = personas.get(seed.persona_id)
-        if persona_cfg is None:
-            raise RuntimeError(f"Persona '{seed.persona_id}' not found for seed '{seed.seed_id}'")
-        try:
-            scenario = hydrator.hydrate(seed)
-        except HydrationError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise HydrationError(f"Failed to hydrate seed '{seed.seed_id}': {exc}") from exc
+    randomize = bool(args.randomize or suite.defaults.randomize)
+    persistence_enabled = suite.defaults.persist_db if args.persist_db is None else args.persist_db
+    persistence = SimulatorPersistence(enabled=persistence_enabled)
+    run_metadata = {
+        "randomize": randomize,
+        "iterations": args.iterations,
+        "forever": args.forever,
+        "filters": {
+            "seed": args.seed,
+            "category": args.category,
+            "difficulty": args.difficulty,
+            "persona": args.persona,
+            "intent": args.intent,
+        },
+    }
+    persistence.start_run(
+        run_id=suite.run_id,
+        suite_name=suite_path.name,
+        db_snapshot=suite.db_snapshot,
+        baseline_ref=suite.baseline,
+        run_metadata=run_metadata,
+    )
+    persistence.record_coverage(coverage.to_dict())
 
-        scenario.cooperation_level = seed.cooperation_level or suite.defaults.cooperation_level
-        persona = PersonaEngine(persona=persona_cfg, scenario=scenario)
-        trace = driver.run(scenario, persona)
+    loop_status = "completed"
+    try:
+        for index, (run_cfg, seed) in enumerate(
+            _iter_execution_plan(
+                selected_scenarios=selected_scenarios,
+                randomize=randomize,
+                iterations=args.iterations,
+                forever=args.forever,
+            ),
+            start=1,
+        ):
+            persona_cfg = personas.get(seed.persona_id)
+            if persona_cfg is None:
+                raise RuntimeError(f"Persona '{seed.persona_id}' not found for seed '{seed.seed_id}'")
+            try:
+                scenario = hydrator.hydrate(seed)
+            except HydrationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HydrationError(f"Failed to hydrate seed '{seed.seed_id}': {exc}") from exc
 
-        structural = (
-            evaluate_structural(trace, scenario, max_turns=suite.defaults.max_turns)
-            if run_structural
-            else StructuralResult(passed=True, checks={}, failures=[])
-        )
-        policy = (
-            evaluate_policy(trace, scenario)
-            if run_policy
-            else PolicyResult(passed=True, checks={}, failures=[])
-        )
-
-        traces.append(trace)
-        structural_results[seed.seed_id] = structural
-        policy_results[seed.seed_id] = policy
+            scenario.cooperation_level = (
+                run_cfg.cooperation_level
+                or seed.cooperation_level
+                or suite.defaults.cooperation_level
+            )
+            persona = PersonaEngine(persona=persona_cfg, scenario=scenario)
+            trace = driver.run(scenario, persona)
+            scenario_key = f"{seed.seed_id}#{index}"
+            trace.scenario["run_scenario_id"] = scenario_key
+            eval_targets = {
+                item.strip().lower()
+                for item in (run_cfg.eval_targets or suite.defaults.eval_targets or [])
+            }
+            run_structural = not eval_targets or "structural" in eval_targets
+            run_policy = not eval_targets or "policy" in eval_targets
+            run_llm_judge = "llm_judge" in eval_targets
+            structural = (
+                evaluate_structural(trace, scenario, max_turns=suite.defaults.max_turns)
+                if run_structural
+                else StructuralResult(passed=True, checks={}, failures=[])
+            )
+            policy = (
+                evaluate_policy(trace, scenario)
+                if run_policy
+                else PolicyResult(passed=True, checks={}, failures=[])
+            )
+            llm_judge = (
+                evaluate_llm_judge(
+                    trace=trace,
+                    scenario=scenario,
+                    provider=suite.defaults.llm_judge_provider,
+                    model=suite.defaults.llm_judge_model,
+                    thresholds=suite.defaults.llm_judge_thresholds,
+                )
+                if run_llm_judge
+                else None
+            )
+            traces.append(trace)
+            structural_results[scenario_key] = structural
+            policy_results[scenario_key] = policy
+            llm_judge_results[scenario_key] = llm_judge
+            persistence.record_scenario(
+                trace=trace,
+                structural=structural,
+                policy=policy,
+                llm_judge=llm_judge,
+            )
+    except KeyboardInterrupt:
+        loop_status = "interrupted"
+        print("Simulator interrupted by user.")
 
     artifact_path = write_run_artifact(
         run_id=suite.run_id,
@@ -123,38 +191,48 @@ def main() -> int:
         traces=traces,
         structural_results=structural_results,
         policy_results=policy_results,
+        llm_judge_results=llm_judge_results,
         output_dir=simulator_root / "results",
         started_at=started_at,
     )
     print("")
-    print(render_console_summary(traces, structural_results, policy_results))
+    print(render_console_summary(traces, structural_results, policy_results, llm_judge_results))
     print("")
     print(f"Artifact: {artifact_path}")
-    return _run_exit_code(
+    exit_code = _run_exit_code(
         traces,
         structural_results,
         policy_results,
+        llm_judge_results,
         coverage,
         suite,
-        run_structural=run_structural,
-        run_policy=run_policy,
     )
+    persistence.complete_run(
+        summary={
+            "exit_code": exit_code,
+            "status": loop_status,
+            "artifact_path": str(artifact_path),
+            "scenarios_executed": len(traces),
+        },
+        status=loop_status if loop_status != "completed" else ("completed" if exit_code == 0 else "failed"),
+    )
+    return exit_code
 
 
 def _run_exit_code(
     traces: list[ConversationTrace],
     structural_results: dict[str, StructuralResult],
     policy_results: dict[str, PolicyResult],
+    llm_judge_results: dict[str, LlmJudgeResult | None],
     coverage_report,
     suite: SuiteConfig,
-    *,
-    run_structural: bool,
-    run_policy: bool,
 ) -> int:
     _ = traces
-    if run_structural and any(not item.passed for item in structural_results.values()):
+    if any(not item.passed for item in structural_results.values()):
         return 1
-    if run_policy and any(not item.passed for item in policy_results.values()):
+    if any(not item.passed for item in policy_results.values()):
+        return 1
+    if any((item is not None) and (not item.passed) for item in llm_judge_results.values()):
         return 1
     if suite.defaults.fail_on_coverage_gap and coverage_report.unexpected_gaps > 0:
         return 3
@@ -176,6 +254,29 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coverage-only", action="store_true", help="Only evaluate coverage")
     parser.add_argument("--category", nargs="*", default=[], help="Filter to categories")
     parser.add_argument("--difficulty", nargs="*", default=[], help="Filter to difficulties")
+    parser.add_argument("--persona", nargs="*", default=[], help="Filter to personas")
+    parser.add_argument("--intent", nargs="*", default=[], help="Filter to intents")
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="Repeat run N times (for random mode this means N sampled scenarios)",
+    )
+    parser.add_argument("--forever", action="store_true", help="Run indefinitely until interrupted")
+    parser.add_argument("--randomize", action="store_true", help="Randomize scenario selection order")
+    parser.add_argument(
+        "--persist-db",
+        dest="persist_db",
+        action="store_true",
+        help="Persist run artifacts to Postgres",
+    )
+    parser.add_argument(
+        "--no-persist-db",
+        dest="persist_db",
+        action="store_false",
+        help="Disable Postgres persistence for this run",
+    )
+    parser.set_defaults(persist_db=None)
     return parser
 
 
@@ -211,10 +312,64 @@ def _load_personas(path: Path) -> dict[str, PersonaConfig]:
     return {item.persona_id: item for item in parsed.personas}
 
 
-def _selected_seed_ids(scenarios: list[ScenarioRunConfig], seed_override: str | None) -> set[str]:
-    if seed_override:
-        return {seed_override}
-    return {item.seed_id for item in scenarios}
+def _select_scenarios(
+    *,
+    suite: SuiteConfig,
+    seeds_by_id: dict[str, SeedConfig],
+    seed_override: str | None,
+    category_filters: list[str],
+    difficulty_filters: list[str],
+    persona_filters: list[str],
+    intent_filters: list[str],
+) -> list[tuple[ScenarioRunConfig, SeedConfig]]:
+    selected: list[tuple[ScenarioRunConfig, SeedConfig]] = []
+    allowed_categories = {c.strip().lower() for c in category_filters}
+    allowed_difficulties = {d.strip().lower() for d in difficulty_filters}
+    allowed_personas = {p.strip().lower() for p in persona_filters}
+    allowed_intents = {i.strip().lower() for i in intent_filters}
+    for run_cfg in suite.scenarios:
+        if seed_override and run_cfg.seed_id != seed_override:
+            continue
+        seed = seeds_by_id.get(run_cfg.seed_id)
+        if seed is None:
+            raise RuntimeError(f"Seed '{run_cfg.seed_id}' referenced by suite is missing.")
+        if allowed_categories and seed.category.strip().lower() not in allowed_categories:
+            continue
+        if allowed_difficulties and seed.difficulty.strip().lower() not in allowed_difficulties:
+            continue
+        if allowed_personas and seed.persona_id.strip().lower() not in allowed_personas:
+            continue
+        if allowed_intents and seed.intent.strip().lower() not in allowed_intents:
+            continue
+        selected.append((run_cfg, seed))
+    return selected
+
+
+def _iter_execution_plan(
+    *,
+    selected_scenarios: list[tuple[ScenarioRunConfig, SeedConfig]],
+    randomize: bool,
+    iterations: int,
+    forever: bool,
+) -> Iterable[tuple[ScenarioRunConfig, SeedConfig]]:
+    if not selected_scenarios:
+        return []
+    if forever:
+        while True:
+            if randomize:
+                yield random.choice(selected_scenarios)
+            else:
+                for item in selected_scenarios:
+                    yield item
+        return
+    total_iterations = max(1, int(iterations))
+    if randomize:
+        for _ in range(total_iterations):
+            yield random.choice(selected_scenarios)
+        return
+    for _ in range(total_iterations):
+        for item in selected_scenarios:
+            yield item
 
 
 if __name__ == "__main__":

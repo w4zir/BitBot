@@ -26,6 +26,14 @@ class TurnRecord:
     context_summary: dict[str, Any] | None = None
     validation_wait_count: int | None = None
     validation_wait_limit: int | None = None
+    request_started_at: str | None = None
+    response_received_at: str | None = None
+    request_payload: dict[str, Any] | None = None
+    response_payload: dict[str, Any] | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_tokens: int | None = None
+    total_tokens: int | None = None
     latency_ms: float = 0.0
 
 

@@ -10,7 +10,9 @@ The simulator:
 - hydrates each seed with real DB entities (orders/users/subscriptions)
 - runs multi-turn conversations against `POST /classify`
 - evaluates each trace with structural + policy checks
+- can evaluate quality with an optional LLM judge (`eval_targets: [llm_judge]`)
 - writes a JSON artifact under `testing/simulator/results/`
+- can persist runs, turns, messages, evaluations, and training examples to Postgres
 
 ## Prerequisites
 
@@ -78,6 +80,21 @@ python -m testing.simulator.runner --suite testing/simulator/suites/regression.y
 ```
 
 ```bash
+# Run randomized samples from filtered scenarios
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --randomize --iterations 20 --category order --intent cancel_order
+```
+
+```bash
+# Run continuously until interrupted (Ctrl+C)
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --forever --randomize --persona impatient_escalator
+```
+
+```bash
+# Persist run telemetry + training examples to Postgres
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --iterations 1 --persist-db
+```
+
+```bash
 # Coverage check only (no conversations)
 python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --coverage-only
 ```
@@ -101,7 +118,29 @@ Console output also includes:
 - per-seed PASS/FAIL summary
 - artifact file path
 
-The simulator remains artifact-first (JSON files under `testing/simulator/results/`), but the local Postgres test schema now also includes spec-aligned observability tables and reporting views for querying runs in SQL.
+The simulator remains artifact-first (JSON files under `testing/simulator/results/`), and can also persist run records into Postgres tables for analytics and future model training:
+
+- `simulation_runs`, `simulation_scenarios`, `coverage_snapshots`
+- `simulation_turns`, `simulation_messages`
+- `simulation_evaluations`, `simulation_llm_judgements`
+- `simulation_training_examples`
+
+### Docker Compose simulator service
+
+You can run the simulator as a Compose service:
+
+```bash
+docker compose run --rm simulator
+```
+
+Override the default suite and behavior with environment variables:
+
+```bash
+SIMULATOR_SUITE_PATH=testing/simulator/suites/regression.yaml \
+SIMULATOR_ITERATIONS=5 \
+SIMULATOR_EXTRA_ARGS="--randomize --persist-db" \
+docker compose run --rm simulator
+```
 
 ## Optional: inspect run telemetry in Postgres
 

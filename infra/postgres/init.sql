@@ -241,3 +241,156 @@ CREATE TABLE IF NOT EXISTS category_intents (
 );
 
 CREATE INDEX IF NOT EXISTS idx_category_intents_category ON category_intents (category_name);
+
+-- ---------------------------------------------------------------------------
+-- Simulator persistence tables
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS simulation_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id VARCHAR(120) UNIQUE NOT NULL,
+    suite_name VARCHAR(120) NOT NULL,
+    source VARCHAR(40) NOT NULL DEFAULT 'simulator',
+    db_snapshot VARCHAR(255),
+    baseline_ref VARCHAR(255),
+    git_sha VARCHAR(80),
+    status VARCHAR(30) NOT NULL DEFAULT 'running',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    run_metadata_json JSONB,
+    summary_json JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS simulation_scenarios (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    seed_id VARCHAR(150) NOT NULL,
+    persona_id VARCHAR(120),
+    category VARCHAR(100) NOT NULL,
+    intent VARCHAR(200) NOT NULL,
+    linked_order_id VARCHAR(120),
+    linked_user_id VARCHAR(120),
+    linked_subscription_email VARCHAR(255),
+    expected_outcome VARCHAR(80),
+    actual_outcome VARCHAR(80),
+    passed BOOLEAN,
+    assertions_json JSONB,
+    trace_json JSONB,
+    evaluated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS coverage_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
+    total_pairs INTEGER NOT NULL,
+    covered_pairs INTEGER NOT NULL,
+    known_gaps INTEGER NOT NULL DEFAULT 0,
+    unexpected_gaps INTEGER NOT NULL DEFAULT 0,
+    coverage_ratio NUMERIC(6, 4),
+    gap_details JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS simulation_turns (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    turn_number INTEGER NOT NULL,
+    request_started_at TIMESTAMPTZ,
+    response_received_at TIMESTAMPTZ,
+    latency_ms NUMERIC(12, 3),
+    outcome_status VARCHAR(80),
+    procedure_id VARCHAR(200),
+    category VARCHAR(100),
+    intent VARCHAR(200),
+    validation_missing JSONB,
+    policy_constraints JSONB,
+    context_data JSONB,
+    agent_state JSONB,
+    stage_metadata JSONB,
+    output_validation JSONB,
+    context_summary JSONB,
+    request_payload JSONB,
+    response_payload JSONB,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_tokens INTEGER,
+    total_tokens INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (scenario_id, turn_number)
+);
+
+CREATE TABLE IF NOT EXISTS simulation_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    turn_id UUID REFERENCES simulation_turns(id) ON DELETE SET NULL,
+    message_index INTEGER NOT NULL,
+    role VARCHAR(20) NOT NULL,
+    content TEXT NOT NULL,
+    metadata_json JSONB,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_tokens INTEGER,
+    total_tokens INTEGER,
+    latency_ms NUMERIC(12, 3),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS simulation_evaluations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    evaluator_name VARCHAR(40) NOT NULL,
+    passed BOOLEAN NOT NULL,
+    checks_json JSONB,
+    failures_json JSONB,
+    details_json JSONB,
+    evaluated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (scenario_id, evaluator_name)
+);
+
+CREATE TABLE IF NOT EXISTS simulation_llm_judgements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scenario_id UUID NOT NULL UNIQUE REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    provider VARCHAR(40) NOT NULL,
+    model_name VARCHAR(120) NOT NULL,
+    passed BOOLEAN NOT NULL,
+    scores_json JSONB,
+    rationales_json JSONB,
+    thresholds_json JSONB,
+    failures_json JSONB,
+    raw_response_json JSONB,
+    latency_ms NUMERIC(12, 3),
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_tokens INTEGER,
+    total_tokens INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS simulation_training_examples (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id UUID NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
+    scenario_id UUID NOT NULL UNIQUE REFERENCES simulation_scenarios(id) ON DELETE CASCADE,
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    example_format VARCHAR(40) NOT NULL DEFAULT 'chatml',
+    messages_json JSONB NOT NULL,
+    prompt_text TEXT,
+    response_text TEXT,
+    labels_json JSONB,
+    modernbert_category VARCHAR(100),
+    modernbert_intent VARCHAR(200),
+    outcome_status VARCHAR(80),
+    metadata_json JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_simulation_runs_status ON simulation_runs (status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_simulation_scenarios_run ON simulation_scenarios (run_id, category, intent);
+CREATE INDEX IF NOT EXISTS idx_coverage_snapshots_run ON coverage_snapshots (run_id);
+CREATE INDEX IF NOT EXISTS idx_simulation_turns_scenario ON simulation_turns (scenario_id, turn_number);
+CREATE INDEX IF NOT EXISTS idx_simulation_messages_scenario ON simulation_messages (scenario_id, message_index);
+CREATE INDEX IF NOT EXISTS idx_simulation_evaluations_scenario ON simulation_evaluations (scenario_id, evaluator_name);
+CREATE INDEX IF NOT EXISTS idx_simulation_llm_judgements_scenario ON simulation_llm_judgements (scenario_id);
+CREATE INDEX IF NOT EXISTS idx_simulation_training_examples_run ON simulation_training_examples (run_id, modernbert_category, modernbert_intent);

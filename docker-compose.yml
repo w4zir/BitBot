@@ -84,6 +84,34 @@ services:
     volumes:
       - ./backend:/app/backend
 
+  simulator:
+    build: ./backend
+    working_dir: /app
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_HOST_SIMULATOR: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-ecom_support}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      SIMULATOR_AGENT_URL: ${SIMULATOR_AGENT_URL:-http://backend:8000/classify}
+      SIMULATOR_LLM_PROVIDER: ${SIMULATOR_LLM_PROVIDER:-ollama}
+      SIMULATOR_LLM_MODEL: ${SIMULATOR_LLM_MODEL:-llama3.2}
+      SIMULATOR_LLM_TIMEOUT_SECONDS: ${SIMULATOR_LLM_TIMEOUT_SECONDS:-120}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+      CEREBRAS_API_BASE: ${CEREBRAS_API_BASE:-https://api.cerebras.ai/v1}
+      CEREBRAS_TEMPERATURE: ${CEREBRAS_TEMPERATURE:-0.2}
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    command: >
+      sh -lc "echo 'Simulator service is idle. Trigger runs manually with docker compose exec simulator python -m testing.simulator.runner ...' && sleep infinity"
+
   frontend:
     build: ./frontend
     ports:

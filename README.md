@@ -149,6 +149,37 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 - `POST /tools/refund-context`: DB-backed refund context lookup tool.
 - `POST /escalations/decision`: accept/reject a pending escalation action for a session.
 
+## Simulator (Docker + persistence)
+
+The simulator CLI lives in `testing/simulator/runner.py` and now supports:
+
+- bounded loops (`--iterations N`) and continuous loops (`--forever`)
+- randomized selection (`--randomize`) with `--persona`, `--category`, `--intent`, `--difficulty` filters
+- optional LLM-as-judge (`eval_targets: [llm_judge]`)
+- optional Postgres persistence (`--persist-db`) for runs/turns/messages/evaluations/training rows
+
+The `simulator` service now starts in idle mode when brought up with Compose (`docker compose up`).
+Trigger runs manually from the running container:
+
+```bash
+docker compose exec simulator python -m testing.simulator.runner --suite testing/simulator/suites/smoke.yaml --iterations 1
+```
+
+Run it as a one-off Compose task:
+
+```bash
+docker compose run --rm simulator
+```
+
+Example with overrides:
+
+```bash
+SIMULATOR_SUITE_PATH=testing/simulator/suites/regression.yaml \
+SIMULATOR_ITERATIONS=5 \
+SIMULATOR_EXTRA_ARGS="--randomize --persist-db" \
+docker compose run --rm simulator
+```
+
 ## Repository layout
 
 | Path | Purpose |

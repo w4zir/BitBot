@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from testing.simulator.coverage import CoverageReport
+from testing.simulator.evaluators.llm_judge import LlmJudgeResult
 from testing.simulator.evaluators.policy import PolicyResult
 from testing.simulator.evaluators.structural import StructuralResult
 from testing.simulator.trace import ConversationTrace
@@ -22,6 +23,7 @@ def write_run_artifact(
     traces: list[ConversationTrace],
     structural_results: dict[str, StructuralResult],
     policy_results: dict[str, PolicyResult],
+    llm_judge_results: dict[str, LlmJudgeResult | None],
     output_dir: Path,
     started_at: datetime,
 ) -> Path:
@@ -32,17 +34,23 @@ def write_run_artifact(
     passed = 0
     structural_failures = 0
     policy_failures = 0
+    llm_judge_failures = 0
 
     for trace in traces:
+        scenario_key = str(trace.scenario.get("run_scenario_id") or trace.scenario.get("seed_id") or "")
         seed_id = str(trace.scenario.get("seed_id") or "")
-        structural = structural_results[seed_id]
-        policy = policy_results[seed_id]
-        if structural.passed and policy.passed:
+        structural = structural_results[scenario_key]
+        policy = policy_results[scenario_key]
+        llm_judge = llm_judge_results.get(scenario_key)
+        judge_passed = llm_judge.passed if llm_judge is not None else True
+        if structural.passed and policy.passed and judge_passed:
             passed += 1
         if not structural.passed:
             structural_failures += 1
         if not policy.passed:
             policy_failures += 1
+        if llm_judge is not None and not llm_judge.passed:
+            llm_judge_failures += 1
 
         category = str(trace.scenario.get("category") or "unknown")
         cat = per_category.setdefault(
@@ -75,7 +83,7 @@ def write_run_artifact(
                 "expected_outcome": trace.scenario.get("expected_outcome"),
                 "structural": asdict(structural),
                 "policy": asdict(policy),
-                "llm_judge": None,
+                "llm_judge": asdict(llm_judge) if llm_judge is not None else None,
                 "regression": None,
                 "trace": [asdict(turn) for turn in trace.turns],
             }
@@ -105,7 +113,7 @@ def write_run_artifact(
             "failed": len(traces) - passed,
             "structural_failures": structural_failures,
             "policy_failures": policy_failures,
-            "llm_judge_failures": 0,
+            "llm_judge_failures": llm_judge_failures,
             "regressions": 0,
         },
         "per_category": per_category_summary,
@@ -122,6 +130,7 @@ def render_console_summary(
     traces: list[ConversationTrace],
     structural_results: dict[str, StructuralResult],
     policy_results: dict[str, PolicyResult],
+    llm_judge_results: dict[str, LlmJudgeResult | None],
 ) -> str:
     total = len(traces)
     if total == 0:
@@ -129,10 +138,14 @@ def render_console_summary(
     passed = 0
     lines = ["Run Summary", "==========="]
     for trace in traces:
+        scenario_key = str(trace.scenario.get("run_scenario_id") or trace.scenario.get("seed_id") or "")
         seed_id = str(trace.scenario.get("seed_id") or "")
-        structural = structural_results[seed_id]
-        policy = policy_results[seed_id]
-        scenario_passed = structural.passed and policy.passed
+        structural = structural_results[scenario_key]
+        policy = policy_results[scenario_key]
+        llm_judge = llm_judge_results.get(scenario_key)
+        scenario_passed = structural.passed and policy.passed and (
+            llm_judge.passed if llm_judge is not None else True
+        )
         if scenario_passed:
             passed += 1
         lines.append(
@@ -143,6 +156,8 @@ def render_console_summary(
             lines.extend([f"    structural: {failure}" for failure in structural.failures])
         if not policy.passed:
             lines.extend([f"    policy: {failure}" for failure in policy.failures])
+        if llm_judge is not None and not llm_judge.passed:
+            lines.extend([f"    llm_judge: {failure}" for failure in llm_judge.failures])
     lines.append("")
     lines.append(f"Passed: {passed}/{total}")
     return "\n".join(lines)
