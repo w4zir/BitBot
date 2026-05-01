@@ -143,3 +143,94 @@ def test_force_directives_for_secondary_issue_and_human_escalation(
     directives = captured[0]["directives"]
     assert any("secondary order id 'ORD-999'" in item for item in directives)
     assert any("transfer to a human agent" in item for item in directives)
+
+
+def test_opening_includes_style_and_anti_template_directives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict] = []
+
+    def _fake_chat_completion(**kwargs):
+        payload = json.loads(kwargs["messages"][1]["content"])
+        captured.append(payload)
+        return '{"message":"Please check order ORD-123 status for me.", "stop": false}'
+
+    persona = PersonaEngine(
+        persona=_persona(),
+        scenario=_scenario(),
+        llm_provider="ollama",
+        llm_model="llama3.2",
+        llm_timeout_seconds=30.0,
+    )
+    monkeypatch.setattr("testing.simulator.persona.chat_completion", _fake_chat_completion)
+
+    opening = persona.generate_opening()
+    assert opening
+    assert captured
+    payload = captured[0]
+    directives = payload["directives"]
+    assert any("opening style profile" in item for item in directives)
+    assert any("Avoid overused support openers" in item for item in directives)
+    assert any("order id 'ORD-123'" in item for item in directives)
+    assert isinstance(payload.get("style_profile"), dict)
+    assert payload["style_profile"].get("opening_style")
+
+
+def test_opening_retries_when_template_like_starter_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict] = []
+    calls = {"count": 0}
+
+    def _fake_chat_completion(**kwargs):
+        calls["count"] += 1
+        payload = json.loads(kwargs["messages"][1]["content"])
+        captured.append(payload)
+        if calls["count"] == 1:
+            return '{"message":"Hi there! I was hoping you could help me check order ORD-123.", "stop": false}'
+        return '{"message":"Need an update on ORD-123 status.", "stop": false}'
+
+    persona = PersonaEngine(
+        persona=_persona(),
+        scenario=_scenario(),
+        llm_provider="ollama",
+        llm_model="llama3.2",
+        llm_timeout_seconds=30.0,
+    )
+    monkeypatch.setattr("testing.simulator.persona.chat_completion", _fake_chat_completion)
+
+    opening = persona.generate_opening()
+    assert opening == "Need an update on ORD-123 status."
+    assert calls["count"] == 2
+    assert len(captured) == 2
+    retry_directives = captured[1]["directives"]
+    assert any("previous attempt sounded formulaic" in item for item in retry_directives)
+
+
+def test_generation_options_are_forwarded_to_chat_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: list[dict] = []
+
+    def _fake_chat_completion(**kwargs):
+        captured_kwargs.append(kwargs)
+        return '{"message":"Please check ORD-123.", "stop": false}'
+
+    persona = PersonaEngine(
+        persona=_persona(),
+        scenario=_scenario(),
+        llm_provider="ollama",
+        llm_model="llama3.2",
+        llm_timeout_seconds=30.0,
+        llm_temperature=0.7,
+        llm_top_p=0.9,
+        llm_repeat_penalty=1.1,
+    )
+    monkeypatch.setattr("testing.simulator.persona.chat_completion", _fake_chat_completion)
+
+    persona.generate_opening()
+    assert captured_kwargs
+    kwargs = captured_kwargs[0]
+    assert kwargs["temperature"] == pytest.approx(0.7)
+    assert kwargs["top_p"] == pytest.approx(0.9)
+    assert kwargs["repeat_penalty"] == pytest.approx(1.1)

@@ -52,10 +52,22 @@ SIMULATOR_USER_LLM_PROVIDER=ollama
 SIMULATOR_USER_LLM_MODEL=llama3.2
 SIMULATOR_USER_LLM_TIMEOUT_SECONDS=120
 
+# Optional simulator-only creativity controls (affect persona message generation only)
+SIMULATOR_USER_LLM_TEMPERATURE=0.7
+SIMULATOR_USER_LLM_TOP_P=0.9
+SIMULATOR_USER_LLM_REPEAT_PENALTY=1.1
+
 # LLM judge provider/timeout when llm_judge is enabled
 SIMULATOR_LLM_PROVIDER=ollama
 SIMULATOR_LLM_TIMEOUT_SECONDS=120
 ```
+
+Creativity notes:
+
+- Opening messages now use a randomized style profile per conversation.
+- Anti-template guardrails reduce repeated openers like "Hi there! I was hoping you could help...".
+- If an opening still starts with a banned template pattern, the simulator retries once with a stronger rewrite directive.
+- These knobs are simulator-scoped and do not change normal agent runtime behavior unless explicitly passed by simulator code.
 
 ## Runtime modes and CLI
 

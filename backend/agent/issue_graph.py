@@ -616,32 +616,20 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
             break
     if not docs:
         logger.warning("Policy load returned no docs for query=%r after %s attempts", query, attempts)
-    raw_chunks = [str(d.get("content") or "") for d in docs]
     policy_doc_names = _policy_doc_names(docs)
-    status = _extract_order_status_hint(state)
-    eligible, reason = _derive_order_cancellation_eligibility(raw_chunks, status)
     context = dict(state.get("context_data") or {})
+    # Keep policy load factual and procedure-agnostic; policy eligibility decisions
+    # must come from procedure logic + backend tools, not text heuristics.
+    eligible = True
+    reason = ""
     variables = {
         "policy_query": query,
-        "order_status": status,
-        "allowed_cancel_statuses": ["processing", "pending"],
-        "order_created_at": (context.get("order_data") or {}).get("order_date"),
-        "now_utc": _utc_now_iso(),
-        "cancel_window_hours": 24,
+        "retrieved_policy_docs": policy_doc_names,
+        "retrieved_policy_doc_count": len(policy_doc_names),
     }
     validation_results = {
-        "order_status_in_allowed_set": _validate_set_membership(
-            value=variables["order_status"],
-            allowed_values=variables["allowed_cancel_statuses"],
-        ),
-        "order_cancel_window_hours_lte": _validate_duration_hours(
-            start=variables["order_created_at"],
-            end=variables["now_utc"],
-            op="lte",
-            threshold_hours=variables["cancel_window_hours"],
-        ),
         "minimum_policy_docs_found": _validate_arithmetic(
-            lhs=len(raw_chunks),
+            lhs=len(policy_doc_names),
             rhs=1,
             op="gte",
         ),
@@ -655,7 +643,6 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
         "requires_evidence": False,
         "auto_resolvable": True,
         "policy_doc_names": policy_doc_names,
-        "order_status_hint": status,
     }
     out: IssueGraphState = {
         **state,
@@ -666,9 +653,6 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
             "policy_found": bool(docs),
             "policy_query": query,
             "policy_doc_names": policy_doc_names,
-            "policy_eligible": eligible,
-            "policy_ineligibility_reason": reason,
-            "order_status_hint": status,
         },
     }
     return _with_stage_metadata(
@@ -1036,25 +1020,6 @@ def _extract_order_status_hint(state: IssueGraphState) -> str:
     return ""
 
 
-def _derive_order_cancellation_eligibility(raw_chunks: list[str], order_status: str) -> tuple[bool, str]:
-    if not raw_chunks:
-        return True, ""
-    status = (order_status or "").strip().lower()
-    if not status:
-        return True, ""
-    policy_text = "\n".join(chunk.lower() for chunk in raw_chunks)
-    has_cancellation_rule = "not in shipped, delivered or cancelled" in policy_text
-    if not has_cancellation_rule:
-        return True, ""
-    blocked_statuses = {"shipped", "delivered", "cancelled"}
-    if status in blocked_statuses:
-        return (
-            False,
-            f"Order cancellation policy blocks status '{status}'; allowed statuses exclude shipped, delivered, and cancelled.",
-        )
-    return True, ""
-
-
 def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     """Populate context for order status from DB-backed repository."""
     oid = _extract_order_id_from_conversation(
@@ -1113,18 +1078,12 @@ def _retrieve_policy(step: dict[str, Any], state: IssueGraphState) -> dict[str, 
     docs = search_policy_docs(query)
     if not docs:
         logger.warning("Procedure retrieval returned no docs for query=%r", query)
-    raw_chunks = [str(d.get("content") or "") for d in docs]
     policy_doc_names = _policy_doc_names(docs)
-    status = _extract_order_status_hint(state)
-    eligible, reason = _derive_order_cancellation_eligibility(raw_chunks, status)
     return {
         "policy_found": bool(docs),
         "policy_tool": tool_name,
         "policy_query": query,
         "policy_doc_names": policy_doc_names,
-        "policy_eligible": eligible,
-        "policy_ineligibility_reason": reason,
-        "order_status_hint": status,
     }
 
 
@@ -1289,7 +1248,11 @@ def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> str:
     msgs = _messages_for_llm(state.get("messages") or [])
     summary = json.dumps(state.get("context_data") or {}, ensure_ascii=False)
     step_msg = str(step.get("message") or "").strip()
-    user_prompt = f"Procedure context: {summary}"
+    user_prompt = (
+        "Use only the provided procedure context and retrieved policy evidence. "
+        "Do not invent policy restrictions that are not explicitly present.\n\n"
+        f"Procedure context: {summary}"
+    )
     if step_msg:
         user_prompt = f"{step_msg}\n\n{user_prompt}"
     llm_messages: list[dict[str, str]] = []

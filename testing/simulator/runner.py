@@ -59,6 +59,15 @@ def main() -> int:
     simulator_user_llm_timeout = os.getenv("SIMULATOR_USER_LLM_TIMEOUT_SECONDS", "").strip()
     if simulator_user_llm_timeout:
         suite.defaults.user_llm_timeout_seconds = float(simulator_user_llm_timeout)
+    simulator_user_llm_temperature = os.getenv("SIMULATOR_USER_LLM_TEMPERATURE", "").strip()
+    if simulator_user_llm_temperature:
+        suite.defaults.user_llm_temperature = float(simulator_user_llm_temperature)
+    simulator_user_llm_top_p = os.getenv("SIMULATOR_USER_LLM_TOP_P", "").strip()
+    if simulator_user_llm_top_p:
+        suite.defaults.user_llm_top_p = float(simulator_user_llm_top_p)
+    simulator_user_llm_repeat_penalty = os.getenv("SIMULATOR_USER_LLM_REPEAT_PENALTY", "").strip()
+    if simulator_user_llm_repeat_penalty:
+        suite.defaults.user_llm_repeat_penalty = float(simulator_user_llm_repeat_penalty)
 
     all_seeds = _load_all_seeds(simulator_root / "seeds")
     seeds_by_id = {seed.seed_id: seed for seed in all_seeds}
@@ -151,6 +160,9 @@ def main() -> int:
                 llm_provider=suite.defaults.user_llm_provider,
                 llm_model=suite.defaults.user_llm_model,
                 llm_timeout_seconds=suite.defaults.user_llm_timeout_seconds,
+                llm_temperature=suite.defaults.user_llm_temperature,
+                llm_top_p=suite.defaults.user_llm_top_p,
+                llm_repeat_penalty=suite.defaults.user_llm_repeat_penalty,
             )
             trace = driver.run(scenario, persona)
             scenario_key = f"{seed.seed_id}#{index}"

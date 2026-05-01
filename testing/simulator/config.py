@@ -88,6 +88,9 @@ class DefaultsConfig(BaseModel):
     user_llm_provider: Literal["ollama", "cerebras"] = "ollama"
     user_llm_model: str = "llama3.2"
     user_llm_timeout_seconds: float = Field(default=120.0, gt=0.0, le=600.0)
+    user_llm_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    user_llm_top_p: float | None = Field(default=None, gt=0.0, le=1.0)
+    user_llm_repeat_penalty: float | None = Field(default=None, ge=0.0, le=2.0)
     llm_judge_model: str = "claude-sonnet-4-20250514"
     llm_judge_provider: Literal["ollama", "cerebras"] = "ollama"
     llm_judge_thresholds: LlmJudgeThresholdsConfig = Field(

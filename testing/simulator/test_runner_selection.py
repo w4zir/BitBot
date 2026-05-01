@@ -69,6 +69,13 @@ def test_suite_defaults_enable_db_persistence() -> None:
     assert suite.defaults.persist_db is True
 
 
+def test_suite_defaults_leave_simulator_sampling_unset() -> None:
+    suite = _suite()
+    assert suite.defaults.user_llm_temperature is None
+    assert suite.defaults.user_llm_top_p is None
+    assert suite.defaults.user_llm_repeat_penalty is None
+
+
 def test_cli_no_persist_db_override() -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(["--suite", "testing/simulator/suites/regression.yaml", "--no-persist-db"])
