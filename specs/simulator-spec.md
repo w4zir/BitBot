@@ -72,7 +72,7 @@ supersedes older examples in this document that use legacy naming.
 │                     Evaluator Suite                             │
 │              testing/simulator/evaluators/                      │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │ structural.py   │ policy.py   │ llm_judge.py │ regression │  │
+│  │ structural.py   │ policy.py   │ llm_judge.py │ (regression TBD) │
 │  └───────────────────────────────────────────────────────────┘  │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ EvaluationResult per scenario
@@ -80,7 +80,7 @@ supersedes older examples in this document that use legacy naming.
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Reporter                                 │
 │              testing/simulator/reporter.py                      │
-│   JSON artifact + console summary + regression delta            │
+│   JSON artifact + console summary (+ optional baseline diff when wired) │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -100,6 +100,8 @@ supersedes older examples in this document that use legacy naming.
 
 ## 3. Directory Structure
 
+Committed layout under `testing/simulator/` (as of this spec revision):
+
 ```
 testing/
 └── simulator/
@@ -110,29 +112,31 @@ testing/
     ├── driver.py                    # Conversation turn loop + HTTP client
     ├── trace.py                     # IssueGraphState trace capture
     ├── reporter.py                  # Run artifact + console output
+    ├── persistence.py               # Optional Postgres persistence for runs/evals/training rows
     ├── coverage.py                  # procedures + intent taxonomy coverage enforcement
     ├── evaluators/
     │   ├── __init__.py
     │   ├── structural.py            # outcome_status, procedure_id assertions
     │   ├── policy.py                # eligibility gate + policy_constraints checks
-    │   ├── llm_judge.py             # LLM-as-judge for tone, completeness, hallucination
-    │   └── regression.py            # Diff against pinned baseline artifact
-    ├── suites/                      # Test suite YAML configs (committed to git)
+    │   └── llm_judge.py             # LLM-as-judge for tone, completeness, hallucination
+    ├── suites/                      # Test suite YAML configs (committed)
     │   ├── smoke.yaml
-    │   ├── regression.yaml
-    │   └── adversarial.yaml
-    ├── seeds/                       # Scenario seed definitions
-    │   ├── order_cancellation.yaml
+    │   └── regression.yaml
+    ├── seeds/                       # Scenario seed definitions (split across files)
+    │   ├── order.yaml
     │   ├── refund.yaml
-    │   ├── shipping.yaml
-    │   └── ...                      # one file per category
+    │   ├── intent_expansion.yaml    # payment, invoice, subscription, contact, delivery, product, etc.
+    │   └── gaps.yaml                # known coverage gaps (paired with coverage checker)
     ├── personas/
     │   └── personas.yaml            # Persona definitions
-    ├── baselines/                   # Pinned baseline run artifacts (committed)
-    │   └── baseline_<run_id>.json
-    └── results/                     # Generated run artifacts (gitignored)
+    ├── test_*.py                    # unit tests for runner, persona, evaluators, persistence (co-located)
+    └── results/                     # Generated run artifacts (typically gitignored)
         └── run_<timestamp>.json
 ```
+
+**Not present in-repo (optional / future):** `suites/adversarial.yaml`, `seeds/*_cancellation.yaml` per legacy examples, and `baselines/` — baseline paths in suite YAML are supported by config, but a `baselines/` directory is not required until you commit pinned artifacts.
+
+**Operational guide:** [docs/how_to_simulate.md](../docs/how_to_simulate.md) (CLI examples use paths from repository root).
 
 ---
 
@@ -182,11 +186,14 @@ scenarios:
 
 ### 4.2 Scenario Seed
 
-**File:** `testing/simulator/seeds/<category>.yaml`
+**Files (this repo):** `testing/simulator/seeds/order.yaml`, `refund.yaml`, `intent_expansion.yaml` (and `gaps.yaml` for coverage metadata). Additional seed files MAY be added under the same directory; the schema below is normative.
+
+**Normative vs illustrative:** The YAML block below uses legacy-style `category` / `intent` / `expected_procedure_id` names (for example `order_cancellation`, `cancel_order_before_delivery`) to document the **shape** of a seed. **Live** seeds in git follow the same keys but use runtime taxonomy aligned with [`backend/procedures/`](../backend/procedures/) — for example `category: order`, `intent: cancel_order`, `expected_procedure_id: order/cancel_order`. Always match `intent` and `expected_procedure_id` to DB `category_intents` and procedure YAML `intent` / composite ids.
 
 Each seed is a named, reusable template. A seed is hydrated into a `ScenarioInstance` at runtime.
 
 ```yaml
+# Illustrative only — not a committed path:
 # testing/simulator/seeds/order_cancellation.yaml
 
 seeds:
@@ -646,9 +653,9 @@ llm_judge_thresholds:
 
 A scenario fails if any dimension score falls below its threshold.
 
-### 5.7 `evaluators/regression.py` — Regression Evaluator
+### 5.7 Regression evaluator (planned; no `evaluators/regression.py` in repo yet)
 
-**Purpose:** Diff the current run against a pinned baseline artifact and flag any category/intent pairs whose resolution rate, escalation rate, or average LLM judge scores changed beyond thresholds.
+**Purpose (target):** Diff the current run against a pinned baseline artifact and flag any category/intent pairs whose resolution rate, escalation rate, or average LLM judge scores changed beyond thresholds. **Current status:** suite YAML and artifacts may reference `baseline` / `fail_on_regression`, but no regression evaluator module is committed; treat the contract below as the intended implementation when added.
 
 **Baseline artifact structure:**
 
@@ -750,33 +757,35 @@ Adversarial scenarios are explicitly defined, not emergent. The following flags 
 
 **File:** `testing/simulator/runner.py`
 
+Run these from the **repository root** so Python resolves `testing.simulator`:
+
 ```bash
 # Run a full suite
-python -m testing.simulator.runner --suite suites/regression.yaml
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml
 
 # Run a single seed
-python -m testing.simulator.runner --suite suites/regression.yaml --seed cancel_order_hard
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --seed cancel_order_hard
 
-# Run with a DB fixture instead of live DB
-python -m testing.simulator.runner --suite suites/smoke.yaml --db-snapshot fixtures/snapshot_20260425.sql
+# Run with a DB fixture instead of live DB (path is yours; optional fixtures/ dir is not committed by default)
+python -m testing.simulator.runner --suite testing/simulator/suites/smoke.yaml --db-snapshot /path/to/pg_data_dump.sql
 
 # Pin current results as a new baseline
-python -m testing.simulator.runner --suite suites/regression.yaml --write-baseline
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --write-baseline
 
 # Check coverage only (no conversations)
-python -m testing.simulator.runner --suite suites/regression.yaml --coverage-only
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --coverage-only
 
-# Run specific categories only
-python -m testing.simulator.runner --suite suites/regression.yaml --category order_cancellation refund
+# Run specific categories only (use live taxonomy, e.g. order, refund)
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --category order refund
 
 # Run specific difficulty levels only
-python -m testing.simulator.runner --suite suites/regression.yaml --difficulty hard adversarial
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --difficulty hard
 
 # Continuous mode until interrupted
-python -m testing.simulator.runner --suite suites/regression.yaml --forever --randomize
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --forever --randomize
 
 # Disable DB persistence for a single run (default is enabled)
-python -m testing.simulator.runner --suite suites/regression.yaml --no-persist-db
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --no-persist-db
 ```
 
 **Exit codes:**
@@ -797,7 +806,7 @@ Every run writes a JSON artifact to `testing/simulator/results/run_<timestamp>.j
 ```json
 {
   "run_id": "regression_sprint_42",
-  "suite": "suites/regression.yaml",
+  "suite": "testing/simulator/suites/regression.yaml",
   "started_at": "2026-04-25T10:00:00Z",
   "completed_at": "2026-04-25T10:12:34Z",
   "db_snapshot": "live",
@@ -866,11 +875,13 @@ The current implementation is already functional with:
 2. **`hydrator.py`** — DB-grounded entity hydration from Postgres.
 3. **`persona.py`** — LLM-backed persona engine with structured output + grounding checks.
 4. **`driver.py`** — HTTP turn loop to `POST /classify` with `full_flow=true`.
-5. **`evaluators/structural.py`**, **`evaluators/policy.py`**, **`evaluators/llm_judge.py`** — active evaluators.
-6. **`runner.py`** + **`reporter.py`** + **`persistence.py`** — CLI, artifact writing, and optional DB persistence (enabled by default).
-7. **`coverage.py`** — pre-run coverage report/check.
+5. **`trace.py`** — structured per-turn capture of graph metadata for artifacts and evaluators.
+6. **`evaluators/structural.py`**, **`evaluators/policy.py`**, **`evaluators/llm_judge.py`** — active evaluators (no `regression.py` module in-tree yet).
+7. **`runner.py`** + **`reporter.py`** + **`persistence.py`** — CLI, artifact writing, and Postgres persistence (enabled by default in suite defaults; overridable with `--no-persist-db`).
+8. **`coverage.py`** — pre-run coverage report/check.
+9. **`test_*.py`** — co-located pytest modules (runner selection, persona, structural/policy evaluators, persistence, LLM judge) for CI.
 
-`regression` remains a config keyword and artifact field but is not currently executed as a runtime evaluator.
+`regression` remains a suite config keyword and artifact field but is not currently executed as a runtime evaluator (no dedicated evaluator module committed).
 
 ---
 
@@ -881,7 +892,7 @@ The current implementation is already functional with:
 - **Persona LLM config**: simulator user-message generation uses dedicated settings (`defaults.user_llm_*` and `SIMULATOR_USER_LLM_*`) and currently supports `ollama` or `cerebras` via `backend.llm.providers.chat_completion`.
 - **Judge LLM config**: LLM judge keeps separate provider/model settings (`llm_judge_*`).
 - **Postgres fixture**: `testing/simulator/fixtures/` should contain a minimal anonymised snapshot generated with `pg_dump --data-only --table=orders --table=users --table=subscriptions`. This allows deterministic re-runs in CI without a live DB.
-- **CI integration**: run `suites/smoke.yaml` on every PR (fast, ~5 scenarios, no LLM judge). Run `suites/regression.yaml` nightly (full suite with LLM judge and baseline diff).
+- **CI integration**: run `testing/simulator/suites/smoke.yaml` on every PR (fast, small scenario set; omit `llm_judge` if you need zero LLM cost). Run `testing/simulator/suites/regression.yaml` nightly (full suite; add `llm_judge` / baseline diff when those are wired and stable).
 - **Environment variables** required by the simulator:
 
 ```bash

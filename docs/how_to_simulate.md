@@ -6,7 +6,7 @@ This guide is aligned with the current simulator spec and implementation in `tes
 
 The simulator:
 
-- loads seed definitions from `testing/simulator/seeds/*.yaml`
+- loads seed definitions from `testing/simulator/seeds/*.yaml` (committed files: `order.yaml`, `refund.yaml`, `intent_expansion.yaml`, plus `gaps.yaml` for known coverage gaps)
 - hydrates each seed with live Postgres entities (`order`, `user`, `subscription`)
 - runs multi-turn conversations against `POST /classify` with `full_flow=true`
 - evaluates traces with structural and policy checks by default
@@ -23,13 +23,23 @@ for payment, invoice, subscription, contact, delivery, feedback, shipping addres
 1. Start the BitBot API server so `POST /classify` is reachable.
 2. Ensure Postgres is configured and populated enough for seed filters.
 3. Ensure procedure blueprints are available (`backend/procedures/`) for coverage checks.
-4. (Recommended) refresh local DB fixtures:
+4. (Recommended) refresh local DB fixtures.
 
-```bash
-psql -f db/postgres/01_schema.sql
-psql -f db/postgres/02_seed.sql
-psql -f db/postgres/03_smoke_checks.sql
-```
+   **Host `psql`** (if installed and connected to the same DB the simulator uses):
+
+   ```bash
+   psql -f db/postgres/01_schema.sql
+   psql -f db/postgres/02_seed.sql
+   psql -f db/postgres/03_smoke_checks.sql
+   ```
+
+   **Docker Compose** (stack running; same pattern as [README.md](../README.md) `db/postgres/`):
+
+   ```bash
+   docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/01_schema.sql
+   docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/02_seed.sql
+   docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/03_smoke_checks.sql
+   ```
 
 Required environment variables (minimum):
 

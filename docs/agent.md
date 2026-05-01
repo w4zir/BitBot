@@ -152,5 +152,29 @@ Current procedure-backed intents in `backend/procedures/`:
 
 ## Related routes
 
-- [`backend/api/routes/tools.py`](../backend/api/routes/tools.py): external tool endpoints.
-- [`backend/api/routes/escalations.py`](../backend/api/routes/escalations.py): accept/reject escalation API.
+- [`backend/api/routes/escalations.py`](../backend/api/routes/escalations.py): `POST /escalations/decision` — accept/reject a pending escalation action for a session.
+
+### Tools API (`/tools`)
+
+All routes are served from [`backend/api/routes/tools.py`](../backend/api/routes/tools.py) under the `/tools` prefix. Request/response shapes use the Pydantic models in that file.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/tools/order-status` | Order status by `order_id` |
+| POST | `/tools/product-lookup` | Product search by `product_name` |
+| POST | `/tools/product-info` | Product details by `product_name` |
+| POST | `/tools/product-price` | Product price by `product_name` |
+| POST | `/tools/product-availability` | Availability by `product_name` |
+| POST | `/tools/refund-context` | Refund context by `order_id` |
+| POST | `/tools/cancel-order` | Cancel order (`order_id`) |
+| POST | `/tools/create-refund-request` | Create refund request (`order_id`, `reason`) |
+| POST | `/tools/update-shipping-address` | Update shipping address (`order_id`, `new_address`) |
+| POST | `/tools/payment` | Payment lookup by `transaction_id` |
+| GET | `/tools/payment-methods` | List payment methods (no body) |
+| POST | `/tools/payment-track-refund` | Refund tracking by `transaction_id` |
+| POST | `/tools/invoice` | Invoice by `invoice_id` |
+| POST | `/tools/subscription-status` | Subscription by `account_email` |
+| POST | `/tools/subscription-unsubscribe` | Unsubscribe by `account_email` |
+| POST | `/tools/contact-handoff` | Human handoff ticket (`summary`) |
+| POST | `/tools/complaint` | Complaint ticket (`complaint`) |
+| POST | `/tools/delivery-period` | Delivery window by `order_or_tracking` |

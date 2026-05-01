@@ -4,6 +4,24 @@
 
 ---
 
+## BitBot repository mapping
+
+In **this** repository, procedures are not under a generic `blueprints/` folder. They are versioned YAML files and Python loaders tied to the staged issue graph:
+
+| Concern | Location |
+|---------|----------|
+| Procedure YAML assets | [`backend/procedures/*.yaml`](../backend/procedures/) (one blueprint per supported `(category, intent)`; 16 files at time of writing) |
+| Schema validation, load helpers, duplicate step-id checks | [`backend/agent/procedures.py`](../backend/agent/procedures.py) |
+| Blueprint selection fallback chain | 1) `(category, intent)` 2) `(category, *_general)` 3) `(unknown, *_general)` — not a single `general_research` intent; see [docs/agent.md](../docs/agent.md) § `fetch_procedure` |
+| Deterministic step execution (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) | [`backend/agent/issue_graph.py`](../backend/agent/issue_graph.py) (`structured_executor` and related nodes) |
+| HTTP tool endpoints invoked by `tool_call` steps | [`backend/api/routes/tools.py`](../backend/api/routes/tools.py) — full list in [docs/agent.md](../docs/agent.md) |
+
+**RAG in production:** `retrieval` steps use Elasticsearch policy documents via `multi_match` on `title`, `content`, and `tags` ([`backend/rag/policy_retriever.py`](../backend/rag/policy_retriever.py)); there is no Postgres vector store for policy in the current codebase.
+
+The sections below remain a **generic** Fin-style reference (naming, patterns, optional reranker pseudocode). Where they conflict with the table above, **this repository’s paths and fallback chain take precedence** for BitBot implementation work.
+
+---
+
 ## 1. Core Philosophy
 
 This system separates **Intent Classification** from **Plan Generation**, replacing a stochastic ReAct planner loop with a deterministic **Stateful Plan Executor**. The LLM is constrained to executing predefined steps — it never decides *what* to do, only *how* to do the current step.
@@ -277,7 +295,9 @@ def structured_executor(state: AgentState) -> dict:
 
 ## 7. RAG Integration
 
-**BitBot implementation:** `retrieval` steps call Elasticsearch via `multi_match` on indexed policy documents (`title`, `content`, `tags`). There is no Postgres vector store or in-process reranker in the current codebase; the pseudocode below is the target pattern.
+**BitBot production path:** `retrieval` steps resolve policy through Elasticsearch `multi_match` on indexed documents (`title^2`, `content`, `tags`) — see [`backend/rag/policy_retriever.py`](../backend/rag/policy_retriever.py). There is no Postgres vector store or bundled reranker service in the current codebase.
+
+The pseudocode below describes an optional **reranker** pattern for other deployments; BitBot does not execute that reranker today.
 
 After each `retrieval` step, apply a **reranker** before storing results in `context_data`. This ensures that only genuinely relevant chunks are passed to subsequent tool calls or LLM steps.
 
@@ -322,6 +342,8 @@ steps:
 
 ## 10. Directory Structure
 
+**Generic reference layout** (Fin-style multi-package projects):
+
 ```
 project/
 ├── blueprints/                  # YAML blueprint definitions (dev)
@@ -338,6 +360,8 @@ project/
 └── tests/
     └── test_blueprints.py       # Validate all blueprints at CI time
 ```
+
+**This repository (BitBot):** use `backend/procedures/*.yaml`, `backend/agent/procedures.py`, `backend/agent/issue_graph.py`, and `backend/api/routes/tools.py` instead of the generic tree above. Backend tests that touch procedures include `backend/tests/test_procedures.py` and graph/tool route tests under `backend/tests/`.
 
 ---
 

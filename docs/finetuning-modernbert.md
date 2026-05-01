@@ -164,8 +164,8 @@ The backend classifier client calls `CLASSIFIER_BENTOML_URL` (Compose default: `
 
 `backend/agent/issue_graph.py` routes as:
 
-- `category == "no_issue"` -> no-issue LLM response branch
-- anything else -> validation branch
+- `category == "no_issue"` **or** classifier confidence below the configured category threshold → no-issue LLM response branch (`no_issue_direct`)
+- otherwise → intent resolution, procedure load, validation, and structured execution
 
 For that reason, multiclass training with an explicit `no_issue` label (for example `--mode category`) is the current recommended production setup.
 

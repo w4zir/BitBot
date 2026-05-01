@@ -25,7 +25,7 @@ flowchart LR
 
 - **Frontend** (`frontend/`): Streamlit chat UI calling `POST /classify` with `full_flow` for session + LangGraph + LLM branches.
 - **Backend** (`backend/`): FastAPI + **staged LangGraph** ([`backend/agent/issue_graph.py`](backend/agent/issue_graph.py)): **ModernBERT via Bento** for category → no-issue/low-confidence branch or intent resolution → deterministic specialist routing → YAML procedure load (`backend/procedures/*.yaml`) → policy load/constraints → data+eligibility gates → structured step execution → explicit outcome validation/escalation (see [docs/agent.md](docs/agent.md)).
-- **Tool APIs** (`backend/api/routes/tools.py`): DB-backed tool endpoints used by procedures (`/tools/order-status`, `/tools/product-lookup`, `/tools/refund-context`).
+- **Tool APIs** (`backend/api/routes/tools.py`): DB-backed HTTP tools used by procedure steps (order, product, refund, payment, invoice, subscription, contact, complaint, delivery); see **API Surface** below for the full list.
 - **Escalation API** (`backend/api/routes/escalations.py`): in-chat escalation decision endpoint (`/escalations/decision`) for accept/reject UX.
 - **Procedures** (`backend/procedures/`): One YAML blueprint per intent. Blueprints define `required_data` and ordered steps (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) used to enforce deterministic control flow.
 - **ModernBERT** (`services/modernbert_bento/`): BentoML service loading a local fine-tuned checkpoint.
@@ -41,6 +41,8 @@ flowchart LR
 | LangGraph issue agent (nodes, procedures, session flow) | [docs/agent.md](docs/agent.md) |
 | Dataset creation, binary split, fine-tuning, evaluation, serving | [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md) |
 | Index Foodpanda policy Markdown in Elasticsearch | [docs/elasticsearch-foodpanda-policy-docs.md](docs/elasticsearch-foodpanda-policy-docs.md) |
+| Run the agent testing simulator (CLI, env, evaluators) | [docs/how_to_simulate.md](docs/how_to_simulate.md) |
+| Simulator contracts (schemas, modules, CLI reference) | [specs/simulator-spec.md](specs/simulator-spec.md) |
 
 ## How to add data to Elasticsearch
 
@@ -91,7 +93,7 @@ The generic **`curl`** / `_bulk` flow below uses **`docker compose exec`** into 
    docker compose exec -T elasticsearch curl -s -X POST "http://localhost:9200/policy_docs/_search" -H "Content-Type: application/json" -d "{\"size\":3,\"query\":{\"multi_match\":{\"query\":\"refund\",\"fields\":[\"title^2\",\"content\",\"tags\"]}}}"
    ```
 
-5. **Optional source material**: Markdown under [`data/policy_docs/`](data/policy_docs/) can be loaded with [`scripts/upload_foodpanda_policy_docs.py`](scripts/upload_foodpanda_policy_docs.py) (currently 7 Foodpanda policy files, including `07_Order_Cancellation_Policy.md`) or adapted for your own bulk NDJSON.
+5. **Optional source material**: Markdown under [`data/policy_docs/`](data/policy_docs/) can be loaded with [`scripts/upload_foodpanda_policy_docs.py`](scripts/upload_foodpanda_policy_docs.py). The Foodpanda sample set is **12** files (`01`–`12` under `data/policy_docs/foodpanda/policy_docs/`; see [docs/elasticsearch-foodpanda-policy-docs.md](docs/elasticsearch-foodpanda-policy-docs.md) for filenames) or adapt the script for your own bulk NDJSON.
 
 If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint only records that Elasticsearch env vars are configured, not cluster health.
 
@@ -144,14 +146,34 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 - `GET /health`: liveness probe for the backend.
 - `GET /health/ready`: readiness; reports configured Postgres/Elasticsearch and tries the classifier health when `CLASSIFIER_BENTOML_URL` is set.
 - `POST /classify`: classification-only (`full_flow=false`) or full LangGraph orchestration (`full_flow=true`).
-- `POST /tools/order-status`: DB-backed order lookup tool.
-- `POST /tools/product-lookup`: DB-backed product catalog lookup tool.
-- `POST /tools/refund-context`: DB-backed refund context lookup tool.
 - `POST /escalations/decision`: accept/reject a pending escalation action for a session.
+
+**Tools** (`POST` unless noted; JSON bodies per route in [`backend/api/routes/tools.py`](backend/api/routes/tools.py)):
+
+- `POST /tools/order-status` — order status lookup
+- `POST /tools/product-lookup` — product name search
+- `POST /tools/product-info` — product details
+- `POST /tools/product-price` — product price
+- `POST /tools/product-availability` — stock / availability
+- `POST /tools/refund-context` — refund context for an order
+- `POST /tools/cancel-order` — cancel order (mutating)
+- `POST /tools/create-refund-request` — create refund request (mutating)
+- `POST /tools/update-shipping-address` — update shipping address (mutating)
+- `POST /tools/payment` — payment by transaction id
+- `GET /tools/payment-methods` — list configured payment methods
+- `POST /tools/payment-track-refund` — refund status for a transaction
+- `POST /tools/invoice` — invoice lookup
+- `POST /tools/subscription-status` — subscription by account email
+- `POST /tools/subscription-unsubscribe` — unsubscribe (mutating)
+- `POST /tools/contact-handoff` — human handoff ticket
+- `POST /tools/complaint` — complaint ticket
+- `POST /tools/delivery-period` — delivery window by order or tracking id
 
 ## Simulator (Docker + persistence)
 
-The simulator CLI lives in `testing/simulator/runner.py` and now supports:
+See [docs/how_to_simulate.md](docs/how_to_simulate.md) for prerequisites, environment variables, and failure triage. Normative schemas and module layout: [specs/simulator-spec.md](specs/simulator-spec.md).
+
+The simulator CLI lives in `testing/simulator/runner.py` and supports:
 
 - bounded loops (`--iterations N`) and continuous loops (`--forever`)
 - randomized selection (`--randomize`) with `--persona`, `--category`, `--intent`, `--difficulty` filters

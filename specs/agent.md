@@ -3,6 +3,12 @@
 This document defines the target architecture for BitBot's production-grade agent pipeline.
 It is intentionally aspirational and implementation-agnostic: implementation should conform to this spec.
 
+## Implementation traceability
+
+- **Runtime behavior, graph nodes, state fields, and HTTP integration** are documented in [docs/agent.md](../docs/agent.md).
+- **LangGraph implementation** lives in [`backend/agent/issue_graph.py`](../backend/agent/issue_graph.py) (staged pipeline, procedure execution, outcome validation).
+- **Persistent execution** (checkpoint + interrupt/resume for `/classify` full flow) is in [`backend/agent/persistent_agent.py`](../backend/agent/persistent_agent.py) when enabled via `AGENT_PERSISTENT_MODE`.
+
 ## 1) Pipeline Overview
 
 ```mermaid
