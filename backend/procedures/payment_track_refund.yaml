@@ -1,0 +1,29 @@
+id: payment_track_refund
+category: payment
+intent: track_refund
+keywords:
+  - track refund
+  - refund status
+  - where is my refund
+required_data:
+  - name: transaction_id
+    prompt: Please share your original transaction ID (for example TXN-12345).
+steps:
+  - id: lookup_refund_status
+    type: tool_call
+    tool: payment_refund_status
+  - id: branch_refund_tracking_found
+    type: logic_gate
+    condition: {op: eq, field: refund_tracking_found, value: true}
+    on_true: share_refund_status
+    on_false: refund_tracking_not_found
+  - id: share_refund_status
+    type: llm_response
+    message: >
+      Share refund status using payment_status, refund_decision, and refund_decision_reason.
+  - id: refund_tracking_not_found
+    type: llm_response
+    message: >
+      Refund tracking details were not found for this transaction. Ask the user to verify the
+      transaction id.
+fallback_response: I can track your refund once you share the transaction ID.

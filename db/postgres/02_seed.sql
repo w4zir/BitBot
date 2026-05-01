@@ -17,7 +17,9 @@ INSERT INTO users (user_id, email, status, created_at) VALUES
 ON CONFLICT (user_id) DO UPDATE SET
   email = EXCLUDED.email,
   status = EXCLUDED.status,
-  created_at = EXCLUDED.created_at;
+  created_at = EXCLUDED.created_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Loyalty (Silver vs Gold tier scenarios + extra tier)
 INSERT INTO loyalty_accounts (user_id, annual_spend, tier, benefits_json) VALUES
@@ -27,18 +29,23 @@ INSERT INTO loyalty_accounts (user_id, annual_spend, tier, benefits_json) VALUES
 ON CONFLICT (user_id) DO UPDATE SET
   annual_spend = EXCLUDED.annual_spend,
   tier = EXCLUDED.tier,
-  benefits_json = EXCLUDED.benefits_json;
+  benefits_json = EXCLUDED.benefits_json,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Subscriptions (48h refund window tests: <48h vs >48h since last charge)
 INSERT INTO subscription_accounts (account_email, plan, next_renewal_at, last_charge_at, subscription_status) VALUES
 ('sub_24h@example.com', 'Premium', '2026-05-14 09:00:00', '2026-04-14 09:00:00', 'active'),
 ('sub_72h@example.com', 'Basic', '2026-05-12 09:00:00', '2026-04-12 09:00:00', 'active'),
-('subscription_holder@example.com', 'Plus', '2026-06-01 09:00:00', '2026-04-10 09:00:00', 'active')
+('subscription_holder@example.com', 'Plus', '2026-06-01 09:00:00', '2026-04-10 09:00:00', 'active'),
+('unsubscribed_user@example.com', 'Basic', '2026-05-20 09:00:00', '2026-04-20 09:00:00', 'unsubscribed')
 ON CONFLICT (account_email) DO UPDATE SET
   plan = EXCLUDED.plan,
   next_renewal_at = EXCLUDED.next_renewal_at,
   last_charge_at = EXCLUDED.last_charge_at,
-  subscription_status = EXCLUDED.subscription_status;
+  subscription_status = EXCLUDED.subscription_status,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Orders: statuses for order_status / cancel / change_address / refund_context / get_refund
 -- ORD-1001 delivered; ORD-1002 delivered electronics edge; ORD-1003 shipped; ORD-1004/1005 processing;
@@ -67,9 +74,11 @@ ON CONFLICT (order_id) DO UPDATE SET
   shipping_address_line = EXCLUDED.shipping_address_line,
   shipping_city = EXCLUDED.shipping_city,
   shipping_postal_code = EXCLUDED.shipping_postal_code,
-  shipping_country = EXCLUDED.shipping_country;
+  shipping_country = EXCLUDED.shipping_country,
+  update_date = NOW(),
+  update_source = 'system';
 
--- Order line items (names align with products catalog where applicable for get_product_info)
+-- Order line items (names align with products catalog for product info/price/availability flows)
 INSERT INTO order_items (item_id, order_id, item_name, category, is_opened, qty, price) VALUES
 (1, 'ORD-1001', 'Smart Toaster', 'appliances', false, 1, 150.00),
 (2, 'ORD-1002', 'High-End Laptop', 'electronics', true, 1, 899.99),
@@ -87,22 +96,28 @@ ON CONFLICT (item_id) DO UPDATE SET
   category = EXCLUDED.category,
   is_opened = EXCLUDED.is_opened,
   qty = EXCLUDED.qty,
-  price = EXCLUDED.price;
+  price = EXCLUDED.price,
+  update_date = NOW(),
+  update_source = 'system';
 
--- Product catalog (product_catalog_lookup / get_product_info: exact vs partial ILIKE, in stock vs OOS)
-INSERT INTO products (product_id, sku, name, price, is_available, metadata) VALUES
-(1, 'SKU-TOASTER', 'Smart Toaster', 149.99, true, '{"category": "appliances"}'::jsonb),
-(2, 'SKU-LAPTOP', 'High-End Laptop', 899.99, true, '{"category": "electronics"}'::jsonb),
-(3, 'SKU-BEANS', 'Coffee Beans', 11.25, true, '{"category": "food"}'::jsonb),
-(4, 'SKU-WIDGET', 'Widget Pro', 19.99, true, '{"category": "general"}'::jsonb),
-(5, 'SKU-OOS-CLOCK', 'Vintage Clock', 45.00, false, '{"category": "home", "note": "out_of_stock_demo"}'::jsonb),
-(6, 'SKU-SPEAKER', 'Bluetooth Speaker', 49.99, true, '{"category": "electronics"}'::jsonb)
+-- Product catalog (product info / price / availability flows)
+INSERT INTO products (product_id, sku, name, company, description, price, is_available, metadata) VALUES
+(1, 'SKU-TOASTER', 'Smart Toaster', 'KitchenCo', 'A connected toaster with programmable browning profiles.', 149.99, true, '{"category": "appliances"}'::jsonb),
+(2, 'SKU-LAPTOP', 'High-End Laptop', 'NovaTech', 'A premium laptop designed for power users and creators.', 899.99, true, '{"category": "electronics"}'::jsonb),
+(3, 'SKU-BEANS', 'Coffee Beans', 'Roastly', 'Single-origin medium roast whole bean coffee.', 11.25, true, '{"category": "food"}'::jsonb),
+(4, 'SKU-WIDGET', 'Widget Pro', 'WidgetWorks', 'A compact everyday utility widget for home and office.', 19.99, true, '{"category": "general"}'::jsonb),
+(5, 'SKU-OOS-CLOCK', 'Vintage Clock', 'TimeNest', 'A decorative vintage-style analog desk clock.', 45.00, false, '{"category": "home", "note": "out_of_stock_demo"}'::jsonb),
+(6, 'SKU-SPEAKER', 'Bluetooth Speaker', 'SoundPeak', 'Portable Bluetooth speaker with balanced audio output.', 49.99, true, '{"category": "electronics"}'::jsonb)
 ON CONFLICT (product_id) DO UPDATE SET
   sku = EXCLUDED.sku,
   name = EXCLUDED.name,
+  company = EXCLUDED.company,
+  description = EXCLUDED.description,
   price = EXCLUDED.price,
   is_available = EXCLUDED.is_available,
-  metadata = EXCLUDED.metadata;
+  metadata = EXCLUDED.metadata,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Payments (TXN-* format for validation)
 INSERT INTO payments (transaction_id, order_id, amount, method, payment_status, charged_at) VALUES
@@ -121,7 +136,9 @@ ON CONFLICT (transaction_id) DO UPDATE SET
   amount = EXCLUDED.amount,
   method = EXCLUDED.method,
   payment_status = EXCLUDED.payment_status,
-  charged_at = EXCLUDED.charged_at;
+  charged_at = EXCLUDED.charged_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Shipments (weather force majeure vs carrier error; extra delivered/shipped rows)
 INSERT INTO shipments (tracking_id, order_id, shipping_tier, promised_delivery_at, actual_delivery_at, delay_reason) VALUES
@@ -135,7 +152,9 @@ ON CONFLICT (tracking_id) DO UPDATE SET
   shipping_tier = EXCLUDED.shipping_tier,
   promised_delivery_at = EXCLUDED.promised_delivery_at,
   actual_delivery_at = EXCLUDED.actual_delivery_at,
-  delay_reason = EXCLUDED.delay_reason;
+  delay_reason = EXCLUDED.delay_reason,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Invoices (order-linked vs subscription-linked)
 INSERT INTO invoices (invoice_id, user_id, order_id, account_email, amount, issued_at, status) VALUES
@@ -147,7 +166,9 @@ ON CONFLICT (invoice_id) DO UPDATE SET
   account_email = EXCLUDED.account_email,
   amount = EXCLUDED.amount,
   issued_at = EXCLUDED.issued_at,
-  status = EXCLUDED.status;
+  status = EXCLUDED.status,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Refund requests: denied, pending, approved; ORD-1009/1011 have no row (latest decision null in tool context)
 INSERT INTO refund_requests (refund_id, order_id, reason, requested_at, decision, decision_reason) VALUES
@@ -160,7 +181,9 @@ ON CONFLICT (refund_id) DO UPDATE SET
   reason = EXCLUDED.reason,
   requested_at = EXCLUDED.requested_at,
   decision = EXCLUDED.decision,
-  decision_reason = EXCLUDED.decision_reason;
+  decision_reason = EXCLUDED.decision_reason,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- ---------------------------------------------------------------------------
 -- Bulk expansion dataset: +992 users and +9,989 orders with related entities
@@ -176,7 +199,9 @@ FROM generate_series(9, 1000) AS g(user_id)
 ON CONFLICT (user_id) DO UPDATE SET
   email = EXCLUDED.email,
   status = EXCLUDED.status,
-  created_at = EXCLUDED.created_at;
+  created_at = EXCLUDED.created_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 INSERT INTO loyalty_accounts (user_id, annual_spend, tier, benefits_json)
 SELECT
@@ -202,13 +227,17 @@ FROM (
 ON CONFLICT (user_id) DO UPDATE SET
   annual_spend = EXCLUDED.annual_spend,
   tier = EXCLUDED.tier,
-  benefits_json = EXCLUDED.benefits_json;
+  benefits_json = EXCLUDED.benefits_json,
+  update_date = NOW(),
+  update_source = 'system';
 
-INSERT INTO products (product_id, sku, name, price, is_available, metadata)
+INSERT INTO products (product_id, sku, name, company, description, price, is_available, metadata)
 SELECT
   6 + seq AS product_id,
   format('SKU-BULK-%s', lpad(seq::text, 4, '0')) AS sku,
   format('Catalog Item %s', lpad(seq::text, 4, '0')) AS name,
+  format('CatalogCo %s', ((seq - 1) % 15) + 1) AS company,
+  format('Seeded catalog description for item %s', lpad(seq::text, 4, '0')) AS description,
   round((5.00 + seq * 0.85)::numeric, 2) AS price,
   (seq % 17 <> 0) AS is_available,
   jsonb_build_object(
@@ -221,9 +250,13 @@ FROM generate_series(1, 300) AS s(seq)
 ON CONFLICT (product_id) DO UPDATE SET
   sku = EXCLUDED.sku,
   name = EXCLUDED.name,
+  company = EXCLUDED.company,
+  description = EXCLUDED.description,
   price = EXCLUDED.price,
   is_available = EXCLUDED.is_available,
-  metadata = EXCLUDED.metadata;
+  metadata = EXCLUDED.metadata,
+  update_date = NOW(),
+  update_source = 'system';
 
 INSERT INTO orders (
   order_id, user_id, order_date, status, total_amount,
@@ -253,7 +286,9 @@ ON CONFLICT (order_id) DO UPDATE SET
   shipping_address_line = EXCLUDED.shipping_address_line,
   shipping_city = EXCLUDED.shipping_city,
   shipping_postal_code = EXCLUDED.shipping_postal_code,
-  shipping_country = EXCLUDED.shipping_country;
+  shipping_country = EXCLUDED.shipping_country,
+  update_date = NOW(),
+  update_source = 'system';
 
 INSERT INTO order_items (item_id, order_id, item_name, category, is_opened, qty, price)
 SELECT
@@ -287,7 +322,9 @@ ON CONFLICT (item_id) DO UPDATE SET
   category = EXCLUDED.category,
   is_opened = EXCLUDED.is_opened,
   qty = EXCLUDED.qty,
-  price = EXCLUDED.price;
+  price = EXCLUDED.price,
+  update_date = NOW(),
+  update_source = 'system';
 
 INSERT INTO payments (transaction_id, order_id, amount, method, payment_status, charged_at)
 SELECT
@@ -311,7 +348,9 @@ ON CONFLICT (transaction_id) DO UPDATE SET
   amount = EXCLUDED.amount,
   method = EXCLUDED.method,
   payment_status = EXCLUDED.payment_status,
-  charged_at = EXCLUDED.charged_at;
+  charged_at = EXCLUDED.charged_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 WITH shipment_candidates AS (
   SELECT
@@ -345,7 +384,9 @@ ON CONFLICT (tracking_id) DO UPDATE SET
   shipping_tier = EXCLUDED.shipping_tier,
   promised_delivery_at = EXCLUDED.promised_delivery_at,
   actual_delivery_at = EXCLUDED.actual_delivery_at,
-  delay_reason = EXCLUDED.delay_reason;
+  delay_reason = EXCLUDED.delay_reason,
+  update_date = NOW(),
+  update_source = 'system';
 
 WITH delivered_orders AS (
   SELECT
@@ -383,37 +424,45 @@ ON CONFLICT (refund_id) DO UPDATE SET
   reason = EXCLUDED.reason,
   requested_at = EXCLUDED.requested_at,
   decision = EXCLUDED.decision,
-  decision_reason = EXCLUDED.decision_reason;
+  decision_reason = EXCLUDED.decision_reason,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Support tickets: one per issue_type in issue_required_fields (+ security); explicit IDs for stable smoke tests
-INSERT INTO support_tickets (ticket_id, issue_type, user_id, payload_json, validation_passed, routing_result) VALUES
-(101, 'order', 1, '{"order_id": "ORD-1001", "email": "silver_user@example.com", "item_name": "Smart Toaster"}'::jsonb, true, 'order_queue'),
-(102, 'payment', 1, '{"transaction_id": "TXN-9003", "amount": "99.99"}'::jsonb, false, 'payment_mismatch_review'),
-(103, 'account', 3, '{"email": "suspended_user@example.com"}'::jsonb, true, 'account_recovery'),
-(104, 'delivery', 1, '{"order_or_tracking": "TRK-WEATHER", "issue_summary": "Late due to weather"}'::jsonb, true, 'delivery_policy'),
-(105, 'shipping', 2, '{"order_or_tracking": "ORD-1003"}'::jsonb, true, 'shipping_inquiry'),
-(106, 'security', 1, '{"raw_message": "User provided CC: 4111222233334444", "cvv": "123"}'::jsonb, true, 'fraud_escalation'),
-(107, 'refund', 4, '{"order_id": "ORD-1002", "reason": "Return laptop after 20 days"}'::jsonb, true, 'refund_policy'),
-(108, 'cancel', 2, '{"order_id": "ORD-1003"}'::jsonb, false, 'cannot_cancel_shipped'),
-(109, 'contact', 1, '{"reason": "General partnership inquiry"}'::jsonb, true, 'contact_routing'),
-(110, 'feedback', 2, '{"feedback": "Love the coffee beans packaging."}'::jsonb, true, 'feedback_bucket'),
-(111, 'invoice', 5, '{"invoice_id": "INV-SUB-24H"}'::jsonb, true, 'billing'),
-(112, 'subscription', 5, '{"account_email": "subscription_holder@example.com", "subscription_issue": "Billing question after renewal"}'::jsonb, true, 'subscription_support')
+INSERT INTO support_tickets (ticket_id, issue_type, user_id, payload_json, validation_passed, routing_result, update_date, update_source) VALUES
+(101, 'order', 1, '{"order_id": "ORD-1001", "email": "silver_user@example.com", "item_name": "Smart Toaster"}'::jsonb, true, 'order_queue', NOW(), 'system'),
+(102, 'payment', 1, '{"transaction_id": "TXN-9003", "amount": "99.99"}'::jsonb, false, 'payment_mismatch_review', NOW(), 'system'),
+(103, 'account', 3, '{"email": "suspended_user@example.com"}'::jsonb, true, 'account_recovery', NOW(), 'system'),
+(104, 'delivery', 1, '{"order_or_tracking": "TRK-WEATHER", "issue_summary": "Late due to weather"}'::jsonb, true, 'delivery_policy', NOW(), 'system'),
+(105, 'shipping', 2, '{"order_or_tracking": "ORD-1003"}'::jsonb, true, 'shipping_inquiry', NOW(), 'system'),
+(106, 'security', 1, '{"raw_message": "User provided CC: 4111222233334444", "cvv": "123"}'::jsonb, true, 'fraud_escalation', NOW(), 'system'),
+(107, 'refund', 4, '{"order_id": "ORD-1002", "reason": "Return laptop after 20 days"}'::jsonb, true, 'refund_policy', NOW(), 'system'),
+(108, 'cancel', 2, '{"order_id": "ORD-1003"}'::jsonb, false, 'cannot_cancel_shipped', NOW(), 'system'),
+(109, 'contact', 1, '{"reason": "General partnership inquiry"}'::jsonb, true, 'contact_routing', NOW(), 'system'),
+(110, 'feedback', 2, '{"feedback": "Love the coffee beans packaging."}'::jsonb, true, 'feedback_bucket', NOW(), 'system'),
+(111, 'invoice', 5, '{"invoice_id": "INV-SUB-24H"}'::jsonb, true, 'billing', NOW(), 'system'),
+(112, 'subscription', 5, '{"account_email": "subscription_holder@example.com", "subscription_issue": "Billing question after renewal"}'::jsonb, true, 'subscription_support', NOW(), 'system'),
+(113, 'feedback', 1, '{"complaint": "Delivery communication was unclear and delayed."}'::jsonb, true, 'complaint_queue', NOW(), 'system'),
+(114, 'contact', 2, '{"reason": "Need urgent human support for account access."}'::jsonb, true, 'human_agent_queue', NOW(), 'system')
 ON CONFLICT (ticket_id) DO UPDATE SET
   issue_type = EXCLUDED.issue_type,
   user_id = EXCLUDED.user_id,
   payload_json = EXCLUDED.payload_json,
   validation_passed = EXCLUDED.validation_passed,
-  routing_result = EXCLUDED.routing_result;
+  routing_result = EXCLUDED.routing_result,
+  update_date = NOW(),
+  update_source = 'system';
 
-INSERT INTO security_incidents (incident_id, ticket_id, pii_type, redacted, escalated_to, status) VALUES
-(1, 106, 'PAN/CVV', true, 'Fraud_Dept_Tier_2', 'open')
+INSERT INTO security_incidents (incident_id, ticket_id, pii_type, redacted, escalated_to, status, update_date, update_source) VALUES
+(1, 106, 'PAN/CVV', true, 'Fraud_Dept_Tier_2', 'open', NOW(), 'system')
 ON CONFLICT (incident_id) DO UPDATE SET
   ticket_id = EXCLUDED.ticket_id,
   pii_type = EXCLUDED.pii_type,
   redacted = EXCLUDED.redacted,
   escalated_to = EXCLUDED.escalated_to,
-  status = EXCLUDED.status;
+  status = EXCLUDED.status,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- ---------------------------------------------------------------------------
 -- Chat sessions + messages (session-aware issue state; aligns with app / infra)
@@ -425,7 +474,8 @@ INSERT INTO sessions (
     created_at, updated_at,
     intent, escalated, resolved_at,
     user_request, issue_category, issue_confidence,
-    csat_score, nps_score
+    csat_score, nps_score,
+    update_date, update_source
 ) VALUES (
     '11111111-1111-4111-8111-111111111101',
     'silver_user@example.com',
@@ -439,7 +489,9 @@ INSERT INTO sessions (
     'order',
     0.88,
     NULL,
-    NULL
+    NULL,
+    '2026-04-17 09:01:00+00',
+    'system'
 )
 ON CONFLICT (id) DO UPDATE SET
   user_id = EXCLUDED.user_id,
@@ -452,16 +504,20 @@ ON CONFLICT (id) DO UPDATE SET
   issue_category = EXCLUDED.issue_category,
   issue_confidence = EXCLUDED.issue_confidence,
   csat_score = EXCLUDED.csat_score,
-  nps_score = EXCLUDED.nps_score;
+  nps_score = EXCLUDED.nps_score,
+  update_date = NOW(),
+  update_source = 'system';
 
-INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUES
+INSERT INTO messages (id, session_id, role, content, metadata, created_at, update_date, update_source) VALUES
 (
     '21111111-1111-4111-8111-111111111101',
     '11111111-1111-4111-8111-111111111101',
     'user',
     'What is the status of my order ORD-1001?',
     '{"source": "user"}'::jsonb,
-    '2026-04-17 09:00:00+00'
+    '2026-04-17 09:00:00+00',
+    '2026-04-17 09:00:00+00',
+    'system'
 ),
 (
     '21111111-1111-4111-8111-111111111102',
@@ -469,14 +525,18 @@ INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUE
     'assistant',
     'I can look that up. If anything is missing, share your order number again.',
     '{"category": "order", "intent": "order_status", "procedure_id": "order_status", "confidence": 0.88, "validation_ok": false, "validation_missing": ["email"]}'::jsonb,
-    '2026-04-17 09:01:00+00'
+    '2026-04-17 09:01:00+00',
+    '2026-04-17 09:01:00+00',
+    'system'
 )
 ON CONFLICT (id) DO UPDATE SET
   session_id = EXCLUDED.session_id,
   role = EXCLUDED.role,
   content = EXCLUDED.content,
   metadata = EXCLUDED.metadata,
-  created_at = EXCLUDED.created_at;
+  created_at = EXCLUDED.created_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Resolved: small talk completed; resolved_at set
 INSERT INTO sessions (
@@ -484,7 +544,8 @@ INSERT INTO sessions (
     created_at, updated_at,
     intent, escalated, resolved_at,
     user_request, issue_category, issue_confidence,
-    csat_score, nps_score
+    csat_score, nps_score,
+    update_date, update_source
 ) VALUES (
     '22222222-2222-4222-8222-222222222202',
     'gold_user@example.com',
@@ -498,7 +559,9 @@ INSERT INTO sessions (
     'no_issue',
     0.99,
     5,
-    9
+    9,
+    '2026-04-16 14:02:00+00',
+    'system'
 )
 ON CONFLICT (id) DO UPDATE SET
   user_id = EXCLUDED.user_id,
@@ -511,16 +574,20 @@ ON CONFLICT (id) DO UPDATE SET
   issue_category = EXCLUDED.issue_category,
   issue_confidence = EXCLUDED.issue_confidence,
   csat_score = EXCLUDED.csat_score,
-  nps_score = EXCLUDED.nps_score;
+  nps_score = EXCLUDED.nps_score,
+  update_date = NOW(),
+  update_source = 'system';
 
-INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUES
+INSERT INTO messages (id, session_id, role, content, metadata, created_at, update_date, update_source) VALUES
 (
     '22221111-2222-4222-8222-222222222201',
     '22222222-2222-4222-8222-222222222202',
     'user',
     'Thanks, that is all I needed!',
     '{"source": "user"}'::jsonb,
-    '2026-04-16 14:01:00+00'
+    '2026-04-16 14:01:00+00',
+    '2026-04-16 14:01:00+00',
+    'system'
 ),
 (
     '22221111-2222-4222-8222-222222222202',
@@ -528,14 +595,18 @@ INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUE
     'assistant',
     'Happy to help anytime!',
     '{"category": "no_issue", "intent": "no_issue_chat", "procedure_id": "no_issue_chat", "confidence": 0.99, "validation_ok": true, "validation_missing": []}'::jsonb,
-    '2026-04-16 14:02:00+00'
+    '2026-04-16 14:02:00+00',
+    '2026-04-16 14:02:00+00',
+    'system'
 )
 ON CONFLICT (id) DO UPDATE SET
   session_id = EXCLUDED.session_id,
   role = EXCLUDED.role,
   content = EXCLUDED.content,
   metadata = EXCLUDED.metadata,
-  created_at = EXCLUDED.created_at;
+  created_at = EXCLUDED.created_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Escalated: refund path pending human approval (unresolved issue)
 INSERT INTO sessions (
@@ -543,7 +614,8 @@ INSERT INTO sessions (
     created_at, updated_at,
     intent, escalated, resolved_at,
     user_request, issue_category, issue_confidence,
-    csat_score, nps_score
+    csat_score, nps_score,
+    update_date, update_source
 ) VALUES (
     '33333333-3333-4333-8333-333333333303',
     'refund_scenarios@example.com',
@@ -557,7 +629,9 @@ INSERT INTO sessions (
     'refund',
     0.91,
     NULL,
-    NULL
+    NULL,
+    '2026-04-15 11:05:00+00',
+    'system'
 )
 ON CONFLICT (id) DO UPDATE SET
   user_id = EXCLUDED.user_id,
@@ -570,16 +644,20 @@ ON CONFLICT (id) DO UPDATE SET
   issue_category = EXCLUDED.issue_category,
   issue_confidence = EXCLUDED.issue_confidence,
   csat_score = EXCLUDED.csat_score,
-  nps_score = EXCLUDED.nps_score;
+  nps_score = EXCLUDED.nps_score,
+  update_date = NOW(),
+  update_source = 'system';
 
-INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUES
+INSERT INTO messages (id, session_id, role, content, metadata, created_at, update_date, update_source) VALUES
 (
     '33331111-3333-4333-8333-333333333301',
     '33333333-3333-4333-8333-333333333303',
     'user',
     'I want a refund for ORD-1008 — defective speaker.',
     '{"source": "user"}'::jsonb,
-    '2026-04-15 11:00:00+00'
+    '2026-04-15 11:00:00+00',
+    '2026-04-15 11:00:00+00',
+    'system'
 ),
 (
     '33331111-3333-4333-8333-333333333302',
@@ -587,17 +665,21 @@ INSERT INTO messages (id, session_id, role, content, metadata, created_at) VALUE
     'assistant',
     'A specialist needs to review this refund. Please confirm if you want escalation.',
     '{"category": "refund", "intent": "get_refund", "procedure_id": "get_refund", "confidence": 0.91, "validation_ok": true, "pending_human_action": true, "action_type": "refund_escalation", "action_id": "act-seed-1008"}'::jsonb,
-    '2026-04-15 11:05:00+00'
+    '2026-04-15 11:05:00+00',
+    '2026-04-15 11:05:00+00',
+    'system'
 )
 ON CONFLICT (id) DO UPDATE SET
   session_id = EXCLUDED.session_id,
   role = EXCLUDED.role,
   content = EXCLUDED.content,
   metadata = EXCLUDED.metadata,
-  created_at = EXCLUDED.created_at;
+  created_at = EXCLUDED.created_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Session-linked support ticket (UUID tickets table)
-INSERT INTO tickets (id, session_id, issue_type, summary, status, priority, created_at) VALUES
+INSERT INTO tickets (id, session_id, issue_type, summary, status, priority, created_at, update_date, update_source) VALUES
 (
     '44444444-4444-4444-8444-444444444404',
     '33333333-3333-4333-8333-333333333303',
@@ -605,7 +687,9 @@ INSERT INTO tickets (id, session_id, issue_type, summary, status, priority, crea
     'Refund escalation for ORD-1008 (defective speaker)',
     'open',
     'high',
-    '2026-04-15 11:05:00+00'
+    '2026-04-15 11:05:00+00',
+    '2026-04-15 11:05:00+00',
+    'system'
 )
 ON CONFLICT (id) DO UPDATE SET
   session_id = EXCLUDED.session_id,
@@ -613,7 +697,9 @@ ON CONFLICT (id) DO UPDATE SET
   summary = EXCLUDED.summary,
   status = EXCLUDED.status,
   priority = EXCLUDED.priority,
-  created_at = EXCLUDED.created_at;
+  created_at = EXCLUDED.created_at,
+  update_date = NOW(),
+  update_source = 'system';
 
 -- Observability samples (populate analytics views)
 INSERT INTO agent_spans (id, session_id, trace_id, span_name, attributes, latency_ms, "timestamp", created_at) VALUES
@@ -776,7 +862,7 @@ INSERT INTO category_intents (category_name, intent_name, display_name, is_activ
 ('invoice', 'check_invoice', 'Check invoice', true),
 ('invoice', 'get_invoice', 'Get invoice', true),
 -- order
-('order', 'track_order', 'Track order', true),
+('order', 'order_status', 'Order status', true),
 ('order', 'place_order', 'Place order', true),
 ('order', 'change_order', 'Change order', true),
 ('order', 'cancel_order', 'Cancel order', true),
@@ -833,10 +919,10 @@ INSERT INTO procedure_blueprints (
     '91000000-0000-4000-8000-000000000001',
     'order_status_v1',
     'order',
-    'track_order',
+    'order_status',
     1,
     false,
-    '{"intent":"track_order","steps":[{"id":"retrieve_order","type":"tool_call","tool":"check_order_status","required_data":["order_id"]}]}'::jsonb,
+    '{"intent":"order_status","steps":[{"id":"retrieve_order","type":"tool_call","tool":"check_order_status","required_data":["order_id"]}]}'::jsonb,
     '{"source":"seed","notes":"legacy baseline blueprint"}'::jsonb,
     'seed_script',
     '2026-04-14 09:00:00+00',
@@ -846,10 +932,10 @@ INSERT INTO procedure_blueprints (
     '91000000-0000-4000-8000-000000000002',
     'order_status_v1',
     'order',
-    'track_order',
+    'order_status',
     2,
     true,
-    '{"intent":"track_order","steps":[{"id":"retrieve_order","type":"tool_call","tool":"check_order_status","required_data":["order_id"]},{"id":"compose_status","type":"llm_response","message":"Share current order status"}]}'::jsonb,
+    '{"intent":"order_status","steps":[{"id":"retrieve_order","type":"tool_call","tool":"check_order_status","required_data":["order_id"]},{"id":"compose_status","type":"llm_response","message":"Share current order status"}]}'::jsonb,
     '{"source":"seed","notes":"active tracking blueprint"}'::jsonb,
     'seed_script',
     '2026-04-18 09:00:00+00',
@@ -954,7 +1040,7 @@ INSERT INTO escalation_handoffs (
     'resolved',
     'resolved',
     'Order status clarified automatically',
-    '{"category":"order","intent":"track_order","last_step_id":"compose_status","pending_human_action":false}'::jsonb,
+    '{"category":"order","intent":"order_status","last_step_id":"compose_status","pending_human_action":false}'::jsonb,
     '2026-04-17 09:02:00+00',
     '2026-04-17 09:03:00+00',
     '2026-04-17 09:04:00+00',
@@ -1197,7 +1283,7 @@ INSERT INTO simulation_scenarios (
     'order_status_smoke',
     'polite_first_timer',
     'order',
-    'track_order',
+    'order_status',
     'ORD-1001',
     1,
     NULL,
@@ -1316,7 +1402,7 @@ INSERT INTO simulation_turns (
     'resolved',
     'order_status_v1',
     'order',
-    'track_order',
+    'order_status',
     '[]'::jsonb,
     '{"variables":{"order_status":"processing"},"validation_results":{"order_id":true}}'::jsonb,
     '{"policy_doc_names":["shipping_status_policy"]}'::jsonb,
@@ -1507,9 +1593,9 @@ INSERT INTO simulation_training_examples (
     '[{"role":"user","content":"Where is my order ORD-1001?"},{"role":"assistant","content":"Your order is on the way."}]'::jsonb,
     'Where is my order ORD-1001?',
     'Your order is on the way.',
-    '{"category":"order","intent":"track_order","seed_id":"order_status_smoke"}'::jsonb,
+    '{"category":"order","intent":"order_status","seed_id":"order_status_smoke"}'::jsonb,
     'order',
-    'track_order',
+    'order_status',
     'resolved',
     '{"source":"seed_data"}'::jsonb,
     '2026-04-17 09:02:00+00'

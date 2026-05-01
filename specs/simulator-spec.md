@@ -8,6 +8,10 @@
 
 The simulator is an end-to-end testing framework that generates realistic customer support scenarios, converses with the BitBot agent over its existing HTTP API, and evaluates whether issues were correctly handled. It is designed to surface regressions across the full LangGraph pipeline — from `classify_category` through `outcome_validator` — not just the final response text.
 
+Current implementation note: live procedure/intent naming follows runtime YAML in `backend/procedures/`
+(for example `order/order_status`, `shipping/change_shipping_address`, `product/product_info`), which
+supersedes older examples in this document that use legacy naming.
+
 ### Design principles
 
 - **DB-grounded scenarios**: every test scenario is hydrated with real entities (orders, users, subscriptions) from the database so that tool calls, eligibility gates, and policy constraints are exercised against actual data, not fabricated IDs.

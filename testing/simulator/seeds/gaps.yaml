@@ -1,5 +1,57 @@
 known_gaps:
+  - category: order
+    intent: place_order
+    reason: "No dedicated place-order procedure in current YAML set."
+    ticket: ""
+  - category: order
+    intent: change_order
+    reason: "No dedicated change-order procedure in current YAML set."
+    ticket: ""
+  - category: refund
+    intent: check_refund_policy
+    reason: "Refund policy inquiry procedure not yet added."
+    ticket: ""
+  - category: refund
+    intent: track_refund
+    reason: "Refund category track_refund procedure not yet added."
+    ticket: ""
   - category: shipping
-    intent: track_order
-    reason: "No dedicated shipping track procedure in current YAML set."
+    intent: delivery_options
+    reason: "Shipping delivery options procedure not yet added."
+    ticket: ""
+  - category: shipping
+    intent: delivery_period
+    reason: "Shipping-category delivery period intentionally deferred; delivery category is supported."
+    ticket: ""
+  - category: shipping
+    intent: set_up_shipping_address
+    reason: "Shipping address setup procedure not yet added."
+    ticket: ""
+  - category: invoice
+    intent: get_invoice
+    reason: "Get-invoice retrieval procedure not yet added."
+    ticket: ""
+  - category: subscription
+    intent: newsletter_subscription
+    reason: "Newsletter subscription procedure not yet added."
+    ticket: ""
+  - category: contact
+    intent: contact_customer_service
+    reason: "Customer-service contact procedure not yet added."
+    ticket: ""
+  - category: delivery
+    intent: delivery_options
+    reason: "Delivery options procedure not yet added."
+    ticket: ""
+  - category: delivery
+    intent: lost_or_stolen_package
+    reason: "Lost package procedure not yet added."
+    ticket: ""
+  - category: delivery
+    intent: wrong_address_entered
+    reason: "Wrong address correction procedure not yet added."
+    ticket: ""
+  - category: feedback
+    intent: review
+    reason: "Review procedure not yet added."
     ticket: ""

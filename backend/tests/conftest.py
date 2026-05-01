@@ -44,7 +44,9 @@ def session_issue_mocks(monkeypatch: pytest.MonkeyPatch) -> dict:
         problem_to_solve: str,
         issue_category: str,
         issue_confidence: float,
+        update_source: str = "system",
     ) -> None:
+        _ = update_source
         b = _ensure(sid)
         b.update(
             intent=intent,
@@ -55,7 +57,8 @@ def session_issue_mocks(monkeypatch: pytest.MonkeyPatch) -> dict:
             resolved_at=None,
         )
 
-    def mrk(sid: str) -> None:
+    def mrk(sid: str, *, update_source: str = "system") -> None:
+        _ = update_source
         _ensure(sid)["resolved_at"] = "2025-01-01T00:00:00+00:00"
 
     monkeypatch.setattr("backend.api.routes.classify.get_session_issue_state", get_s)

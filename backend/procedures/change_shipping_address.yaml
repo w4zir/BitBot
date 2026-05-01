@@ -1,0 +1,54 @@
+id: change_shipping_address
+category: shipping
+intent: change_shipping_address
+keywords:
+  - change address
+  - shipping address
+  - update address
+  - wrong address
+required_data:
+  - name: order_id
+    prompt: Please share your order number (e.g. ORD-12345).
+  - name: new_address
+    prompt: Please provide the full new shipping address (street, city, postal code, country).
+steps:
+  - id: lookup_order
+    type: tool_call
+    tool: check_order_status
+  - id: branch_order_found
+    type: logic_gate
+    condition: {op: eq, field: order_found, value: true}
+    on_true: branch_order_delivered
+    on_false: order_not_found
+  - id: order_not_found
+    type: llm_response
+    message: >
+      The order was not found. Tell the customer we could not find this order in our system and ask
+      them to validate the order ID and try again.
+  - id: branch_order_delivered
+    type: logic_gate
+    condition: {op: neq, field: order_status, value: delivered}
+    on_true: apply_shipping_address_change
+    on_false: already_delivered
+  - id: apply_shipping_address_change
+    type: tool_call
+    tool: update_shipping_address
+  - id: branch_address_update_succeeded
+    type: logic_gate
+    condition: {op: eq, field: shipping_address_updated, value: true}
+    on_true: shipping_address_confirmed
+    on_false: shipping_address_failed
+  - id: shipping_address_confirmed
+    type: llm_response
+    message: >
+      The shipping address update succeeded. Confirm the new address from shipping_address and explain
+      what the user should expect next.
+  - id: shipping_address_failed
+    type: llm_response
+    message: >
+      The shipping address update failed. Explain why using shipping_address_update_reason.
+  - id: already_delivered
+    type: llm_response
+    message: >
+      The order is already delivered, so the shipping address cannot be changed.
+fallback_response: I can update shipping address once you share your order number and full new address.

@@ -59,14 +59,20 @@ CREATE TABLE users (
     user_id SERIAL PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     status VARCHAR(50) DEFAULT 'active', -- active, suspended, deleted
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE loyalty_accounts (
     user_id INT PRIMARY KEY REFERENCES users(user_id),
     annual_spend DECIMAL(10, 2),
     tier VARCHAR(50), -- Silver, Gold
-    benefits_json JSONB
+    benefits_json JSONB,
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 -- Order and Product Tables
@@ -79,7 +85,10 @@ CREATE TABLE orders (
     shipping_address_line TEXT,
     shipping_city VARCHAR(100),
     shipping_postal_code VARCHAR(30),
-    shipping_country VARCHAR(80)
+    shipping_country VARCHAR(80),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE order_items (
@@ -89,17 +98,25 @@ CREATE TABLE order_items (
     category VARCHAR(100), -- e.g., electronics
     is_opened BOOLEAN DEFAULT FALSE,
     qty INT,
-    price DECIMAL(10, 2)
+    price DECIMAL(10, 2),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE products (
     product_id SERIAL PRIMARY KEY,
     sku VARCHAR(80) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
+    company VARCHAR(255),
+    description TEXT,
     price DECIMAL(10, 2) NOT NULL,
     is_available BOOLEAN DEFAULT TRUE,
     metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 CREATE INDEX idx_products_name ON products (name);
 CREATE INDEX idx_products_lower_name ON products ((lower(name)));
@@ -111,7 +128,10 @@ CREATE TABLE payments (
     amount DECIMAL(10, 2),
     method VARCHAR(50),
     payment_status VARCHAR(50),
-    charged_at TIMESTAMP
+    charged_at TIMESTAMP,
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE shipments (
@@ -120,7 +140,10 @@ CREATE TABLE shipments (
     shipping_tier VARCHAR(50), -- standard, priority
     promised_delivery_at TIMESTAMP,
     actual_delivery_at TIMESTAMP,
-    delay_reason VARCHAR(255) -- weather, carrier_error, etc.
+    delay_reason VARCHAR(255), -- weather, carrier_error, etc.
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 -- Subscription and Billing
@@ -129,7 +152,10 @@ CREATE TABLE subscription_accounts (
     plan VARCHAR(50),
     next_renewal_at TIMESTAMP,
     last_charge_at TIMESTAMP,
-    subscription_status VARCHAR(50)
+    subscription_status VARCHAR(50),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE invoices (
@@ -139,7 +165,10 @@ CREATE TABLE invoices (
     account_email VARCHAR(255) NULL REFERENCES subscription_accounts(account_email),
     amount DECIMAL(10, 2),
     issued_at TIMESTAMP,
-    status VARCHAR(50)
+    status VARCHAR(50),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 -- Post-Purchase and Support
@@ -149,7 +178,10 @@ CREATE TABLE refund_requests (
     reason TEXT,
     requested_at TIMESTAMP,
     decision VARCHAR(50), -- approved, denied, pending
-    decision_reason TEXT
+    decision_reason TEXT,
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE support_tickets (
@@ -158,7 +190,10 @@ CREATE TABLE support_tickets (
     user_id INT REFERENCES users(user_id),
     payload_json JSONB,
     validation_passed BOOLEAN,
-    routing_result VARCHAR(100)
+    routing_result VARCHAR(100),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE security_incidents (
@@ -167,7 +202,10 @@ CREATE TABLE security_incidents (
     pii_type VARCHAR(50), -- PAN, CVV, SSN
     redacted BOOLEAN DEFAULT FALSE,
     escalated_to VARCHAR(100),
-    status VARCHAR(50)
+    status VARCHAR(50),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 -- ---------------------------------------------------------------------------
@@ -213,7 +251,10 @@ CREATE TABLE sessions (
     issue_category     VARCHAR(100),
     issue_confidence   DOUBLE PRECISION,
     csat_score         SMALLINT,
-    nps_score          SMALLINT
+    nps_score          SMALLINT,
+    update_date        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source      VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE messages (
@@ -222,7 +263,10 @@ CREATE TABLE messages (
     role        VARCHAR(20) NOT NULL,
     content     TEXT NOT NULL,
     metadata    JSONB,
-    created_at  TIMESTAMPTZ DEFAULT NOW()
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 -- Support ticket records linked to a chat session (distinct from support_tickets above)
@@ -233,7 +277,10 @@ CREATE TABLE tickets (
     summary     TEXT,
     status      VARCHAR(50) DEFAULT 'open',
     priority    VARCHAR(20) DEFAULT 'normal',
-    created_at  TIMESTAMPTZ DEFAULT NOW()
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    update_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    update_source VARCHAR(40) NOT NULL DEFAULT 'system',
+    CHECK (update_source IN ('human', 'agent', 'system'))
 );
 
 CREATE TABLE agent_spans (

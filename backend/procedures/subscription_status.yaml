@@ -1,0 +1,27 @@
+id: subscription_status
+category: subscription
+intent: subscription_status
+keywords:
+  - subscription status
+  - plan status
+required_data:
+  - name: account_email
+    prompt: Please share the email tied to your subscription.
+steps:
+  - id: lookup_subscription
+    type: tool_call
+    tool: get_subscription_status
+  - id: branch_subscription_found
+    type: logic_gate
+    condition: {op: eq, field: subscription_found, value: true}
+    on_true: share_subscription_status
+    on_false: subscription_not_found
+  - id: share_subscription_status
+    type: llm_response
+    message: >
+      Share plan, subscription status, and next renewal using subscription context.
+  - id: subscription_not_found
+    type: llm_response
+    message: >
+      Subscription was not found. Ask the user to verify the account email.
+fallback_response: I can check subscription status once you share the account email.

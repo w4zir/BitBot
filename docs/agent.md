@@ -116,6 +116,25 @@ flowchart TD
 
 Procedure schema remains in [`backend/agent/procedures.py`](../backend/agent/procedures.py) and keeps existing YAML assets compatible. Validation now additionally enforces duplicate step-id detection and deterministic fallback-chain resolution helpers.
 
+Current procedure-backed intents in `backend/procedures/`:
+
+- `order/order_status`
+- `order/cancel_order`
+- `refund/get_refund`
+- `shipping/change_shipping_address`
+- `product/product_info`
+- `product/product_price`
+- `product/product_availability`
+- `payment/payment_issue`
+- `payment/check_payment_methods`
+- `payment/track_refund`
+- `invoice/check_invoice`
+- `subscription/subscription_status`
+- `subscription/unsubscribe`
+- `contact/contact_human_agent`
+- `delivery/delivery_period`
+- `feedback/complaint`
+
 ## Node retry behavior
 
 - `classify_intent`: retries LLM parse/extract loop up to `AGENT_MAX_NODE_TURNS` before conservative fallback.

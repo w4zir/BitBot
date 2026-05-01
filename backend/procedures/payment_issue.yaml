@@ -1,0 +1,41 @@
+id: payment_issue
+category: payment
+intent: payment_issue
+keywords:
+  - payment issue
+  - charged incorrectly
+  - double charged
+required_data:
+  - name: transaction_id
+    prompt: Please share your transaction ID (for example TXN-12345).
+steps:
+  - id: lookup_payment
+    type: tool_call
+    tool: payment_lookup
+  - id: branch_payment_found
+    type: logic_gate
+    condition: {op: eq, field: payment_found, value: true}
+    on_true: create_issue_ticket
+    on_false: payment_not_found
+  - id: create_issue_ticket
+    type: tool_call
+    tool: create_payment_issue_ticket
+  - id: branch_ticket_created
+    type: logic_gate
+    condition: {op: eq, field: payment_issue_ticket_created, value: true}
+    on_true: issue_ticket_created
+    on_false: issue_ticket_failed
+  - id: issue_ticket_created
+    type: llm_response
+    message: >
+      A payment issue ticket was created. Share the ticket id from payment_issue_ticket_id and
+      explain that our billing team will review the case.
+  - id: issue_ticket_failed
+    type: llm_response
+    message: >
+      Payment issue ticket creation failed. Apologize and ask the user to try again.
+  - id: payment_not_found
+    type: llm_response
+    message: >
+      The transaction was not found. Ask the user to verify the transaction id.
+fallback_response: I can help with payment issues once you share the transaction ID.

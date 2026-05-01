@@ -5,6 +5,14 @@ from typing import Any
 from backend.db.postgres import get_connection
 
 
+_ALLOWED_UPDATE_SOURCES = {"human", "agent", "system"}
+
+
+def _normalize_update_source(update_source: str) -> str:
+    source = (update_source or "").strip().lower()
+    return source if source in _ALLOWED_UPDATE_SOURCES else "system"
+
+
 def get_order_status(order_id: str) -> dict[str, Any] | None:
     """Load order row by primary key `order_id` (e.g. ORD-1001).
 
@@ -56,10 +64,11 @@ def get_order_status(order_id: str) -> dict[str, Any] | None:
     }
 
 
-def cancel_order(order_id: str) -> dict[str, Any]:
+def cancel_order(order_id: str, *, update_source: str = "system") -> dict[str, Any]:
     oid = (order_id or "").strip().upper()
     if not oid:
         return {"ok": False, "reason": "missing_order_id"}
+    source = _normalize_update_source(update_source)
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -71,19 +80,31 @@ def cancel_order(order_id: str) -> dict[str, Any]:
             if status in {"cancelled", "delivered"}:
                 return {"ok": False, "reason": f"order_{status}"}
             cur.execute(
-                "UPDATE orders SET status = 'cancelled' WHERE order_id = %s",
-                (oid,),
+                """
+                UPDATE orders
+                SET status = 'cancelled',
+                    update_date = NOW(),
+                    update_source = %s
+                WHERE order_id = %s
+                """,
+                (source, oid),
             )
     return {"ok": True, "order_id": oid, "status": "cancelled"}
 
 
-def update_shipping_address(order_id: str, new_address: str) -> dict[str, Any]:
+def update_shipping_address(
+    order_id: str,
+    new_address: str,
+    *,
+    update_source: str = "system",
+) -> dict[str, Any]:
     oid = (order_id or "").strip().upper()
     raw = (new_address or "").strip()
     if not oid:
         return {"ok": False, "reason": "missing_order_id"}
     if not raw:
         return {"ok": False, "reason": "missing_new_address"}
+    source = _normalize_update_source(update_source)
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -98,10 +119,12 @@ def update_shipping_address(order_id: str, new_address: str) -> dict[str, Any]:
             cur.execute(
                 """
                 UPDATE orders
-                SET shipping_address_line = %s
+                SET shipping_address_line = %s,
+                    update_date = NOW(),
+                    update_source = %s
                 WHERE order_id = %s
                 """,
-                (raw, oid),
+                (raw, source, oid),
             )
     return {
         "ok": True,

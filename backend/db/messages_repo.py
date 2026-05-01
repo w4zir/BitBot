@@ -7,17 +7,30 @@ from psycopg2.extras import Json
 
 from backend.db.postgres import get_connection
 
+_ALLOWED_UPDATE_SOURCES = {"human", "agent", "system"}
 
-def create_session(*, user_id: Optional[str] = None, company_id: Optional[str] = None) -> str:
+
+def _normalize_update_source(update_source: str) -> str:
+    source = (update_source or "").strip().lower()
+    return source if source in _ALLOWED_UPDATE_SOURCES else "system"
+
+
+def create_session(
+    *,
+    user_id: Optional[str] = None,
+    company_id: Optional[str] = None,
+    update_source: str = "system",
+) -> str:
     sid = str(uuid.uuid4())
+    source = _normalize_update_source(update_source)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO sessions (id, user_id, company_id)
-                VALUES (%s, %s, %s)
+                INSERT INTO sessions (id, user_id, company_id, update_date, update_source)
+                VALUES (%s, %s, %s, NOW(), %s)
                 """,
-                (sid, user_id, company_id),
+                (sid, user_id, company_id, source),
             )
     return sid
 
@@ -65,8 +78,10 @@ def update_session_active_issue(
     problem_to_solve: str,
     issue_category: str,
     issue_confidence: float,
+    update_source: str = "system",
 ) -> None:
     """Set the locked procedure intent and canonical user request; clears resolution timestamp."""
+    source = _normalize_update_source(update_source)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -78,24 +93,29 @@ def update_session_active_issue(
                     issue_category = %s,
                     issue_confidence = %s,
                     resolved_at = NULL,
-                    updated_at = NOW()
+                    updated_at = NOW(),
+                    update_date = NOW(),
+                    update_source = %s
                 WHERE id = %s
                 """,
-                (intent, user_request, problem_to_solve, issue_category, issue_confidence, session_id),
+                (intent, user_request, problem_to_solve, issue_category, issue_confidence, source, session_id),
             )
 
 
-def mark_session_resolved(session_id: str) -> None:
+def mark_session_resolved(session_id: str, *, update_source: str = "system") -> None:
+    source = _normalize_update_source(update_source)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE sessions
                 SET resolved_at = NOW(),
-                    updated_at = NOW()
+                    updated_at = NOW(),
+                    update_date = NOW(),
+                    update_source = %s
                 WHERE id = %s
                 """,
-                (session_id,),
+                (source, session_id),
             )
 
 
@@ -132,21 +152,29 @@ def append_message(
     content: str,
     *,
     metadata: Optional[dict[str, Any]] = None,
+    update_source: str = "system",
 ) -> dict[str, Any]:
     mid = str(uuid.uuid4())
+    source = _normalize_update_source(update_source)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE sessions SET updated_at = NOW() WHERE id = %s",
-                (session_id,),
+                """
+                UPDATE sessions
+                SET updated_at = NOW(),
+                    update_date = NOW(),
+                    update_source = %s
+                WHERE id = %s
+                """,
+                (source, session_id),
             )
             cur.execute(
                 """
-                INSERT INTO messages (id, session_id, role, content, metadata)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO messages (id, session_id, role, content, metadata, update_date, update_source)
+                VALUES (%s, %s, %s, %s, %s, NOW(), %s)
                 RETURNING created_at
                 """,
-                (mid, session_id, role, content, Json(metadata or {})),
+                (mid, session_id, role, content, Json(metadata or {}), source),
             )
             row = cur.fetchone()
             created_at = row[0] if row else None

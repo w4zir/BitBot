@@ -1,0 +1,169 @@
+seeds:
+  - seed_id: payment_issue_basic
+    category: payment
+    intent: payment_issue
+    difficulty: medium
+    persona_id: polite_first_timer
+    description: "Customer reports a payment issue for a transaction."
+    expected_outcome: resolved
+    expected_procedure_id: payment_issue
+    db_filter:
+      entity_type: order
+      order_status: [processing, shipped, delivered]
+    multi_issue: false
+
+  - seed_id: payment_methods_lookup
+    category: payment
+    intent: check_payment_methods
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks which payment methods are currently available."
+    expected_outcome: resolved
+    expected_procedure_id: check_payment_methods
+    db_filter:
+      entity_type: order
+      order_status: [processing]
+    multi_issue: false
+
+  - seed_id: payment_track_refund_basic
+    category: payment
+    intent: track_refund
+    difficulty: medium
+    persona_id: polite_first_timer
+    description: "Customer asks for refund status using payment reference."
+    expected_outcome: resolved
+    expected_procedure_id: payment_track_refund
+    db_filter:
+      entity_type: order
+      order_status: [delivered, shipped]
+    multi_issue: false
+
+  - seed_id: invoice_check_amount
+    category: invoice
+    intent: check_invoice
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks to check invoice value."
+    expected_outcome: resolved
+    expected_procedure_id: check_invoice
+    db_filter:
+      entity_type: user
+      user_status: [active]
+    multi_issue: false
+
+  - seed_id: subscription_status_basic
+    category: subscription
+    intent: subscription_status
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks for subscription status details."
+    expected_outcome: resolved
+    expected_procedure_id: subscription_status
+    db_filter:
+      entity_type: subscription
+      subscription_status: [active]
+    multi_issue: false
+
+  - seed_id: subscription_unsubscribe_active
+    category: subscription
+    intent: unsubscribe
+    difficulty: medium
+    persona_id: polite_first_timer
+    description: "Customer asks to unsubscribe an active subscription."
+    expected_outcome: resolved
+    expected_procedure_id: unsubscribe
+    db_filter:
+      entity_type: subscription
+      subscription_status: [active]
+    multi_issue: false
+
+  - seed_id: contact_human_agent_request
+    category: contact
+    intent: contact_human_agent
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks for a human support agent."
+    expected_outcome: resolved
+    expected_procedure_id: contact_human_agent
+    db_filter:
+      entity_type: user
+      user_status: [active]
+    multi_issue: false
+
+  - seed_id: delivery_period_lookup
+    category: delivery
+    intent: delivery_period
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks for expected delivery period."
+    expected_outcome: resolved
+    expected_procedure_id: delivery_period
+    db_filter:
+      entity_type: order
+      order_status: [shipped, delivered]
+    multi_issue: false
+
+  - seed_id: feedback_complaint_basic
+    category: feedback
+    intent: complaint
+    difficulty: medium
+    persona_id: policy_prober
+    description: "Customer submits a complaint about experience."
+    expected_outcome: resolved
+    expected_procedure_id: complaint
+    db_filter:
+      entity_type: user
+      user_status: [active]
+    multi_issue: false
+
+  - seed_id: shipping_change_address_basic
+    category: shipping
+    intent: change_shipping_address
+    difficulty: medium
+    persona_id: polite_first_timer
+    description: "Customer asks to update shipping address before delivery."
+    expected_outcome: resolved
+    expected_procedure_id: change_shipping_address
+    db_filter:
+      entity_type: order
+      order_status: [processing, shipped]
+    multi_issue: false
+
+  - seed_id: product_info_basic
+    category: product
+    intent: product_info
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks for product details."
+    expected_outcome: resolved
+    expected_procedure_id: product_info
+    db_filter:
+      entity_type: user
+      user_status: [active]
+    multi_issue: false
+
+  - seed_id: product_price_basic
+    category: product
+    intent: product_price
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks for product price."
+    expected_outcome: resolved
+    expected_procedure_id: product_price
+    db_filter:
+      entity_type: user
+      user_status: [active]
+    multi_issue: false
+
+  - seed_id: product_availability_basic
+    category: product
+    intent: product_availability
+    difficulty: easy
+    persona_id: polite_first_timer
+    description: "Customer asks whether a product is available."
+    expected_outcome: resolved
+    expected_procedure_id: product_availability
+    db_filter:
+      entity_type: user
+      user_status: [active]
+    multi_issue: false

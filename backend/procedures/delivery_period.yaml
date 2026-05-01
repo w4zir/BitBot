@@ -1,0 +1,28 @@
+id: delivery_period
+category: delivery
+intent: delivery_period
+keywords:
+  - delivery period
+  - when delivered
+  - expected delivery
+required_data:
+  - name: order_or_tracking
+    prompt: Please share your order number or tracking ID.
+steps:
+  - id: lookup_delivery_period
+    type: tool_call
+    tool: delivery_period_lookup
+  - id: branch_delivery_info_found
+    type: logic_gate
+    condition: {op: eq, field: delivery_info_found, value: true}
+    on_true: share_delivery_period
+    on_false: delivery_period_not_found
+  - id: share_delivery_period
+    type: llm_response
+    message: >
+      Share promised and actual delivery period using delivery_period context.
+  - id: delivery_period_not_found
+    type: llm_response
+    message: >
+      Delivery period data was not found. Ask the user to verify order or tracking reference.
+fallback_response: I can check delivery period once you share your order or tracking reference.

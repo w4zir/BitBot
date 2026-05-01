@@ -18,3 +18,16 @@ scenarios:
   - seed_id: order_status_cooperative
   - seed_id: refund_delivered_easy
   - seed_id: refund_missing_data_resistant
+  - seed_id: payment_issue_basic
+  - seed_id: payment_methods_lookup
+  - seed_id: payment_track_refund_basic
+  - seed_id: invoice_check_amount
+  - seed_id: subscription_status_basic
+  - seed_id: subscription_unsubscribe_active
+  - seed_id: contact_human_agent_request
+  - seed_id: delivery_period_lookup
+  - seed_id: feedback_complaint_basic
+  - seed_id: shipping_change_address_basic
+  - seed_id: product_info_basic
+  - seed_id: product_price_basic
+  - seed_id: product_availability_basic

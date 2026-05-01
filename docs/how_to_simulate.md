@@ -15,6 +15,9 @@ The simulator:
 - writes JSON artifacts to `testing/simulator/results/`
 - can persist run/scenario/turn/message/evaluation/training data to Postgres
 
+Recent intent coverage seeds are also available in `testing/simulator/seeds/intent_expansion.yaml`
+for payment, invoice, subscription, contact, delivery, feedback, shipping address, and product flows.
+
 ## Prerequisites
 
 1. Start the BitBot API server so `POST /classify` is reachable.
@@ -187,6 +190,7 @@ Use this sequence:
 - Unexpected `policy_ineligible`: outcome drifted due to policy/procedure changes.
 - Validation loops: missing fields stay unresolved across turns.
 - Coverage gaps: add seeds or document intentional holes in `testing/simulator/seeds/gaps.yaml`.
+- Intent-name mismatch: keep DB `category_intents` names aligned with procedure YAML `intent` names.
 
 ## Suggested workflow
 

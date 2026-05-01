@@ -1,0 +1,31 @@
+id: complaint
+category: feedback
+intent: complaint
+keywords:
+  - complaint
+  - bad experience
+  - unhappy
+required_data:
+  - name: feedback
+    prompt: Please share your complaint details.
+steps:
+  - id: retrieve_complaint_policy
+    type: retrieval
+    tool: complaint_policy_search
+  - id: create_complaint
+    type: tool_call
+    tool: create_complaint_ticket
+  - id: branch_complaint_created
+    type: logic_gate
+    condition: {op: eq, field: complaint_created, value: true}
+    on_true: complaint_confirmed
+    on_false: complaint_failed
+  - id: complaint_confirmed
+    type: llm_response
+    message: >
+      Confirm complaint has been logged and share complaint_ticket_id with expected next steps.
+  - id: complaint_failed
+    type: llm_response
+    message: >
+      Complaint logging failed. Ask the user to retry and apologize.
+fallback_response: I can log your complaint once you share the details.

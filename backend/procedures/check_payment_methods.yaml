@@ -1,0 +1,19 @@
+id: check_payment_methods
+category: payment
+intent: check_payment_methods
+keywords:
+  - payment methods
+  - how can i pay
+  - card or paypal
+steps:
+  - id: retrieve_payment_policy
+    type: retrieval
+    tool: payment_policy_search
+  - id: lookup_methods
+    type: tool_call
+    tool: list_payment_methods
+  - id: share_methods
+    type: llm_response
+    message: >
+      Share the available methods from payment_methods and keep the answer concise.
+fallback_response: I can list the currently supported payment methods.

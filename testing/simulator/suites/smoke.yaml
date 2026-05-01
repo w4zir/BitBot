@@ -14,3 +14,8 @@ scenarios:
   - seed_id: order_cancel_processing_easy
   - seed_id: order_status_cooperative
   - seed_id: refund_delivered_easy
+  - seed_id: payment_issue_basic
+  - seed_id: invoice_check_amount
+  - seed_id: subscription_status_basic
+  - seed_id: contact_human_agent_request
+  - seed_id: product_info_basic

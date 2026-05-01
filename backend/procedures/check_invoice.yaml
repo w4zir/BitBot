@@ -1,0 +1,28 @@
+id: check_invoice
+category: invoice
+intent: check_invoice
+keywords:
+  - invoice amount
+  - invoice value
+  - check invoice
+required_data:
+  - name: invoice_id
+    prompt: Please share your invoice ID (for example INV-ORD-1001).
+steps:
+  - id: lookup_invoice
+    type: tool_call
+    tool: check_invoice_value
+  - id: branch_invoice_found
+    type: logic_gate
+    condition: {op: eq, field: invoice_found, value: true}
+    on_true: share_invoice_value
+    on_false: invoice_not_found
+  - id: share_invoice_value
+    type: llm_response
+    message: >
+      Share the invoice amount from invoice.amount and include invoice status.
+  - id: invoice_not_found
+    type: llm_response
+    message: >
+      Invoice was not found. Ask the user to verify the invoice id.
+fallback_response: I can check the invoice value once you share the invoice ID.

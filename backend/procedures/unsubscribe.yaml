@@ -1,0 +1,27 @@
+id: unsubscribe
+category: subscription
+intent: unsubscribe
+keywords:
+  - unsubscribe
+  - cancel subscription
+required_data:
+  - name: account_email
+    prompt: Please share the email tied to your subscription.
+steps:
+  - id: unsubscribe_account
+    type: tool_call
+    tool: unsubscribe_subscription
+  - id: branch_unsubscribe_succeeded
+    type: logic_gate
+    condition: {op: eq, field: unsubscribe_succeeded, value: true}
+    on_true: unsubscribe_confirmed
+    on_false: unsubscribe_failed
+  - id: unsubscribe_confirmed
+    type: llm_response
+    message: >
+      Unsubscribe succeeded. Confirm the subscription has been marked unsubscribed.
+  - id: unsubscribe_failed
+    type: llm_response
+    message: >
+      Unsubscribe failed. Explain why using unsubscribe_reason.
+fallback_response: I can unsubscribe your account once you share the subscription email.

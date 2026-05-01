@@ -1,0 +1,29 @@
+id: product_availability
+category: product
+intent: product_availability
+keywords:
+  - availability
+  - in stock
+  - out of stock
+required_data:
+  - name: product_name
+    prompt: Which product availability would you like to check?
+steps:
+  - id: lookup_product_availability
+    type: tool_call
+    tool: product_availability_lookup
+  - id: branch_product_found
+    type: logic_gate
+    condition: {op: eq, field: product_found, value: true}
+    on_true: share_availability
+    on_false: product_not_found
+  - id: share_availability
+    type: llm_response
+    message: >
+      The product was found. Answer only whether the product is available based on
+      product_availability.is_available.
+  - id: product_not_found
+    type: llm_response
+    message: >
+      The product was not found. Ask the user to confirm the product name.
+fallback_response: Share the product name and I can check if it is available.

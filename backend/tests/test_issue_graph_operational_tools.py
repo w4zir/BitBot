@@ -11,7 +11,7 @@ from backend.agent.issue_graph import (
 def test_cancel_order_tool_step_updates_context(monkeypatch) -> None:
     monkeypatch.setattr(
         "backend.agent.issue_graph.cancel_order_record",
-        lambda order_id: {"ok": True, "order_id": order_id, "status": "cancelled"},
+        lambda order_id, **_kwargs: {"ok": True, "order_id": order_id, "status": "cancelled"},
     )
     state = {
         "text": "cancel ORD-12345",
@@ -31,7 +31,7 @@ def test_cancel_order_tool_step_updates_context(monkeypatch) -> None:
 def test_create_refund_request_tool_step_updates_context(monkeypatch) -> None:
     monkeypatch.setattr(
         "backend.agent.issue_graph.create_refund_request",
-        lambda order_id, reason: {
+        lambda order_id, reason, **_kwargs: {
             "ok": True,
             "refund_id": 99,
             "order_id": order_id,
@@ -56,7 +56,7 @@ def test_create_refund_request_tool_step_updates_context(monkeypatch) -> None:
 def test_update_shipping_address_tool_step_updates_context(monkeypatch) -> None:
     monkeypatch.setattr(
         "backend.agent.issue_graph.update_shipping_address_record",
-        lambda order_id, new_address: {
+        lambda order_id, new_address, **_kwargs: {
             "ok": True,
             "order_id": order_id,
             "shipping_address": {"line": new_address},
@@ -186,7 +186,7 @@ def test_order_status_before_after_are_db_backed(monkeypatch) -> None:
     def _get_order_status(order_id: str):
         return {"order_id": order_id, "status": statuses.get(order_id, "")}
 
-    def _cancel_order(order_id: str):
+    def _cancel_order(order_id: str, **_kwargs):
         statuses[order_id] = "cancelled"
         return {"ok": True, "order_id": order_id, "status": "cancelled"}
 
@@ -357,7 +357,7 @@ def test_refund_success_branch_not_contaminated_by_cancellation_policy(monkeypat
     )
     monkeypatch.setattr(
         "backend.agent.issue_graph.create_refund_request",
-        lambda order_id, reason: {
+        lambda order_id, reason, **_kwargs: {
             "ok": True,
             "refund_id": 1210,
             "order_id": order_id,
@@ -406,3 +406,66 @@ def test_refund_success_branch_not_contaminated_by_cancellation_policy(monkeypat
     assert "policy_eligible" not in context_data
     assert "policy_ineligibility_reason" not in context_data
     assert "do not invent policy restrictions" in (captured.get("prompt") or "").lower()
+
+
+def test_product_price_tool_step_updates_context(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_product_price_record",
+        lambda _name: {"sku": "SKU-9", "name": "Widget", "price": 12.5},
+    )
+    state = {
+        "text": "price for widget",
+        "messages": [{"role": "user", "content": "widget"}],
+        "todo_list": [{"id": "lookup_price", "type": "tool_call", "tool": "product_price_lookup"}],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 1
+    assert out["context_data"]["product_found"] is True
+    assert out["context_data"]["product_price"]["price"] == 12.5
+
+
+def test_unsubscribe_tool_step_updates_context(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.unsubscribe_subscription",
+        lambda _email, **_kwargs: {"ok": True, "subscription_status": "unsubscribed"},
+    )
+    state = {
+        "text": "unsubscribe subscription_holder@example.com",
+        "messages": [{"role": "user", "content": "unsubscribe subscription_holder@example.com"}],
+        "todo_list": [{"id": "unsubscribe", "type": "tool_call", "tool": "unsubscribe_subscription"}],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 1
+    assert out["context_data"]["unsubscribe_succeeded"] is True
+    assert out["context_data"]["subscription_status"] == "unsubscribed"
+
+
+def test_delivery_period_tool_step_updates_context(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_delivery_period",
+        lambda _ref: {
+            "tracking_id": "TRK-X",
+            "order_id": "ORD-1",
+            "promised_delivery_at": "2026-05-10T10:00:00+00:00",
+            "actual_delivery_at": None,
+            "order_status": "shipped",
+        },
+    )
+    state = {
+        "text": "delivery period for TRK-X",
+        "messages": [{"role": "user", "content": "TRK-X"}],
+        "todo_list": [{"id": "delivery_period", "type": "tool_call", "tool": "delivery_period_lookup"}],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 1
+    assert out["context_data"]["delivery_info_found"] is True
+    assert out["context_data"]["delivery_period"]["tracking_id"] == "TRK-X"

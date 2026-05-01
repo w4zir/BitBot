@@ -1,0 +1,31 @@
+id: contact_human_agent
+category: contact
+intent: contact_human_agent
+keywords:
+  - human agent
+  - talk to agent
+  - live support
+required_data:
+  - name: reason
+    prompt: Please briefly describe what you need help with.
+steps:
+  - id: retrieve_contact_policy
+    type: retrieval
+    tool: contact_policy_search
+  - id: create_handoff
+    type: tool_call
+    tool: create_contact_handoff
+  - id: branch_handoff_created
+    type: logic_gate
+    condition: {op: eq, field: handoff_created, value: true}
+    on_true: handoff_confirmed
+    on_false: handoff_failed
+  - id: handoff_confirmed
+    type: llm_response
+    message: >
+      Confirm a human handoff ticket has been created and share handoff_ticket_id.
+  - id: handoff_failed
+    type: llm_response
+    message: >
+      Handoff ticket creation failed. Ask the user to retry.
+fallback_response: I can connect you to a human agent once you share the reason.

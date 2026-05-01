@@ -40,13 +40,13 @@ def test_classify_full_flow_no_issue(
     def fake_postgres_ok() -> bool:
         return True
 
-    def create_session() -> str:
+    def create_session(**_kwargs) -> str:
         return "00000000-0000-0000-0000-000000000001"
 
     def get_session(sid: str):
         return {"id": sid}
 
-    def append_message(sid: str, role: str, content: str, metadata=None):
+    def append_message(sid: str, role: str, content: str, metadata=None, **_kwargs):
         messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         )
@@ -95,11 +95,11 @@ def test_classify_full_flow_validation_missing(
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
     monkeypatch.setattr(
         "backend.api.routes.classify.create_session",
-        lambda: "00000000-0000-0000-0000-000000000002",
+        lambda **_kwargs: "00000000-0000-0000-0000-000000000002",
     )
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
 
-    def append_message(sid: str, role: str, content: str, metadata=None):
+    def append_message(sid: str, role: str, content: str, metadata=None, **_kwargs):
         messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         )
@@ -147,7 +147,7 @@ def test_classify_full_flow_interrupt_sets_pending_action(
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
     monkeypatch.setattr(
         "backend.api.routes.classify.create_session",
-        lambda: "00000000-0000-0000-0000-000000000003",
+        lambda **_kwargs: "00000000-0000-0000-0000-000000000003",
     )
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
     monkeypatch.setattr(
@@ -160,7 +160,7 @@ def test_classify_full_flow_interrupt_sets_pending_action(
     )
     monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
 
-    def append_message(sid: str, role: str, content: str, metadata=None):
+    def append_message(sid: str, role: str, content: str, metadata=None, **_kwargs):
         messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         )
@@ -207,11 +207,11 @@ def test_classify_intent_stays_locked_second_message(
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
     monkeypatch.setattr(
         "backend.api.routes.classify.create_session",
-        lambda: "00000000-0000-0000-0000-000000000004",
+        lambda **_kwargs: "00000000-0000-0000-0000-000000000004",
     )
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
 
-    def append_message(sid: str, role: str, content: str, metadata=None):
+    def append_message(sid: str, role: str, content: str, metadata=None, **_kwargs):
         messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         )
@@ -294,11 +294,11 @@ def test_classify_new_issue_after_resolution(
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
     monkeypatch.setattr(
         "backend.api.routes.classify.create_session",
-        lambda: "00000000-0000-0000-0000-000000000005",
+        lambda **_kwargs: "00000000-0000-0000-0000-000000000005",
     )
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
 
-    def append_message(sid: str, role: str, content: str, metadata=None):
+    def append_message(sid: str, role: str, content: str, metadata=None, **_kwargs):
         messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         )
@@ -367,7 +367,7 @@ def test_escalation_decision_endpoint(client: TestClient, monkeypatch: pytest.Mo
     )
     inserted: list[dict] = []
 
-    def append_message(sid: str, role: str, content: str, metadata=None):
+    def append_message(sid: str, role: str, content: str, metadata=None, **_kwargs):
         inserted.append({"sid": sid, "role": role, "content": content, "metadata": metadata or {}})
 
     monkeypatch.setattr("backend.api.routes.escalations.append_message", append_message)
@@ -416,12 +416,12 @@ def test_classify_exposes_agent_state_and_policy_variable_maps(
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
     monkeypatch.setattr(
         "backend.api.routes.classify.create_session",
-        lambda: "00000000-0000-0000-0000-000000000101",
+        lambda **_kwargs: "00000000-0000-0000-0000-000000000101",
     )
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
     monkeypatch.setattr(
         "backend.api.routes.classify.append_message",
-        lambda sid, role, content, metadata=None: messages_store.append(
+        lambda sid, role, content, metadata=None, **_kwargs: messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         ),
     )
@@ -470,7 +470,7 @@ def test_classify_full_flow_returns_503_when_postgres_unreachable(
 ) -> None:
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
 
-    def _boom() -> str:
+    def _boom(**_kwargs) -> str:
         raise OperationalError("could not translate host name 'postgres' to address")
 
     monkeypatch.setattr("backend.api.routes.classify.create_session", _boom)
@@ -487,11 +487,11 @@ def test_classify_validation_wait_limit_escalates(
     sid = "00000000-0000-0000-0000-000000000102"
     monkeypatch.setenv("AGENT_VALIDATION_MAX_USER_WAITS", "2")
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
-    monkeypatch.setattr("backend.api.routes.classify.create_session", lambda: sid)
+    monkeypatch.setattr("backend.api.routes.classify.create_session", lambda **_kwargs: sid)
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda _sid: {"id": _sid})
     monkeypatch.setattr(
         "backend.api.routes.classify.append_message",
-        lambda _sid, role, content, metadata=None: messages_store.append(
+        lambda _sid, role, content, metadata=None, **_kwargs: messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         ),
     )
@@ -537,11 +537,11 @@ def test_classify_order_id_loophole_recovers_when_llm_returns_false_without_miss
     sid = "00000000-0000-0000-0000-000000000103"
     messages_store: list[dict] = []
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
-    monkeypatch.setattr("backend.api.routes.classify.create_session", lambda: sid)
+    monkeypatch.setattr("backend.api.routes.classify.create_session", lambda **_kwargs: sid)
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda _sid: {"id": _sid})
     monkeypatch.setattr(
         "backend.api.routes.classify.append_message",
-        lambda _sid, role, content, metadata=None: messages_store.append(
+        lambda _sid, role, content, metadata=None, **_kwargs: messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         ),
     )
@@ -592,11 +592,11 @@ def test_classify_order_id_requires_ord_prefix(
     sid = "00000000-0000-0000-0000-000000000104"
     messages_store: list[dict] = []
     monkeypatch.setattr("backend.api.routes.classify.postgres_configured", lambda: True)
-    monkeypatch.setattr("backend.api.routes.classify.create_session", lambda: sid)
+    monkeypatch.setattr("backend.api.routes.classify.create_session", lambda **_kwargs: sid)
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda _sid: {"id": _sid})
     monkeypatch.setattr(
         "backend.api.routes.classify.append_message",
-        lambda _sid, role, content, metadata=None: messages_store.append(
+        lambda _sid, role, content, metadata=None, **_kwargs: messages_store.append(
             {"role": role, "content": content, "metadata": metadata or {}}
         ),
     )

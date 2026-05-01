@@ -45,13 +45,21 @@ async def escalation_decision(req: EscalationDecisionRequest) -> dict:
             "decision": req.decision,
             "pending_human_action": False,
         },
+        update_source="human",
     )
 
     if req.decision == "accept":
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE sessions SET escalated = TRUE, updated_at = NOW() WHERE id = %s",
+                    """
+                    UPDATE sessions
+                    SET escalated = TRUE,
+                        updated_at = NOW(),
+                        update_date = NOW(),
+                        update_source = 'human'
+                    WHERE id = %s
+                    """,
                     (req.session_id,),
                 )
 

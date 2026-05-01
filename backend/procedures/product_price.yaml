@@ -1,0 +1,28 @@
+id: product_price
+category: product
+intent: product_price
+keywords:
+  - price
+  - cost
+  - how much
+required_data:
+  - name: product_name
+    prompt: Which product price would you like to check?
+steps:
+  - id: lookup_product_price
+    type: tool_call
+    tool: product_price_lookup
+  - id: branch_product_found
+    type: logic_gate
+    condition: {op: eq, field: product_found, value: true}
+    on_true: share_price
+    on_false: product_not_found
+  - id: share_price
+    type: llm_response
+    message: >
+      The product was found. Share only the current database price from product_price.price.
+  - id: product_not_found
+    type: llm_response
+    message: >
+      The product was not found. Ask the user to confirm the product name.
+fallback_response: Share the product name and I can check the current price.

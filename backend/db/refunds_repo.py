@@ -5,6 +5,13 @@ from typing import Any
 from backend.db.orders_repo import get_order_status
 from backend.db.postgres import get_connection
 
+_ALLOWED_UPDATE_SOURCES = {"human", "agent", "system"}
+
+
+def _normalize_update_source(update_source: str) -> str:
+    source = (update_source or "").strip().lower()
+    return source if source in _ALLOWED_UPDATE_SOURCES else "system"
+
 
 def get_refund_context(order_id: str) -> dict[str, Any] | None:
     oid = (order_id or "").strip().upper()
@@ -34,13 +41,19 @@ def get_refund_context(order_id: str) -> dict[str, Any] | None:
     }
 
 
-def create_refund_request(order_id: str, reason: str) -> dict[str, Any]:
+def create_refund_request(
+    order_id: str,
+    reason: str,
+    *,
+    update_source: str = "system",
+) -> dict[str, Any]:
     oid = (order_id or "").strip().upper()
     note = (reason or "").strip()
     if not oid:
         return {"ok": False, "reason": "missing_order_id"}
     if not note:
         return {"ok": False, "reason": "missing_refund_reason"}
+    source = _normalize_update_source(update_source)
 
     order = get_order_status(oid)
     if not order:
@@ -50,11 +63,13 @@ def create_refund_request(order_id: str, reason: str) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO refund_requests (order_id, reason, requested_at, decision, decision_reason)
-                VALUES (%s, %s, NOW(), 'pending', NULL)
+                INSERT INTO refund_requests (
+                    order_id, reason, requested_at, decision, decision_reason, update_date, update_source
+                )
+                VALUES (%s, %s, NOW(), 'pending', NULL, NOW(), %s)
                 RETURNING refund_id
                 """,
-                (oid, note),
+                (oid, note, source),
             )
             row = cur.fetchone()
 

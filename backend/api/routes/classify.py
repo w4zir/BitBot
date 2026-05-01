@@ -129,7 +129,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         )
 
     try:
-        session_id = (req.session_id or "").strip() or create_session()
+        session_id = (req.session_id or "").strip() or create_session(update_source="human")
         if req.session_id and not get_session(session_id):
             raise HTTPException(status_code=404, detail="session_id not found")
 
@@ -137,7 +137,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
         had_resolved = pre.get("resolved_at") is not None
         issue_locked = bool(pre.get("intent") and not had_resolved)
 
-        append_message(session_id, "user", text, metadata={"source": "user"})
+        append_message(session_id, "user", text, metadata={"source": "user"}, update_source="human")
 
         history_rows = list_messages(session_id)
         prior_meta = _latest_assistant_metadata(history_rows)
@@ -157,7 +157,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
 
         # Explicit user confirmation ends the active issue without re-running the graph.
         if issue_locked and user_confirms_resolution(text):
-            mark_session_resolved(session_id)
+            mark_session_resolved(session_id, update_source="human")
             assistant = (
                 "Great — I've marked this issue as resolved. "
                 "Let me know if you need help with anything else."
@@ -175,6 +175,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
                 "assistant",
                 assistant,
                 metadata=assistant_meta,
+                update_source="agent",
             )
             final_rows = list_messages(session_id)
             ur = str(pre.get("user_request") or "")
@@ -267,6 +268,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
                 "assistant",
                 assistant,
                 metadata=assistant_meta,
+                update_source="agent",
             )
 
         # Persist / update session-level issue tracking (new or post-resolution issue only).
@@ -278,9 +280,10 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
                 problem_to_solve=problem_to_solve,
                 issue_category=str(cat),
                 issue_confidence=conf,
+                update_source="agent",
             )
         if resolved_by_graph:
-            mark_session_resolved(session_id)
+            mark_session_resolved(session_id, update_source="agent")
 
         final_rows = list_messages(session_id)
         post = get_session_issue_state(session_id) or {}

@@ -26,8 +26,25 @@ from backend.db.orders_repo import (
     update_shipping_address as update_shipping_address_record,
 )
 from backend.db.postgres import postgres_configured
-from backend.db.products_repo import lookup_product
+from backend.db.delivery_repo import get_delivery_period
+from backend.db.invoices_repo import get_invoice
+from backend.db.payments_repo import (
+    get_payment,
+    get_refund_tracking,
+    list_payment_methods,
+)
+from backend.db.products_repo import (
+    get_product_availability as get_product_availability_record,
+    get_product_info as get_product_info_record,
+    get_product_price as get_product_price_record,
+    lookup_product,
+)
 from backend.db.refunds_repo import create_refund_request, get_refund_context
+from backend.db.subscriptions_repo import (
+    get_subscription,
+    unsubscribe_subscription,
+)
+from backend.db.support_repo import create_support_ticket
 from backend.llm.providers import chat_completion, extract_json_object
 from backend.rag.policy_retriever import search_policy_docs
 from backend.rag.query_classifier import ClassificationResult, get_query_classifier
@@ -166,6 +183,16 @@ def _compact_context_data(context_data: dict[str, Any]) -> dict[str, Any]:
         "tool_call",
         "order_status_before",
         "order_status_after",
+        "payment_found",
+        "payment_issue_ticket_created",
+        "refund_tracking_found",
+        "invoice_found",
+        "subscription_found",
+        "unsubscribe_succeeded",
+        "handoff_created",
+        "complaint_created",
+        "delivery_info_found",
+        "product_found",
     }
     return {k: v for k, v in context_data.items() if k in keep_keys}
 
@@ -899,6 +926,10 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
 
 _ORDER_NUMBER_RE = re.compile(r"\b(ORD-[A-Z0-9]+)\b", re.IGNORECASE)
 _ORDER_ID_ONLY_RE = re.compile(r"^\s*ORD-[A-Z0-9]+\s*$", re.IGNORECASE)
+_TXN_NUMBER_RE = re.compile(r"\b(TXN-[A-Z0-9]+)\b", re.IGNORECASE)
+_INVOICE_ID_RE = re.compile(r"\b(INV-[A-Z0-9-]+)\b", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b", re.IGNORECASE)
+_TRACKING_RE = re.compile(r"\b(TRK-[A-Z0-9-]+)\b", re.IGNORECASE)
 _ESCALATION_DECISION_RE = re.compile(r"\b(accept|reject)\b", re.IGNORECASE)
 _USER_RESOLUTION_CONFIRM_RE = re.compile(
     r"(?i)\b("
@@ -984,6 +1015,69 @@ def _extract_product_name_from_messages(messages: list[dict[str, Any]]) -> str |
         text = str(m.get("content") or "").strip()
         if text:
             return text
+    return None
+
+
+def _extract_transaction_id(messages: list[dict[str, Any]], text: str | None = None) -> str | None:
+    for m in messages or []:
+        if str(m.get("role") or "").strip().lower() != "user":
+            continue
+        mo = _TXN_NUMBER_RE.search(str(m.get("content") or ""))
+        if mo:
+            return mo.group(1).upper()
+    if text:
+        mo = _TXN_NUMBER_RE.search(str(text))
+        if mo:
+            return mo.group(1).upper()
+    return None
+
+
+def _extract_invoice_id(messages: list[dict[str, Any]], text: str | None = None) -> str | None:
+    for m in messages or []:
+        if str(m.get("role") or "").strip().lower() != "user":
+            continue
+        mo = _INVOICE_ID_RE.search(str(m.get("content") or ""))
+        if mo:
+            return mo.group(1).upper()
+    if text:
+        mo = _INVOICE_ID_RE.search(str(text))
+        if mo:
+            return mo.group(1).upper()
+    return None
+
+
+def _extract_account_email(messages: list[dict[str, Any]], text: str | None = None) -> str | None:
+    for m in messages or []:
+        if str(m.get("role") or "").strip().lower() != "user":
+            continue
+        mo = _EMAIL_RE.search(str(m.get("content") or ""))
+        if mo:
+            return mo.group(1).lower()
+    if text:
+        mo = _EMAIL_RE.search(str(text))
+        if mo:
+            return mo.group(1).lower()
+    return None
+
+
+def _extract_order_or_tracking(messages: list[dict[str, Any]], text: str | None = None) -> str | None:
+    for m in messages or []:
+        if str(m.get("role") or "").strip().lower() != "user":
+            continue
+        content = str(m.get("content") or "")
+        trk = _TRACKING_RE.search(content)
+        if trk:
+            return trk.group(1).upper()
+        ord_m = _ORDER_NUMBER_RE.search(content)
+        if ord_m:
+            return ord_m.group(1).upper()
+    if text:
+        trk = _TRACKING_RE.search(str(text))
+        if trk:
+            return trk.group(1).upper()
+        ord_m = _ORDER_NUMBER_RE.search(str(text))
+        if ord_m:
+            return ord_m.group(1).upper()
     return None
 
 
@@ -1099,6 +1193,42 @@ def _lookup_product_info(step: dict[str, Any], state: IssueGraphState) -> dict[s
     return {**base, "product_found": True, "product": product}
 
 
+def _lookup_product_info_only(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "product_info_lookup")
+    product_name = _extract_product_name_from_messages(state.get("messages") or [])
+    base: dict[str, Any] = {"tool_call": tool_name, "product_name_extracted": product_name}
+    if not product_name:
+        return {**base, "product_found": False, "product_info": None}
+    product = get_product_info_record(product_name)
+    if not product:
+        return {**base, "product_found": False, "product_info": None}
+    return {**base, "product_found": True, "product_info": product}
+
+
+def _lookup_product_price(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "product_price_lookup")
+    product_name = _extract_product_name_from_messages(state.get("messages") or [])
+    base: dict[str, Any] = {"tool_call": tool_name, "product_name_extracted": product_name}
+    if not product_name:
+        return {**base, "product_found": False, "product_price": None}
+    payload = get_product_price_record(product_name)
+    if not payload:
+        return {**base, "product_found": False, "product_price": None}
+    return {**base, "product_found": True, "product_price": payload}
+
+
+def _lookup_product_availability(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "product_availability_lookup")
+    product_name = _extract_product_name_from_messages(state.get("messages") or [])
+    base: dict[str, Any] = {"tool_call": tool_name, "product_name_extracted": product_name}
+    if not product_name:
+        return {**base, "product_found": False, "product_availability": None}
+    payload = get_product_availability_record(product_name)
+    if not payload:
+        return {**base, "product_found": False, "product_availability": None}
+    return {**base, "product_found": True, "product_availability": payload}
+
+
 def _lookup_refund_context(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     tool_name = str(step.get("tool") or "refund_context_lookup")
     oid = _extract_order_id_from_conversation(
@@ -1113,13 +1243,172 @@ def _lookup_refund_context(step: dict[str, Any], state: IssueGraphState) -> dict
     return {**base, "refund_context_found": True, **payload}
 
 
+def _lookup_payment(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "payment_lookup")
+    context = dict(state.get("context_data") or {})
+    tx = str(context.get("transaction_id") or "").strip().upper()
+    if not tx:
+        tx = _extract_transaction_id(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "transaction_id": tx}
+    if not tx:
+        return {**base, "payment_found": False, "payment": None}
+    payment = get_payment(tx)
+    if not payment:
+        return {**base, "payment_found": False, "payment": None}
+    return {**base, "payment_found": True, "payment": payment}
+
+
+def _list_payment_methods_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "list_payment_methods")
+    return {
+        "tool_call": tool_name,
+        "payment_methods": list_payment_methods(),
+    }
+
+
+def _track_refund_payment_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "payment_refund_status")
+    context = dict(state.get("context_data") or {})
+    tx = str(context.get("transaction_id") or "").strip().upper()
+    if not tx:
+        tx = _extract_transaction_id(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "transaction_id": tx}
+    if not tx:
+        return {**base, "refund_tracking_found": False}
+    payload = get_refund_tracking(tx)
+    if not payload.get("found"):
+        return {**base, "refund_tracking_found": False, "refund_tracking_reason": payload.get("reason")}
+    return {**base, "refund_tracking_found": True, **payload}
+
+
+def _check_invoice_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "check_invoice_value")
+    context = dict(state.get("context_data") or {})
+    invoice_id = str(context.get("invoice_id") or "").strip().upper()
+    if not invoice_id:
+        invoice_id = _extract_invoice_id(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "invoice_id": invoice_id}
+    if not invoice_id:
+        return {**base, "invoice_found": False}
+    payload = get_invoice(invoice_id)
+    if not payload:
+        return {**base, "invoice_found": False}
+    return {**base, "invoice_found": True, "invoice": payload}
+
+
+def _get_subscription_status_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "get_subscription_status")
+    context = dict(state.get("context_data") or {})
+    email = str(context.get("account_email") or "").strip().lower()
+    if not email:
+        email = _extract_account_email(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "account_email": email}
+    if not email:
+        return {**base, "subscription_found": False}
+    payload = get_subscription(email)
+    if not payload:
+        return {**base, "subscription_found": False}
+    return {**base, "subscription_found": True, "subscription": payload}
+
+
+def _unsubscribe_subscription_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "unsubscribe_subscription")
+    context = dict(state.get("context_data") or {})
+    email = str(context.get("account_email") or "").strip().lower()
+    if not email:
+        email = _extract_account_email(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "account_email": email}
+    result = unsubscribe_subscription(email, update_source="agent")
+    return {
+        **base,
+        "unsubscribe_succeeded": bool(result.get("ok")),
+        "unsubscribe_reason": str(result.get("reason") or ""),
+        "subscription_status": result.get("subscription_status"),
+    }
+
+
+def _create_payment_issue_ticket_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "create_payment_issue_ticket")
+    context = dict(state.get("context_data") or {})
+    tx = str(context.get("transaction_id") or "").strip().upper()
+    if not tx:
+        tx = _extract_transaction_id(state.get("messages") or [], state.get("text")) or ""
+    payment = get_payment(tx) if tx else None
+    latest_msg = _extract_latest_user_message(state.get("messages") or []) or str(state.get("text") or "")
+    result = create_support_ticket(
+        issue_type="payment",
+        payload={
+            "transaction_id": tx,
+            "payment": payment or {},
+            "issue_summary": latest_msg,
+        },
+        routing_result="payment_issue_review",
+        validation_passed=bool(payment),
+        update_source="agent",
+    )
+    return {
+        "tool_call": tool_name,
+        "transaction_id": tx,
+        "payment_found": bool(payment),
+        "payment_issue_ticket_created": bool(result.get("ok")),
+        "payment_issue_ticket_id": result.get("ticket_id"),
+    }
+
+
+def _create_contact_handoff_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "create_contact_handoff")
+    summary = _extract_latest_user_message(state.get("messages") or []) or str(state.get("text") or "")
+    result = create_support_ticket(
+        issue_type="contact",
+        payload={"summary": summary, "session_id": str(state.get("session_id") or "")},
+        routing_result="human_agent_queue",
+        update_source="agent",
+    )
+    return {
+        "tool_call": tool_name,
+        "handoff_created": bool(result.get("ok")),
+        "handoff_ticket_id": result.get("ticket_id"),
+    }
+
+
+def _create_complaint_ticket_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "create_complaint_ticket")
+    complaint = _extract_latest_user_message(state.get("messages") or []) or str(state.get("text") or "")
+    result = create_support_ticket(
+        issue_type="feedback",
+        payload={"complaint": complaint},
+        routing_result="complaint_queue",
+        update_source="agent",
+    )
+    return {
+        "tool_call": tool_name,
+        "complaint_created": bool(result.get("ok")),
+        "complaint_ticket_id": result.get("ticket_id"),
+    }
+
+
+def _get_delivery_period_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
+    tool_name = str(step.get("tool") or "delivery_period_lookup")
+    context = dict(state.get("context_data") or {})
+    ref = str(context.get("order_or_tracking") or "").strip().upper()
+    if not ref:
+        ref = _extract_order_or_tracking(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "order_or_tracking": ref}
+    if not ref:
+        return {**base, "delivery_info_found": False}
+    payload = get_delivery_period(ref)
+    if not payload:
+        return {**base, "delivery_info_found": False}
+    return {**base, "delivery_info_found": True, "delivery_period": payload}
+
+
 def _cancel_order_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     tool_name = str(step.get("tool") or "cancel_order")
     oid = str((state.get("context_data") or {}).get("order_id_extracted") or "")
     if not oid:
         oid = _extract_order_id_from_conversation(state.get("messages") or [], state.get("text")) or ""
     base: dict[str, Any] = {"tool_call": tool_name, "order_id_extracted": oid}
-    result = cancel_order_record(oid)
+    result = cancel_order_record(oid, update_source="agent")
     return {
         **base,
         "cancel_succeeded": bool(result.get("ok")),
@@ -1140,7 +1429,7 @@ def _create_refund_request_tool(step: dict[str, Any], state: IssueGraphState) ->
         "order_id_extracted": oid,
         "refund_reason": reason,
     }
-    result = create_refund_request(oid, reason)
+    result = create_refund_request(oid, reason, update_source="agent")
     return {
         **base,
         "refund_request_created": bool(result.get("ok")),
@@ -1162,7 +1451,7 @@ def _update_shipping_address_tool(step: dict[str, Any], state: IssueGraphState) 
         "order_id_extracted": oid,
         "new_address": new_address,
     }
-    result = update_shipping_address_record(oid, new_address)
+    result = update_shipping_address_record(oid, new_address, update_source="agent")
     return {
         **base,
         "shipping_address_updated": bool(result.get("ok")),
@@ -1357,7 +1646,20 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
     tool_dispatch = {
         "check_order_status": _check_order_status,
         "product_catalog_lookup": _lookup_product_info,
+        "product_info_lookup": _lookup_product_info_only,
+        "product_price_lookup": _lookup_product_price,
+        "product_availability_lookup": _lookup_product_availability,
         "refund_context_lookup": _lookup_refund_context,
+        "payment_lookup": _lookup_payment,
+        "list_payment_methods": _list_payment_methods_tool,
+        "payment_refund_status": _track_refund_payment_tool,
+        "check_invoice_value": _check_invoice_tool,
+        "get_subscription_status": _get_subscription_status_tool,
+        "unsubscribe_subscription": _unsubscribe_subscription_tool,
+        "create_payment_issue_ticket": _create_payment_issue_ticket_tool,
+        "create_contact_handoff": _create_contact_handoff_tool,
+        "create_complaint_ticket": _create_complaint_ticket_tool,
+        "delivery_period_lookup": _get_delivery_period_tool,
         "cancel_order": _cancel_order_tool,
         "create_refund_request": _create_refund_request_tool,
         "update_shipping_address": _update_shipping_address_tool,

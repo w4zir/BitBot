@@ -13,7 +13,7 @@ def lookup_product(product_name: str) -> dict[str, Any] | None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT sku, name, price, is_available, metadata
+                SELECT sku, name, company, description, price, is_available, metadata
                 FROM products
                 WHERE name ILIKE %s
                 ORDER BY
@@ -26,11 +26,47 @@ def lookup_product(product_name: str) -> dict[str, Any] | None:
             row = cur.fetchone()
             if not row:
                 return None
-    metadata = row[4] if isinstance(row[4], dict) else {}
+    metadata = row[6] if isinstance(row[6], dict) else {}
     return {
         "sku": row[0],
         "name": row[1],
-        "price": float(row[2]) if row[2] is not None else None,
-        "is_available": bool(row[3]),
+        "company": row[2],
+        "description": row[3],
+        "price": float(row[4]) if row[4] is not None else None,
+        "is_available": bool(row[5]),
         "metadata": metadata,
+    }
+
+
+def get_product_info(product_name: str) -> dict[str, Any] | None:
+    product = lookup_product(product_name)
+    if not product:
+        return None
+    return {
+        "sku": product.get("sku"),
+        "name": product.get("name"),
+        "company": product.get("company"),
+        "description": product.get("description"),
+    }
+
+
+def get_product_price(product_name: str) -> dict[str, Any] | None:
+    product = lookup_product(product_name)
+    if not product:
+        return None
+    return {
+        "sku": product.get("sku"),
+        "name": product.get("name"),
+        "price": product.get("price"),
+    }
+
+
+def get_product_availability(product_name: str) -> dict[str, Any] | None:
+    product = lookup_product(product_name)
+    if not product:
+        return None
+    return {
+        "sku": product.get("sku"),
+        "name": product.get("name"),
+        "is_available": bool(product.get("is_available")),
     }

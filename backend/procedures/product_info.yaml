@@ -1,0 +1,29 @@
+id: product_info
+category: product
+intent: product_info
+keywords:
+  - product info
+  - product details
+  - description
+  - company
+required_data:
+  - name: product_name
+    prompt: Which product would you like details for?
+steps:
+  - id: lookup_product_info
+    type: tool_call
+    tool: product_info_lookup
+  - id: branch_product_found
+    type: logic_gate
+    condition: {op: eq, field: product_found, value: true}
+    on_true: share_product_info
+    on_false: product_not_found
+  - id: share_product_info
+    type: llm_response
+    message: >
+      The product was found. Share only product name, company, and description from product_info.
+  - id: product_not_found
+    type: llm_response
+    message: >
+      The product was not found. Ask the user to confirm the product name.
+fallback_response: Tell me the product name and I will share the details.
