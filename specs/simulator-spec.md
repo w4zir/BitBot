@@ -151,13 +151,18 @@ baseline: baselines/baseline_v1.json  # omit to skip regression diff
 defaults:
   max_turns: 6
   cooperation_level: cooperative    # cooperative | passive | resistant
+  persist_db: true                  # enabled by default; CLI can override per run
+  user_llm_provider: ollama         # dedicated user-message generation LLM
+  user_llm_model: llama3.2
+  user_llm_timeout_seconds: 120
   eval_targets:                     # which evaluators to run
     - structural
     - policy
     - llm_judge
-    - regression
+  llm_judge_provider: ollama
   llm_judge_model: claude-sonnet-4-20250514
-  fail_on_regression: true          # exit non-zero if regression detected
+  fail_on_regression: false         # config field exists; regression evaluator is not wired
+  fail_on_coverage_gap: false
 
 scenarios:
   - seed_id: cancel_order_easy
@@ -375,7 +380,14 @@ class ScenarioHydrator:
 
 ```python
 class PersonaEngine:
-    def __init__(self, persona: PersonaConfig, scenario: ScenarioInstance): ...
+    def __init__(
+        self,
+        persona: PersonaConfig,
+        scenario: ScenarioInstance,
+        llm_provider: str,
+        llm_model: str,
+        llm_timeout_seconds: float,
+    ): ...
 
     def generate_opening(self) -> str:
         """
@@ -394,49 +406,52 @@ class PersonaEngine:
         """
         Produce the next user message given the agent's last response.
         Returns None to signal the user has accepted resolution (end conversation).
-        Applies cooperation_level to decide whether to provide requested data.
-        Applies escalation_tendency to decide whether to request human agent.
-        For multi_issue personas, may introduce secondary_issue after turn 2.
+        Uses LLM-generated response with directive controls derived from persona/scenario state.
+        Terminal outcomes return None immediately.
+        Low-patience personas can request human escalation on later turns.
+        Multi-issue personas can introduce secondary_issue after turn 2 (once).
         """
         ...
 ```
 
-**System prompt template** (stored in `personas/system_prompt.jinja2`):
+**LLM invocation shape** (implemented inline in `persona.py`):
 
 ```
-You are simulating a customer support user. Your persona:
-- Name/type: {{ persona.display_name }}
-- Vocabulary style: {{ persona.vocabulary }}
-- Patience: {{ persona.patience }}
-- Cooperation: {{ persona.cooperation_level }}
-- Escalation tendency: {{ persona.escalation_tendency }}
-- Personality traits: {{ persona.traits | join(', ') }}
-
-Your issue: {{ issue_description }}
-Your order details: order #{{ entity.order_id }}, placed {{ entity.created_at }}, status: {{ entity.status }}
-{% if secondary_entity %}
-You also have a second issue you may raise after the agent responds to your first one:
-Second issue: {{ secondary_issue_description }} (order #{{ secondary_entity.order_id }})
-{% endif %}
-
-Rules:
-- Stay in character at all times.
-- Do not reveal you are a simulator.
-- If cooperation_level is "resistant", withhold the order_id or account email until asked at least twice.
-- If cooperation_level is "passive", respond to questions with clarifying questions of your own before answering.
-- If patience is "low" and turn_number > 3, express frustration and ask for a supervisor.
-- If the agent's response contains a clear resolution and you would accept it given your persona, reply only with: [RESOLVED]
-- If the adversarial_flags include "policy_argument", push back at least once on a policy_ineligible response.
-- Keep messages under {{ message_length_limit }} words unless your trait is "verbose".
+system: _PERSONA_SYSTEM_PROMPT
+user: JSON payload containing:
+- mode: "opening" | "response"
+- persona: PersonaConfig dump
+- scenario: ScenarioInstance dump (including hydrated entities)
+- turn_number, agent_message, conversation_history, agent_metadata
+- internal state counters/flags
+- directives (force behaviors for resistant/missing-field, human escalation, multi-issue)
+- required_output_schema
 ```
 
-**Cooperation level behaviour:**
+**Required LLM output contract:**
+
+```json
+{
+  "message": "customer utterance",
+  "stop": false
+}
+```
+
+Parsing uses `backend.llm.providers.extract_json_object`. Empty/invalid payloads and request failures raise runtime errors (fail-fast; no template fallback).
+
+**Grounding and safety constraints (enforced in code):**
+
+- For `entity_type=order`, opening messages must include hydrated `order_id` unless scenario flags indicate intentional missing-data behavior.
+- When `validation_missing` includes `order_id` (and not in resistant first-pushback mode), generated response must include hydrated `order_id`.
+- Generated text must stay grounded to provided scenario/entity content (system prompt rule).
+
+**Cooperation-level behavior (implemented with directives/state):**
 
 | Level | Behaviour |
 |---|---|
-| `cooperative` | Provides all requested data on first ask. Accepts resolutions readily. |
-| `passive` | Responds to data requests with a clarifying question before providing the data. Adds 1 extra turn per required field. |
-| `resistant` | Withholds key required fields for 2+ turns. May provide wrong data once. Stresses `validation_missing` retry loop. |
+| `cooperative` | Tends to provide requested data promptly. |
+| `passive` | Generally cooperative with softer/indirect phrasing patterns. |
+| `resistant` | First missing-field prompt can challenge the assistant before providing data. |
 
 ### 5.3 `driver.py` — Conversation Turn Loop
 
@@ -483,8 +498,7 @@ class ConversationDriver:
         3. Capture full assistant_metadata from response.
         4. Pass agent response to persona.generate_response().
         5. Repeat until: persona returns None (accepted), max_turns reached,
-           outcome_status is terminal (resolved/escalated/policy_ineligible),
-           or persona emits [RESOLVED].
+           or outcome_status is terminal (resolved/escalated/policy_ineligible/etc).
         6. Return ConversationTrace.
         """
         ...
@@ -525,7 +539,7 @@ class ConversationDriver:
 
 1. `outcome_status` in `{resolved, policy_ineligible, tool_error, step_error, unresolvable}` → terminal.
 2. `outcome_status == pending_escalation` → terminal (escalated).
-3. Persona returned `None` or emitted `[RESOLVED]` → persona accepted.
+3. Persona returned `None` → persona accepted.
 4. `turn_number >= max_turns` → max turns reached.
 
 ### 5.4 `evaluators/structural.py` — Structural Evaluator
@@ -753,6 +767,12 @@ python -m testing.simulator.runner --suite suites/regression.yaml --category ord
 
 # Run specific difficulty levels only
 python -m testing.simulator.runner --suite suites/regression.yaml --difficulty hard adversarial
+
+# Continuous mode until interrupted
+python -m testing.simulator.runner --suite suites/regression.yaml --forever --randomize
+
+# Disable DB persistence for a single run (default is enabled)
+python -m testing.simulator.runner --suite suites/regression.yaml --no-persist-db
 ```
 
 **Exit codes:**
@@ -760,8 +780,7 @@ python -m testing.simulator.runner --suite suites/regression.yaml --difficulty h
 | Code | Meaning |
 |---|---|
 | `0` | All scenarios passed |
-| `1` | One or more structural failures |
-| `2` | Regression detected against baseline |
+| `1` | One or more structural/policy/llm_judge failures |
 | `3` | Coverage gaps found (if `fail_on_coverage_gap: true`) |
 | `4` | Hydration error (no matching DB entity for a seed) |
 
@@ -835,20 +854,19 @@ Every run writes a JSON artifact to `testing/simulator/results/run_<timestamp>.j
 
 ---
 
-## 10. Implementation Order
+## 10. Implementation Notes
 
-Implement in this sequence to get a working loop as fast as possible:
+The current implementation is already functional with:
 
-1. **`config.py`** — Pydantic schemas for all YAML configs. No logic, just validation. Enables all other modules to import types.
-2. **`hydrator.py`** — DB query logic. Write against a local Postgres fixture first so development doesn't require a live DB.
-3. **`driver.py`** — HTTP client turn loop using a hardcoded simple persona (no LLM yet). Validates the agent API integration end-to-end.
-4. **`evaluators/structural.py`** — First evaluator. Gives you pass/fail on outcome_status immediately.
-5. **`runner.py`** — CLI wiring all of the above. Run your first smoke test.
-6. **`persona.py`** — Persona engine with LLM. Replace the hardcoded persona in driver.
-7. **`evaluators/policy.py`** — Policy fidelity checks.
-8. **`evaluators/llm_judge.py`** — LLM judge (most expensive, implement last).
-9. **`evaluators/regression.py`** + **`reporter.py`** — Baseline diffing and reporting.
-10. **`coverage.py`** — Coverage enforcement. Wire into runner as a pre-flight check.
+1. **`config.py`** — Pydantic schemas for suite/seeds/personas/artifacts.
+2. **`hydrator.py`** — DB-grounded entity hydration from Postgres.
+3. **`persona.py`** — LLM-backed persona engine with structured output + grounding checks.
+4. **`driver.py`** — HTTP turn loop to `POST /classify` with `full_flow=true`.
+5. **`evaluators/structural.py`**, **`evaluators/policy.py`**, **`evaluators/llm_judge.py`** — active evaluators.
+6. **`runner.py`** + **`reporter.py`** + **`persistence.py`** — CLI, artifact writing, and optional DB persistence (enabled by default).
+7. **`coverage.py`** — pre-run coverage report/check.
+
+`regression` remains a config keyword and artifact field but is not currently executed as a runtime evaluator.
 
 ---
 
@@ -856,16 +874,30 @@ Implement in this sequence to get a working loop as fast as possible:
 
 - **API contract**: the simulator exclusively uses `POST /classify` with `full_flow=true`. Do not bypass the HTTP layer — the test must exercise the same path as production traffic.
 - **Session management**: each scenario gets a fresh `session_id` (UUID4). The driver tracks this and sends it on every turn to exercise `issue_locked` semantics.
-- **LLM model for persona**: use `claude-sonnet-4-20250514` via the Anthropic API. The same model is used for the LLM judge. Keep them in separate clients with separate system prompts.
+- **Persona LLM config**: simulator user-message generation uses dedicated settings (`defaults.user_llm_*` and `SIMULATOR_USER_LLM_*`) and currently supports `ollama` or `cerebras` via `backend.llm.providers.chat_completion`.
+- **Judge LLM config**: LLM judge keeps separate provider/model settings (`llm_judge_*`).
 - **Postgres fixture**: `testing/simulator/fixtures/` should contain a minimal anonymised snapshot generated with `pg_dump --data-only --table=orders --table=users --table=subscriptions`. This allows deterministic re-runs in CI without a live DB.
 - **CI integration**: run `suites/smoke.yaml` on every PR (fast, ~5 scenarios, no LLM judge). Run `suites/regression.yaml` nightly (full suite with LLM judge and baseline diff).
 - **Environment variables** required by the simulator:
 
 ```bash
-SIMULATOR_AGENT_URL=http://localhost:8000
-SIMULATOR_DB_URL=postgresql://user:pass@localhost:5432/bitbot
-ANTHROPIC_API_KEY=...               # for persona engine and LLM judge
-SIMULATOR_BASELINE_PATH=testing/simulator/baselines/baseline_v1.json
+SIMULATOR_AGENT_URL=http://localhost:8000/classify
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=ecom_support
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=...
+POSTGRES_HOST_SIMULATOR=localhost
+
+# Persona (user-message generation) LLM
+SIMULATOR_USER_LLM_PROVIDER=ollama
+SIMULATOR_USER_LLM_MODEL=llama3.2
+SIMULATOR_USER_LLM_TIMEOUT_SECONDS=120
+
+# Optional LLM judge settings (if llm_judge enabled)
+SIMULATOR_LLM_PROVIDER=ollama
+SIMULATOR_LLM_MODEL=llama3.2
+SIMULATOR_LLM_TIMEOUT_SECONDS=120
 ```
 
 ---

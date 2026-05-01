@@ -84,7 +84,10 @@ class DefaultsConfig(BaseModel):
     cooperation_level: CooperationLevel = "cooperative"
     eval_targets: list[EvalTarget] = Field(default_factory=lambda: ["structural", "policy"])
     randomize: bool = False
-    persist_db: bool = False
+    persist_db: bool = True
+    user_llm_provider: Literal["ollama", "cerebras"] = "ollama"
+    user_llm_model: str = "llama3.2"
+    user_llm_timeout_seconds: float = Field(default=120.0, gt=0.0, le=600.0)
     llm_judge_model: str = "claude-sonnet-4-20250514"
     llm_judge_provider: Literal["ollama", "cerebras"] = "ollama"
     llm_judge_thresholds: LlmJudgeThresholdsConfig = Field(

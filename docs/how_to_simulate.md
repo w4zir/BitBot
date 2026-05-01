@@ -47,7 +47,12 @@ SIMULATOR_AGENT_URL=http://localhost:8000/classify
 # Optional dedicated DB host for simulator process
 POSTGRES_HOST_SIMULATOR=localhost
 
-# LLM judge provider/model when llm_judge is enabled
+# User-message generation LLM (required)
+SIMULATOR_USER_LLM_PROVIDER=ollama
+SIMULATOR_USER_LLM_MODEL=llama3.2
+SIMULATOR_USER_LLM_TIMEOUT_SECONDS=120
+
+# LLM judge provider/timeout when llm_judge is enabled
 SIMULATOR_LLM_PROVIDER=ollama
 SIMULATOR_LLM_TIMEOUT_SECONDS=120
 ```
@@ -92,8 +97,11 @@ python -m testing.simulator.runner --suite testing/simulator/suites/regression.y
 ```
 
 ```bash
-# Persist run data to Postgres
+# Persist run data to Postgres (enabled by default; explicit flag shown for clarity)
 python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --persist-db
+
+# Disable Postgres persistence for one run
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --no-persist-db
 ```
 
 ## Evaluators and current status
@@ -122,7 +130,7 @@ Console output includes:
 - per-scenario PASS/FAIL lines
 - artifact path
 
-When DB persistence is enabled (`--persist-db` or suite default), the simulator writes:
+When DB persistence is enabled (default behavior, or `--persist-db`), the simulator writes:
 
 - `simulation_runs`, `coverage_snapshots`, `simulation_scenarios`
 - `simulation_turns`, `simulation_messages`

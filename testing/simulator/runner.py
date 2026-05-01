@@ -50,6 +50,15 @@ def main() -> int:
     simulator_agent_url = os.getenv("SIMULATOR_AGENT_URL", "").strip()
     if simulator_agent_url:
         suite.agent_url = simulator_agent_url
+    simulator_user_llm_provider = os.getenv("SIMULATOR_USER_LLM_PROVIDER", "").strip().lower()
+    if simulator_user_llm_provider:
+        suite.defaults.user_llm_provider = simulator_user_llm_provider
+    simulator_user_llm_model = os.getenv("SIMULATOR_USER_LLM_MODEL", "").strip()
+    if simulator_user_llm_model:
+        suite.defaults.user_llm_model = simulator_user_llm_model
+    simulator_user_llm_timeout = os.getenv("SIMULATOR_USER_LLM_TIMEOUT_SECONDS", "").strip()
+    if simulator_user_llm_timeout:
+        suite.defaults.user_llm_timeout_seconds = float(simulator_user_llm_timeout)
 
     all_seeds = _load_all_seeds(simulator_root / "seeds")
     seeds_by_id = {seed.seed_id: seed for seed in all_seeds}
@@ -136,7 +145,13 @@ def main() -> int:
                 or seed.cooperation_level
                 or suite.defaults.cooperation_level
             )
-            persona = PersonaEngine(persona=persona_cfg, scenario=scenario)
+            persona = PersonaEngine(
+                persona=persona_cfg,
+                scenario=scenario,
+                llm_provider=suite.defaults.user_llm_provider,
+                llm_model=suite.defaults.user_llm_model,
+                llm_timeout_seconds=suite.defaults.user_llm_timeout_seconds,
+            )
             trace = driver.run(scenario, persona)
             scenario_key = f"{seed.seed_id}#{index}"
             trace.scenario["run_scenario_id"] = scenario_key

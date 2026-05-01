@@ -6,7 +6,7 @@ from testing.simulator.config import (
     SeedConfig,
     SuiteConfig,
 )
-from testing.simulator.runner import _iter_execution_plan, _select_scenarios
+from testing.simulator.runner import _build_arg_parser, _iter_execution_plan, _select_scenarios
 
 
 def _seed(seed_id: str, *, category: str = "order", intent: str = "cancel_order", persona: str = "p1") -> SeedConfig:
@@ -62,3 +62,14 @@ def test_iter_execution_plan_deterministic_iterations() -> None:
         )
     )
     assert [item[1].seed_id for item in planned] == ["s1", "s2", "s1", "s2"]
+
+
+def test_suite_defaults_enable_db_persistence() -> None:
+    suite = _suite()
+    assert suite.defaults.persist_db is True
+
+
+def test_cli_no_persist_db_override() -> None:
+    parser = _build_arg_parser()
+    args = parser.parse_args(["--suite", "testing/simulator/suites/regression.yaml", "--no-persist-db"])
+    assert args.persist_db is False

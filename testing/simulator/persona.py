@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.llm.providers import chat_completion, extract_json_object
 from testing.simulator.config import PersonaConfig
 from testing.simulator.hydrator import ScenarioInstance
 
@@ -11,27 +13,29 @@ from testing.simulator.hydrator import ScenarioInstance
 class PersonaEngine:
     persona: PersonaConfig
     scenario: ScenarioInstance
+    llm_provider: str
+    llm_model: str
+    llm_timeout_seconds: float
     _asks_for_human: bool = False
     _missing_prompt_count: int = 0
     _introduced_secondary_issue: bool = False
     _state: dict[str, Any] = field(default_factory=dict)
 
     def generate_opening(self) -> str:
-        entity = self.scenario.entity
-        order_id = str(entity.get("order_id") or "").strip()
-        status = str(entity.get("status") or "").strip()
-        if self.scenario.intent == "cancel_order":
-            if self.persona.vocabulary == "informal":
-                return f"hey, can you cancel my order {order_id}? it is still {status}."
-            return f"Hi, I need help canceling order {order_id}. Current status is {status}."
-        if self.scenario.intent == "get_refund":
-            return (
-                f"I want a refund for order {order_id}. "
-                "The item was not acceptable and I need help with next steps."
-            )
-        if self.scenario.intent == "order_status":
-            return f"Can you check the status for my order {order_id}?"
-        return f"I need help with my order {order_id}."
+        message, stop = self._generate_message(
+            mode="opening",
+            agent_message="",
+            turn_number=0,
+            conversation_history=[],
+            agent_metadata={},
+            force_challenge_missing=False,
+            force_secondary_issue=False,
+            force_ask_human=False,
+        )
+        if stop:
+            raise RuntimeError("Simulator persona generation returned stop=true for opening message.")
+        self._validate_opening_message(message)
+        return message
 
     def generate_response(
         self,
@@ -40,33 +44,179 @@ class PersonaEngine:
         conversation_history: list[dict],
         agent_metadata: dict,
     ) -> str | None:
-        _ = conversation_history
         outcome = str(agent_metadata.get("outcome_status") or "").strip().lower()
         missing = list(agent_metadata.get("validation_missing") or [])
-        order_id = str(self.scenario.entity.get("order_id") or "").strip()
 
         if outcome in {"resolved", "policy_ineligible", "pending_escalation"}:
             return None
 
+        force_challenge_missing = False
         if missing:
             self._missing_prompt_count += 1
-            if self.persona.cooperation_level == "resistant" and self._missing_prompt_count <= 1:
-                return "why do you need that first?"
-            if "order_id" in missing:
-                return f"My order id is {order_id}."
-            return "Sure, here are the details you requested."
+            force_challenge_missing = (
+                self.persona.cooperation_level == "resistant" and self._missing_prompt_count <= 1
+            )
 
+        force_secondary_issue = False
         if self.scenario.multi_issue and not self._introduced_secondary_issue and turn_number >= 2:
-            self._introduced_secondary_issue = True
             second = self.scenario.secondary_entity or {}
             second_order_id = str(second.get("order_id") or "").strip()
             if second_order_id:
-                return f"Also, I have another issue with order {second_order_id}."
+                force_secondary_issue = True
 
+        force_ask_human = False
         if self.persona.patience == "low" and turn_number >= 3 and not self._asks_for_human:
-            self._asks_for_human = True
-            return "This is taking too long. Can you transfer me to a human agent?"
+            force_ask_human = True
 
-        if "need help" in agent_message.lower():
-            return "Yes, please continue."
-        return "Okay, thanks."
+        message, stop = self._generate_message(
+            mode="response",
+            agent_message=agent_message,
+            turn_number=turn_number,
+            conversation_history=conversation_history,
+            agent_metadata=agent_metadata,
+            force_challenge_missing=force_challenge_missing,
+            force_secondary_issue=force_secondary_issue,
+            force_ask_human=force_ask_human,
+        )
+        self._validate_response_message(
+            message=message,
+            missing=missing,
+            force_challenge_missing=force_challenge_missing,
+        )
+        if force_secondary_issue:
+            self._introduced_secondary_issue = True
+        if force_ask_human:
+            self._asks_for_human = True
+        if stop:
+            return None
+        return message
+
+    def _generate_message(
+        self,
+        *,
+        mode: str,
+        agent_message: str,
+        turn_number: int,
+        conversation_history: list[dict],
+        agent_metadata: dict,
+        force_challenge_missing: bool,
+        force_secondary_issue: bool,
+        force_ask_human: bool,
+    ) -> tuple[str, bool]:
+        directives: list[str] = []
+        missing = list(agent_metadata.get("validation_missing") or [])
+        order_id = str(self.scenario.entity.get("order_id") or "").strip()
+        secondary_order_id = str((self.scenario.secondary_entity or {}).get("order_id") or "").strip()
+
+        if mode == "opening":
+            directives.append("Write a realistic first customer message to start this support conversation.")
+            directives.append("Return stop=false.")
+            if order_id and not self._allows_missing_data_opening():
+                directives.append(f"You must explicitly mention order id '{order_id}' in the message.")
+        else:
+            directives.append("Write the next customer reply in the ongoing support conversation.")
+            if force_challenge_missing:
+                directives.append(
+                    "The user is resistant right now. Ask why the requested info is needed first and do not provide requested details yet."
+                )
+            elif "order_id" in missing and order_id:
+                directives.append(
+                    f"The assistant requested missing order_id. You must include order id '{order_id}' in this response."
+                )
+            elif missing:
+                directives.append("Provide the missing details the assistant asked for.")
+            if force_secondary_issue:
+                directives.append(
+                    f"Introduce a second issue now and explicitly mention secondary order id '{secondary_order_id}'."
+                )
+            if force_ask_human:
+                directives.append("The user has low patience. Ask to transfer to a human agent now.")
+            directives.append("Set stop=true only if the user would naturally end the conversation now.")
+
+        payload = {
+            "mode": mode,
+            "persona": self.persona.model_dump(mode="json"),
+            "scenario": self.scenario.to_dict(),
+            "turn_number": turn_number,
+            "agent_message": agent_message,
+            "conversation_history": conversation_history,
+            "agent_metadata": agent_metadata,
+            "state": {
+                "asks_for_human": self._asks_for_human,
+                "missing_prompt_count": self._missing_prompt_count,
+                "introduced_secondary_issue": self._introduced_secondary_issue,
+            },
+            "directives": directives,
+            "required_output_schema": {
+                "message": "string",
+                "stop": "boolean",
+            },
+        }
+        user_prompt = json.dumps(payload, ensure_ascii=False)
+
+        try:
+            raw = chat_completion(
+                provider=self.llm_provider,
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": _PERSONA_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                timeout_seconds=self.llm_timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Simulator persona LLM request failed: {exc}") from exc
+
+        parsed = extract_json_object(raw)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("Simulator persona LLM returned non-object payload.")
+        message = str(parsed.get("message") or "").strip()
+        if not message:
+            raise RuntimeError("Simulator persona LLM returned empty 'message'.")
+        stop = bool(parsed.get("stop"))
+        return message, stop
+
+    def _validate_opening_message(self, message: str) -> None:
+        order_id = str(self.scenario.entity.get("order_id") or "").strip()
+        entity_type = str(self.scenario.entity.get("entity_type") or "").strip().lower()
+        if entity_type == "order" and order_id and not self._allows_missing_data_opening():
+            if order_id.lower() not in message.lower():
+                raise RuntimeError(
+                    "Simulator persona opening must include hydrated order_id for order scenarios."
+                )
+
+    def _validate_response_message(
+        self,
+        *,
+        message: str,
+        missing: list[str],
+        force_challenge_missing: bool,
+    ) -> None:
+        if force_challenge_missing:
+            return
+        if "order_id" not in missing:
+            return
+        order_id = str(self.scenario.entity.get("order_id") or "").strip()
+        if order_id and order_id.lower() not in message.lower():
+            raise RuntimeError(
+                "Simulator persona response must include hydrated order_id when assistant requests it."
+            )
+
+    def _allows_missing_data_opening(self) -> bool:
+        flags = [str(item).strip().lower() for item in self.scenario.adversarial_flags]
+        return any("missing_data" in flag for flag in flags)
+
+
+_PERSONA_SYSTEM_PROMPT = """You are simulating a realistic e-commerce customer in a support chat.
+Use the provided persona and scenario context exactly.
+Return JSON only with this shape:
+{
+  "message": "customer utterance",
+  "stop": false
+}
+Rules:
+- Keep the message natural and conversational.
+- Respect persona vocabulary, patience, and cooperation traits.
+- Keep details grounded in provided entity/scenario data only.
+- Never invent IDs, statuses, or policy facts not present in the input.
+"""
