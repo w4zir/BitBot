@@ -12,6 +12,135 @@ from testing.simulator.evaluators.policy import PolicyResult
 from testing.simulator.evaluators.structural import StructuralResult
 from testing.simulator.trace import ConversationTrace
 
+_SENSITIVE_KEY_FRAGMENTS: frozenset[str] = frozenset(
+    {"authorization", "api_key", "apikey", "password", "secret", "token", "bearer"}
+)
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lower = key.strip().lower().replace("-", "_")
+    if lower in _SENSITIVE_KEY_FRAGMENTS:
+        return True
+    return any(part in lower for part in _SENSITIVE_KEY_FRAGMENTS)
+
+
+def redact_sensitive_for_console(value: Any) -> Any:
+    """Return a deep copy of JSON-like structures with obvious secret keys redacted."""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            sk = str(k)
+            if _is_sensitive_key(sk):
+                out[sk] = "<redacted>"
+            else:
+                out[sk] = redact_sensitive_for_console(v)
+        return out
+    if isinstance(value, list):
+        return [redact_sensitive_for_console(item) for item in value]
+    return value
+
+
+def _pretty_json(obj: Any) -> str:
+    safe = redact_sensitive_for_console(obj)
+    return json.dumps(safe, indent=2, ensure_ascii=False, default=str)
+
+
+def _issue_label(index: int, total_planned: int | None) -> str:
+    if total_planned is None:
+        return f"Issue {index}"
+    return f"Issue {index}/{total_planned}"
+
+
+class SimulatorConsoleReporter:
+    """Incremental stdout reporter for simulator runs (scenario progress + LLM/agent exchanges)."""
+
+    def __init__(self, *, file: Any = None) -> None:
+        self._file = file
+
+    def _print(self, text: str = "") -> None:
+        print(text, file=self._file)
+
+    def start_scenario(
+        self,
+        *,
+        index: int,
+        total_planned: int | None,
+        scenario_key: str,
+        seed: Any,
+    ) -> None:
+        seed_id = str(getattr(seed, "seed_id", "") or "")
+        persona_id = str(getattr(seed, "persona_id", "") or "")
+        intent = str(getattr(seed, "intent", "") or "")
+        self._print("")
+        self._print(f"{_issue_label(index, total_planned)}: {scenario_key}")
+        self._print(
+            f"Seed: {seed_id} | Persona: {persona_id} | Intent: {intent}",
+        )
+
+    def skip_scenario(
+        self,
+        *,
+        index: int,
+        total_planned: int | None,
+        scenario_key: str,
+        error: str,
+    ) -> None:
+        self._print("")
+        self._print(f"{_issue_label(index, total_planned)} SKIP: {scenario_key}")
+        self._print(f"  {error}")
+
+    def finish_scenario(
+        self,
+        *,
+        index: int,
+        total_planned: int | None,
+        scenario_key: str,
+        trace: ConversationTrace,
+        structural: StructuralResult,
+        policy: PolicyResult,
+        llm_judge: LlmJudgeResult | None,
+    ) -> None:
+        judge_ok = llm_judge.passed if llm_judge is not None else True
+        scenario_passed = structural.passed and policy.passed and judge_ok
+        status = "PASS" if scenario_passed else "FAIL"
+        self._print("")
+        self._print(
+            f"{_issue_label(index, total_planned)} complete: {status} "
+            f"scenario_key={scenario_key} outcome={trace.final_outcome_status} "
+            f"turns={len(trace.turns)}",
+        )
+
+    def persona_exchange(
+        self,
+        *,
+        mode: str,
+        turn_number: int,
+        attempt: int,
+        messages: list[dict[str, Any]],
+        raw_response: str,
+    ) -> None:
+        """Persona LLM traffic is intentionally not printed (terminal stays minimal)."""
+        _ = (mode, turn_number, attempt, messages, raw_response)
+
+    def agent_exchange(
+        self,
+        *,
+        turn_number: int,
+        request_payload: dict[str, Any] | None,
+        response_payload: dict[str, Any] | None,
+    ) -> None:
+        req = request_payload or {}
+        user_text = str(req.get("text") or "")
+        self._print("")
+        self._print(f"[Agent Request] turn {turn_number}")
+        self._print(_pretty_json({"text": user_text}))
+        self._print("")
+        self._print(f"[Agent Response] turn {turn_number}")
+        reply = ""
+        if isinstance(response_payload, dict):
+            reply = str(response_payload.get("assistant_reply") or "")
+        self._print(reply if reply.strip() else "(empty)")
+
 
 def write_run_artifact(
     *,

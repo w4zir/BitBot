@@ -149,3 +149,81 @@ def test_run_scenario_batch_skips_persona_error_and_continues(monkeypatch: pytes
     assert len(persistence.skipped) == 1
     assert persistence.skipped[0]["error_type"] == "PersonaGenerationError"
     assert len(persistence.recorded) == 1
+
+
+def test_run_scenario_batch_console_reporter_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "testing.simulator.runner.evaluate_structural",
+        lambda *_a, **_k: StructuralResult(passed=True, checks={}, failures=[]),
+    )
+    monkeypatch.setattr(
+        "testing.simulator.runner.evaluate_policy",
+        lambda *_a, **_k: PolicyResult(passed=True, checks={}, failures=[]),
+    )
+
+    class FakeHydrator:
+        def hydrate(self, seed: SeedConfig) -> ScenarioInstance:
+            return _scenario_for_seed(seed.seed_id)
+
+    class FakeDriver:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, scenario: ScenarioInstance, persona) -> ConversationTrace:  # noqa: ANN001
+            self.calls += 1
+            if self.calls == 1:
+                raise PersonaGenerationError("simulated empty message")
+            return _minimal_trace(scenario)
+
+    class FakePersistence:
+        def record_skipped_scenario(self, **_kwargs) -> None:
+            return None
+
+        def record_scenario(self, **_kwargs) -> None:
+            return None
+
+    class FakeConsole:
+        def __init__(self) -> None:
+            self.starts: list[dict] = []
+            self.skips: list[dict] = []
+            self.finishes: list[dict] = []
+
+        def start_scenario(self, **kwargs) -> None:
+            self.starts.append(kwargs)
+
+        def skip_scenario(self, **kwargs) -> None:
+            self.skips.append(kwargs)
+
+        def finish_scenario(self, **kwargs) -> None:
+            self.finishes.append(kwargs)
+
+    suite = SuiteConfig(
+        run_id="r1",
+        scenarios=[ScenarioRunConfig(seed_id="s1"), ScenarioRunConfig(seed_id="s2")],
+        defaults=DefaultsConfig(eval_targets=["structural"]),
+    )
+    seed1, seed2 = _seed("s1"), _seed("s2")
+    personas = {"p1": _persona_cfg()}
+    console = FakeConsole()
+
+    _traces, _s, _p, _j, _skipped, _interrupted = _run_scenario_batch(
+        indexed_plan=[
+            (1, (ScenarioRunConfig(seed_id="s1"), seed1)),
+            (2, (ScenarioRunConfig(seed_id="s2"), seed2)),
+        ],
+        hydrator=FakeHydrator(),
+        driver=FakeDriver(),
+        personas=personas,
+        suite=suite,
+        persistence=FakePersistence(),  # type: ignore[arg-type]
+        console_reporter=console,
+        total_planned=2,
+    )
+
+    assert len(console.starts) == 2
+    assert console.starts[0]["index"] == 1
+    assert console.starts[0]["total_planned"] == 2
+    assert len(console.skips) == 1
+    assert console.skips[0]["scenario_key"] == "s1#1"
+    assert len(console.finishes) == 1
+    assert console.finishes[0]["scenario_key"] == "s2#2"

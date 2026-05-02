@@ -27,7 +27,11 @@ from testing.simulator.evaluators.structural import StructuralResult, evaluate_s
 from testing.simulator.hydrator import HydrationError, ScenarioHydrator
 from testing.simulator.persona import PersonaEngine, PersonaGenerationError
 from testing.simulator.persistence import SimulatorPersistence
-from testing.simulator.reporter import render_console_summary, write_run_artifact
+from testing.simulator.reporter import (
+    SimulatorConsoleReporter,
+    render_console_summary,
+    write_run_artifact,
+)
 from testing.simulator.trace import ConversationTrace
 
 
@@ -94,13 +98,20 @@ def main() -> int:
         return _coverage_exit_code(coverage, suite)
 
     hydrator = ScenarioHydrator()
+    randomize = bool(args.randomize or suite.defaults.randomize)
+    total_planned = _planned_scenario_count(
+        forever=args.forever,
+        randomize=randomize,
+        iterations=args.iterations,
+        num_selected_scenarios=len(selected_scenarios),
+    )
+    console_reporter = SimulatorConsoleReporter()
     driver = ConversationDriver(
         agent_url=suite.agent_url,
         max_turns=suite.defaults.max_turns,
+        event_sink=console_reporter,
     )
     started_at = datetime.now(timezone.utc)
-
-    randomize = bool(args.randomize or suite.defaults.randomize)
     persistence_enabled = suite.defaults.persist_db if args.persist_db is None else args.persist_db
     persistence = SimulatorPersistence(enabled=persistence_enabled)
     run_metadata = {
@@ -146,6 +157,8 @@ def main() -> int:
         personas=personas,
         suite=suite,
         persistence=persistence,
+        console_reporter=console_reporter,
+        total_planned=total_planned,
     )
     loop_status = "interrupted" if interrupted else "completed"
     if interrupted:
@@ -292,6 +305,22 @@ def _load_personas(path: Path) -> dict[str, PersonaConfig]:
     return {item.persona_id: item for item in parsed.personas}
 
 
+def _planned_scenario_count(
+    *,
+    forever: bool,
+    randomize: bool,
+    iterations: int,
+    num_selected_scenarios: int,
+) -> int | None:
+    """Finite total scenario executions for progress display; None when --forever."""
+    if forever:
+        return None
+    n_iter = max(1, int(iterations))
+    if randomize:
+        return n_iter
+    return n_iter * max(1, num_selected_scenarios)
+
+
 def _select_scenarios(
     *,
     suite: SuiteConfig,
@@ -333,6 +362,8 @@ def _run_scenario_batch(
     personas: dict[str, PersonaConfig],
     suite: SuiteConfig,
     persistence: SimulatorPersistence,
+    console_reporter: SimulatorConsoleReporter | None = None,
+    total_planned: int | None = None,
 ) -> tuple[
     list[ConversationTrace],
     dict[str, StructuralResult],
@@ -365,6 +396,16 @@ def _run_scenario_batch(
                 or seed.cooperation_level
                 or suite.defaults.cooperation_level
             )
+            scenario_key = f"{seed.seed_id}#{index}"
+            scenario_snapshot = scenario.to_dict()
+            scenario_snapshot["run_scenario_id"] = scenario_key
+            if console_reporter is not None:
+                console_reporter.start_scenario(
+                    index=index,
+                    total_planned=total_planned,
+                    scenario_key=scenario_key,
+                    seed=seed,
+                )
             persona = PersonaEngine(
                 persona=persona_cfg,
                 scenario=scenario,
@@ -374,10 +415,8 @@ def _run_scenario_batch(
                 llm_temperature=suite.defaults.user_llm_temperature,
                 llm_top_p=suite.defaults.user_llm_top_p,
                 llm_repeat_penalty=suite.defaults.user_llm_repeat_penalty,
+                event_sink=console_reporter,
             )
-            scenario_key = f"{seed.seed_id}#{index}"
-            scenario_snapshot = scenario.to_dict()
-            scenario_snapshot["run_scenario_id"] = scenario_key
             try:
                 trace = driver.run(scenario, persona)
             except PersonaGenerationError as exc:
@@ -391,7 +430,13 @@ def _run_scenario_batch(
                     "error": str(exc),
                 }
                 skipped_scenarios.append(skip_record)
-                print(f"Skipping {scenario_key}: {exc}", file=sys.stderr)
+                if console_reporter is not None:
+                    console_reporter.skip_scenario(
+                        index=index,
+                        total_planned=total_planned,
+                        scenario_key=scenario_key,
+                        error=str(exc),
+                    )
                 persistence.record_skipped_scenario(
                     scenario=scenario_snapshot,
                     error=str(exc),
@@ -437,6 +482,16 @@ def _run_scenario_batch(
                 policy=policy,
                 llm_judge=llm_judge,
             )
+            if console_reporter is not None:
+                console_reporter.finish_scenario(
+                    index=index,
+                    total_planned=total_planned,
+                    scenario_key=scenario_key,
+                    trace=trace,
+                    structural=structural,
+                    policy=policy,
+                    llm_judge=llm_judge,
+                )
     except KeyboardInterrupt:
         interrupted = True
     return traces, structural_results, policy_results, llm_judge_results, skipped_scenarios, interrupted

@@ -25,6 +25,7 @@ class PersonaEngine:
     llm_temperature: float | None = None
     llm_top_p: float | None = None
     llm_repeat_penalty: float | None = None
+    event_sink: Any | None = None
     _asks_for_human: bool = False
     _missing_prompt_count: int = 0
     _introduced_secondary_issue: bool = False
@@ -192,16 +193,18 @@ class PersonaEngine:
         }
         user_prompt = json.dumps(payload, ensure_ascii=False)
 
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _PERSONA_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+
         last_reason = ""
         for attempt in range(2):
             try:
                 raw = chat_completion(
                     provider=self.llm_provider,
                     model=self.llm_model,
-                    messages=[
-                        {"role": "system", "content": _PERSONA_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    messages=messages,
                     timeout_seconds=self.llm_timeout_seconds,
                     temperature=self.llm_temperature,
                     top_p=self.llm_top_p,
@@ -209,7 +212,24 @@ class PersonaEngine:
                 )
             except Exception as exc:  # noqa: BLE001
                 last_reason = f"Simulator persona LLM request failed: {exc}"
+                if self.event_sink is not None:
+                    self.event_sink.persona_exchange(
+                        mode=mode,
+                        turn_number=turn_number,
+                        attempt=attempt + 1,
+                        messages=messages,
+                        raw_response=f"<request failed> {exc!r}",
+                    )
                 continue
+
+            if self.event_sink is not None:
+                self.event_sink.persona_exchange(
+                    mode=mode,
+                    turn_number=turn_number,
+                    attempt=attempt + 1,
+                    messages=messages,
+                    raw_response=raw if isinstance(raw, str) else repr(raw),
+                )
 
             parsed = extract_json_object(raw)
             if not isinstance(parsed, dict):

@@ -259,6 +259,67 @@ def test_empty_persona_message_retries_then_succeeds(monkeypatch: pytest.MonkeyP
     assert calls["n"] == 2
 
 
+def test_event_sink_records_each_llm_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[dict] = []
+
+    class Sink:
+        def persona_exchange(self, **kwargs):  # noqa: ANN003
+            events.append(dict(kwargs))
+
+    calls = {"n": 0}
+
+    def _fake_chat_completion(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return '{"message":"", "stop": false}'
+        return '{"message":"Please cancel order ORD-123.", "stop": false}'
+
+    persona = PersonaEngine(
+        persona=_persona(),
+        scenario=_scenario(),
+        llm_provider="ollama",
+        llm_model="llama3.2",
+        llm_timeout_seconds=30.0,
+        event_sink=Sink(),
+    )
+    monkeypatch.setattr("testing.simulator.persona.chat_completion", _fake_chat_completion)
+
+    opening = persona.generate_opening()
+    assert opening == "Please cancel order ORD-123."
+    assert len(events) == 2
+    assert events[0]["attempt"] == 1
+    assert events[0]["mode"] == "opening"
+    assert events[1]["attempt"] == 2
+    assert "messages" in events[0]
+
+
+def test_event_sink_on_chat_completion_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[dict] = []
+
+    class Sink:
+        def persona_exchange(self, **kwargs):  # noqa: ANN003
+            events.append(dict(kwargs))
+
+    def _fake_chat_completion(**_kwargs):
+        raise ConnectionError("simulated down")
+
+    persona = PersonaEngine(
+        persona=_persona(),
+        scenario=_scenario(),
+        llm_provider="ollama",
+        llm_model="llama3.2",
+        llm_timeout_seconds=30.0,
+        event_sink=Sink(),
+    )
+    monkeypatch.setattr("testing.simulator.persona.chat_completion", _fake_chat_completion)
+
+    with pytest.raises(PersonaGenerationError):
+        persona.generate_opening()
+    assert len(events) == 2
+    assert "<request failed>" in events[0]["raw_response"]
+    assert "<request failed>" in events[1]["raw_response"]
+
+
 def test_empty_persona_message_twice_raises_persona_generation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

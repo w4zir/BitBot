@@ -40,6 +40,7 @@ class ConversationDriver:
     agent_url: str
     max_turns: int
     timeout_seconds: float = 120.0
+    event_sink: Any | None = None
 
     def __post_init__(self) -> None:
         self.agent_url = _normalize_loopback_url(self.agent_url)
@@ -110,6 +111,12 @@ class ConversationDriver:
                 latency_ms=latency_ms,
             )
             turns.append(turn)
+            if self.event_sink is not None:
+                self.event_sink.agent_exchange(
+                    turn_number=turn_number,
+                    request_payload=turn.request_payload,
+                    response_payload=turn.response_payload,
+                )
             history.append({"role": "user", "content": user_message})
             history.append({"role": "assistant", "content": assistant_message})
 
