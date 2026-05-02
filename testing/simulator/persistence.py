@@ -123,6 +123,61 @@ class SimulatorPersistence:
         )
         self._insert_training_example(scenario_id=scenario_id, trace=trace)
 
+    def record_skipped_scenario(
+        self,
+        *,
+        scenario: dict[str, Any],
+        error: str,
+        error_type: str = "PersonaGenerationError",
+    ) -> None:
+        """Persist a scenario skipped before a full trace (e.g. persona LLM failure). No turns/messages."""
+        if not self.enabled or not self._run_db_id:
+            return
+        entity = scenario.get("entity") or {}
+        assertions: dict[str, Any] = {
+            "skipped": True,
+            "error_type": error_type,
+            "error": error,
+            "stage": "persona_generation",
+        }
+        trace_payload: dict[str, Any] = {
+            "scenario": scenario,
+            "session_id": "",
+            "turns": [],
+            "final_outcome_status": "skipped",
+            "terminated_by": "persona_generation_error",
+            "total_latency_ms": 0.0,
+            "total_tokens_used": None,
+            "skip_metadata": dict(assertions),
+        }
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO simulation_scenarios (
+                        run_id, session_id, seed_id, persona_id, category, intent,
+                        linked_order_id, linked_user_id, linked_subscription_email,
+                        expected_outcome, actual_outcome, passed, assertions_json, trace_json, evaluated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    """,
+                    (
+                        self._run_db_id,
+                        None,
+                        scenario.get("seed_id"),
+                        scenario.get("persona_id"),
+                        scenario.get("category"),
+                        scenario.get("intent"),
+                        entity.get("order_id"),
+                        entity.get("user_id"),
+                        entity.get("account_email"),
+                        scenario.get("expected_outcome"),
+                        "skipped",
+                        False,
+                        Json(assertions),
+                        Json(trace_payload),
+                    ),
+                )
+
     def complete_run(self, *, summary: dict[str, Any], status: str = "completed") -> None:
         if not self.enabled or not self._run_db_id:
             return

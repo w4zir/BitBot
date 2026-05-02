@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from testing.simulator.evaluators.llm_judge import LlmJudgeResult
 from testing.simulator.evaluators.policy import PolicyResult
@@ -13,9 +13,11 @@ from testing.simulator.trace import ConversationTrace, TurnRecord
 class _FakeCursor:
     statements: list[str]
     _fetchone_values: list[tuple]
+    executions: list[tuple[str, object]] = field(default_factory=list)
 
     def execute(self, sql, params=None):  # noqa: ANN001
         self.statements.append(sql)
+        self.executions.append((sql, params))
 
     def fetchone(self):  # noqa: ANN001
         if self._fetchone_values:
@@ -105,3 +107,48 @@ def test_persistence_writes_simulation_tables(monkeypatch) -> None:
     assert "INSERT INTO simulation_evaluations" in sql_joined
     assert "INSERT INTO simulation_llm_judgements" in sql_joined
     assert "INSERT INTO simulation_training_examples" in sql_joined
+
+
+def test_record_skipped_scenario_inserts_simulation_scenario(monkeypatch) -> None:
+    statements: list[str] = []
+    cursor = _FakeCursor(statements=statements, _fetchone_values=[("run-uuid",)])
+
+    def _fake_get_connection():
+        return _FakeConn(cursor)
+
+    monkeypatch.setattr("testing.simulator.persistence.postgres_configured", lambda: True)
+    monkeypatch.setattr("testing.simulator.persistence.get_connection", _fake_get_connection)
+
+    store = SimulatorPersistence(enabled=True)
+    store.start_run(
+        run_id="run1",
+        suite_name="smoke.yaml",
+        db_snapshot="live",
+        baseline_ref=None,
+        run_metadata={},
+    )
+    store.record_skipped_scenario(
+        scenario={
+            "seed_id": "seed_skip",
+            "persona_id": "p1",
+            "category": "order",
+            "intent": "cancel_order",
+            "expected_outcome": "resolved",
+            "entity": {"order_id": "ORD-1"},
+            "run_scenario_id": "seed_skip#1",
+        },
+        error="empty message",
+        error_type="PersonaGenerationError",
+    )
+
+    sql_joined = "\n".join(statements)
+    assert "INSERT INTO simulation_scenarios" in sql_joined
+    skip_rows = [
+        params
+        for sql, params in cursor.executions
+        if params and "INSERT INTO simulation_scenarios" in sql
+    ]
+    assert skip_rows, "expected INSERT INTO simulation_scenarios"
+    params = skip_rows[-1]
+    assert params[10] == "skipped"
+    assert params[11] is False

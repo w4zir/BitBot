@@ -6,7 +6,7 @@ import pytest
 
 from testing.simulator.config import PersonaConfig
 from testing.simulator.hydrator import ScenarioInstance
-from testing.simulator.persona import PersonaEngine
+from testing.simulator.persona import PersonaEngine, PersonaGenerationError
 
 
 def _persona(*, cooperation_level: str = "cooperative", patience: str = "medium") -> PersonaConfig:
@@ -62,7 +62,7 @@ def test_opening_requires_grounded_order_id(monkeypatch: pytest.MonkeyPatch) -> 
         lambda **_: '{"message":"I need to cancel my order.", "stop": false}',
     )
 
-    with pytest.raises(RuntimeError, match="opening must include hydrated order_id"):
+    with pytest.raises(PersonaGenerationError, match="opening must include hydrated order_id"):
         persona.generate_opening()
 
 
@@ -81,7 +81,7 @@ def test_missing_order_id_response_must_include_hydrated_value(
         lambda **_: '{"message":"Sure, here are the details.", "stop": false}',
     )
 
-    with pytest.raises(RuntimeError, match="must include hydrated order_id"):
+    with pytest.raises(PersonaGenerationError, match="must include hydrated order_id"):
         persona.generate_response(
             agent_message="Please provide your order id.",
             turn_number=1,
@@ -234,3 +234,44 @@ def test_generation_options_are_forwarded_to_chat_completion(
     assert kwargs["temperature"] == pytest.approx(0.7)
     assert kwargs["top_p"] == pytest.approx(0.9)
     assert kwargs["repeat_penalty"] == pytest.approx(1.1)
+
+
+def test_empty_persona_message_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+
+    def _fake_chat_completion(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return '{"message":"", "stop": false}'
+        return '{"message":"Please cancel order ORD-123.", "stop": false}'
+
+    persona = PersonaEngine(
+        persona=_persona(),
+        scenario=_scenario(),
+        llm_provider="ollama",
+        llm_model="llama3.2",
+        llm_timeout_seconds=30.0,
+    )
+    monkeypatch.setattr("testing.simulator.persona.chat_completion", _fake_chat_completion)
+
+    opening = persona.generate_opening()
+    assert opening == "Please cancel order ORD-123."
+    assert calls["n"] == 2
+
+
+def test_empty_persona_message_twice_raises_persona_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "testing.simulator.persona.chat_completion",
+        lambda **_kwargs: '{"message":"   ", "stop": false}',
+    )
+    persona = PersonaEngine(
+        persona=_persona(),
+        scenario=_scenario(),
+        llm_provider="ollama",
+        llm_model="llama3.2",
+        llm_timeout_seconds=30.0,
+    )
+    with pytest.raises(PersonaGenerationError, match="empty 'message'"):
+        persona.generate_opening()

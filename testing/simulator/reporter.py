@@ -26,8 +26,10 @@ def write_run_artifact(
     llm_judge_results: dict[str, LlmJudgeResult | None],
     output_dir: Path,
     started_at: datetime,
+    skipped_scenarios: list[dict[str, Any]] | None = None,
 ) -> Path:
     completed_at = datetime.now(timezone.utc)
+    skipped = list(skipped_scenarios or [])
     scenarios: list[dict[str, Any]] = []
     per_category: dict[str, dict[str, Any]] = {}
 
@@ -114,10 +116,12 @@ def write_run_artifact(
             "structural_failures": structural_failures,
             "policy_failures": policy_failures,
             "llm_judge_failures": llm_judge_failures,
+            "scenarios_skipped": len(skipped),
             "regressions": 0,
         },
         "per_category": per_category_summary,
         "scenarios": scenarios,
+        "skipped_scenarios": skipped,
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -131,12 +135,16 @@ def render_console_summary(
     structural_results: dict[str, StructuralResult],
     policy_results: dict[str, PolicyResult],
     llm_judge_results: dict[str, LlmJudgeResult | None],
+    skipped_scenarios: list[dict[str, Any]] | None = None,
 ) -> str:
+    skipped = list(skipped_scenarios or [])
     total = len(traces)
-    if total == 0:
+    if total == 0 and not skipped:
         return "No scenarios were executed."
     passed = 0
     lines = ["Run Summary", "==========="]
+    if total == 0:
+        lines.append("(no completed scenarios)")
     for trace in traces:
         scenario_key = str(trace.scenario.get("run_scenario_id") or trace.scenario.get("seed_id") or "")
         seed_id = str(trace.scenario.get("seed_id") or "")
@@ -160,4 +168,12 @@ def render_console_summary(
             lines.extend([f"    llm_judge: {failure}" for failure in llm_judge.failures])
     lines.append("")
     lines.append(f"Passed: {passed}/{total}")
+    if skipped:
+        lines.append("")
+        lines.append(f"Skipped ({len(skipped)})")
+        lines.append("----------")
+        for item in skipped:
+            key = str(item.get("scenario_key") or item.get("seed_id") or "")
+            err = str(item.get("error") or "")
+            lines.append(f"- {key}: {err}")
     return "\n".join(lines)

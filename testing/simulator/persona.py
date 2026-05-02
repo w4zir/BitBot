@@ -11,6 +11,10 @@ from testing.simulator.config import PersonaConfig
 from testing.simulator.hydrator import ScenarioInstance
 
 
+class PersonaGenerationError(RuntimeError):
+    """Raised when the simulator persona LLM fails after built-in retries; runner may skip the scenario."""
+
+
 @dataclass
 class PersonaEngine:
     persona: PersonaConfig
@@ -51,8 +55,9 @@ class PersonaEngine:
                 force_distinct_opening=True,
             )
         if stop:
-            raise RuntimeError("Simulator persona generation returned stop=true for opening message.")
-        self._validate_opening_message(message)
+            raise PersonaGenerationError(
+                "Simulator persona generation returned stop=true for opening message."
+            )
         return message
 
     def generate_response(
@@ -96,11 +101,6 @@ class PersonaEngine:
             force_secondary_issue=force_secondary_issue,
             force_ask_human=force_ask_human,
             force_distinct_opening=False,
-        )
-        self._validate_response_message(
-            message=message,
-            missing=missing,
-            force_challenge_missing=force_challenge_missing,
         )
         if force_secondary_issue:
             self._introduced_secondary_issue = True
@@ -192,30 +192,55 @@ class PersonaEngine:
         }
         user_prompt = json.dumps(payload, ensure_ascii=False)
 
-        try:
-            raw = chat_completion(
-                provider=self.llm_provider,
-                model=self.llm_model,
-                messages=[
-                    {"role": "system", "content": _PERSONA_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                timeout_seconds=self.llm_timeout_seconds,
-                temperature=self.llm_temperature,
-                top_p=self.llm_top_p,
-                repeat_penalty=self.llm_repeat_penalty,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"Simulator persona LLM request failed: {exc}") from exc
+        last_reason = ""
+        for attempt in range(2):
+            try:
+                raw = chat_completion(
+                    provider=self.llm_provider,
+                    model=self.llm_model,
+                    messages=[
+                        {"role": "system", "content": _PERSONA_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    timeout_seconds=self.llm_timeout_seconds,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_reason = f"Simulator persona LLM request failed: {exc}"
+                continue
 
-        parsed = extract_json_object(raw)
-        if not isinstance(parsed, dict):
-            raise RuntimeError("Simulator persona LLM returned non-object payload.")
-        message = str(parsed.get("message") or "").strip()
-        if not message:
-            raise RuntimeError("Simulator persona LLM returned empty 'message'.")
-        stop = bool(parsed.get("stop"))
-        return message, stop
+            parsed = extract_json_object(raw)
+            if not isinstance(parsed, dict):
+                last_reason = "Simulator persona LLM returned non-object payload."
+                continue
+
+            message = str(parsed.get("message") or "").strip()
+            if not message:
+                last_reason = "Simulator persona LLM returned empty 'message'."
+                continue
+
+            stop = bool(parsed.get("stop"))
+
+            try:
+                if mode == "opening":
+                    self._validate_opening_message(message)
+                else:
+                    self._validate_response_message(
+                        message=message,
+                        missing=missing,
+                        force_challenge_missing=force_challenge_missing,
+                    )
+            except RuntimeError as exc:
+                last_reason = str(exc)
+                continue
+
+            return message, stop
+
+        raise PersonaGenerationError(
+            f"Simulator persona LLM failed after 2 attempts (mode={mode!r}): {last_reason}"
+        )
 
     def _validate_opening_message(self, message: str) -> None:
         order_id = str(self.scenario.entity.get("order_id") or "").strip()

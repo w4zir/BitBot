@@ -6,7 +6,7 @@ import random
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import yaml
 from dotenv import load_dotenv
@@ -25,7 +25,7 @@ from testing.simulator.evaluators.llm_judge import LlmJudgeResult, evaluate_llm_
 from testing.simulator.evaluators.policy import PolicyResult, evaluate_policy
 from testing.simulator.evaluators.structural import StructuralResult, evaluate_structural
 from testing.simulator.hydrator import HydrationError, ScenarioHydrator
-from testing.simulator.persona import PersonaEngine
+from testing.simulator.persona import PersonaEngine, PersonaGenerationError
 from testing.simulator.persistence import SimulatorPersistence
 from testing.simulator.reporter import render_console_summary, write_run_artifact
 from testing.simulator.trace import ConversationTrace
@@ -99,10 +99,6 @@ def main() -> int:
         max_turns=suite.defaults.max_turns,
     )
     started_at = datetime.now(timezone.utc)
-    traces: list[ConversationTrace] = []
-    structural_results: dict[str, StructuralResult] = {}
-    policy_results: dict[str, PolicyResult] = {}
-    llm_judge_results: dict[str, LlmJudgeResult | None] = {}
 
     randomize = bool(args.randomize or suite.defaults.randomize)
     persistence_enabled = suite.defaults.persist_db if args.persist_db is None else args.persist_db
@@ -128,9 +124,15 @@ def main() -> int:
     )
     persistence.record_coverage(coverage.to_dict())
 
-    loop_status = "completed"
-    try:
-        for index, (run_cfg, seed) in enumerate(
+    (
+        traces,
+        structural_results,
+        policy_results,
+        llm_judge_results,
+        skipped_scenarios,
+        interrupted,
+    ) = _run_scenario_batch(
+        indexed_plan=enumerate(
             _iter_execution_plan(
                 selected_scenarios=selected_scenarios,
                 randomize=randomize,
@@ -138,75 +140,15 @@ def main() -> int:
                 forever=args.forever,
             ),
             start=1,
-        ):
-            persona_cfg = personas.get(seed.persona_id)
-            if persona_cfg is None:
-                raise RuntimeError(f"Persona '{seed.persona_id}' not found for seed '{seed.seed_id}'")
-            try:
-                scenario = hydrator.hydrate(seed)
-            except HydrationError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                raise HydrationError(f"Failed to hydrate seed '{seed.seed_id}': {exc}") from exc
-
-            scenario.cooperation_level = (
-                run_cfg.cooperation_level
-                or seed.cooperation_level
-                or suite.defaults.cooperation_level
-            )
-            persona = PersonaEngine(
-                persona=persona_cfg,
-                scenario=scenario,
-                llm_provider=suite.defaults.user_llm_provider,
-                llm_model=suite.defaults.user_llm_model,
-                llm_timeout_seconds=suite.defaults.user_llm_timeout_seconds,
-                llm_temperature=suite.defaults.user_llm_temperature,
-                llm_top_p=suite.defaults.user_llm_top_p,
-                llm_repeat_penalty=suite.defaults.user_llm_repeat_penalty,
-            )
-            trace = driver.run(scenario, persona)
-            scenario_key = f"{seed.seed_id}#{index}"
-            trace.scenario["run_scenario_id"] = scenario_key
-            eval_targets = {
-                item.strip().lower()
-                for item in (run_cfg.eval_targets or suite.defaults.eval_targets or [])
-            }
-            run_structural = not eval_targets or "structural" in eval_targets
-            run_policy = not eval_targets or "policy" in eval_targets
-            run_llm_judge = "llm_judge" in eval_targets
-            structural = (
-                evaluate_structural(trace, scenario, max_turns=suite.defaults.max_turns)
-                if run_structural
-                else StructuralResult(passed=True, checks={}, failures=[])
-            )
-            policy = (
-                evaluate_policy(trace, scenario)
-                if run_policy
-                else PolicyResult(passed=True, checks={}, failures=[])
-            )
-            llm_judge = (
-                evaluate_llm_judge(
-                    trace=trace,
-                    scenario=scenario,
-                    provider=suite.defaults.llm_judge_provider,
-                    model=suite.defaults.llm_judge_model,
-                    thresholds=suite.defaults.llm_judge_thresholds,
-                )
-                if run_llm_judge
-                else None
-            )
-            traces.append(trace)
-            structural_results[scenario_key] = structural
-            policy_results[scenario_key] = policy
-            llm_judge_results[scenario_key] = llm_judge
-            persistence.record_scenario(
-                trace=trace,
-                structural=structural,
-                policy=policy,
-                llm_judge=llm_judge,
-            )
-    except KeyboardInterrupt:
-        loop_status = "interrupted"
+        ),
+        hydrator=hydrator,
+        driver=driver,
+        personas=personas,
+        suite=suite,
+        persistence=persistence,
+    )
+    loop_status = "interrupted" if interrupted else "completed"
+    if interrupted:
         print("Simulator interrupted by user.")
 
     artifact_path = write_run_artifact(
@@ -219,11 +161,20 @@ def main() -> int:
         structural_results=structural_results,
         policy_results=policy_results,
         llm_judge_results=llm_judge_results,
+        skipped_scenarios=skipped_scenarios,
         output_dir=simulator_root / "results",
         started_at=started_at,
     )
     print("")
-    print(render_console_summary(traces, structural_results, policy_results, llm_judge_results))
+    print(
+        render_console_summary(
+            traces,
+            structural_results,
+            policy_results,
+            llm_judge_results,
+            skipped_scenarios=skipped_scenarios,
+        )
+    )
     print("")
     print(f"Artifact: {artifact_path}")
     exit_code = _run_exit_code(
@@ -240,6 +191,8 @@ def main() -> int:
             "status": loop_status,
             "artifact_path": str(artifact_path),
             "scenarios_executed": len(traces),
+            "scenarios_skipped": len(skipped_scenarios),
+            "skipped_scenarios": skipped_scenarios,
         },
         status=loop_status if loop_status != "completed" else ("completed" if exit_code == 0 else "failed"),
     )
@@ -370,6 +323,123 @@ def _select_scenarios(
             continue
         selected.append((run_cfg, seed))
     return selected
+
+
+def _run_scenario_batch(
+    *,
+    indexed_plan: Iterable[tuple[int, ScenarioRunConfig, SeedConfig]],
+    hydrator: ScenarioHydrator,
+    driver: ConversationDriver,
+    personas: dict[str, PersonaConfig],
+    suite: SuiteConfig,
+    persistence: SimulatorPersistence,
+) -> tuple[
+    list[ConversationTrace],
+    dict[str, StructuralResult],
+    dict[str, PolicyResult],
+    dict[str, LlmJudgeResult | None],
+    list[dict[str, Any]],
+    bool,
+]:
+    """Execute simulator scenarios; returns partial results if interrupted."""
+    traces: list[ConversationTrace] = []
+    structural_results: dict[str, StructuralResult] = {}
+    policy_results: dict[str, PolicyResult] = {}
+    llm_judge_results: dict[str, LlmJudgeResult | None] = {}
+    skipped_scenarios: list[dict[str, Any]] = []
+    interrupted = False
+    try:
+        for index, (run_cfg, seed) in indexed_plan:
+            persona_cfg = personas.get(seed.persona_id)
+            if persona_cfg is None:
+                raise RuntimeError(f"Persona '{seed.persona_id}' not found for seed '{seed.seed_id}'")
+            try:
+                scenario = hydrator.hydrate(seed)
+            except HydrationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HydrationError(f"Failed to hydrate seed '{seed.seed_id}': {exc}") from exc
+
+            scenario.cooperation_level = (
+                run_cfg.cooperation_level
+                or seed.cooperation_level
+                or suite.defaults.cooperation_level
+            )
+            persona = PersonaEngine(
+                persona=persona_cfg,
+                scenario=scenario,
+                llm_provider=suite.defaults.user_llm_provider,
+                llm_model=suite.defaults.user_llm_model,
+                llm_timeout_seconds=suite.defaults.user_llm_timeout_seconds,
+                llm_temperature=suite.defaults.user_llm_temperature,
+                llm_top_p=suite.defaults.user_llm_top_p,
+                llm_repeat_penalty=suite.defaults.user_llm_repeat_penalty,
+            )
+            scenario_key = f"{seed.seed_id}#{index}"
+            scenario_snapshot = scenario.to_dict()
+            scenario_snapshot["run_scenario_id"] = scenario_key
+            try:
+                trace = driver.run(scenario, persona)
+            except PersonaGenerationError as exc:
+                skip_record: dict[str, Any] = {
+                    "scenario_key": scenario_key,
+                    "seed_id": seed.seed_id,
+                    "persona_id": seed.persona_id,
+                    "category": seed.category,
+                    "intent": seed.intent,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+                skipped_scenarios.append(skip_record)
+                print(f"Skipping {scenario_key}: {exc}", file=sys.stderr)
+                persistence.record_skipped_scenario(
+                    scenario=scenario_snapshot,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                continue
+            trace.scenario["run_scenario_id"] = scenario_key
+            eval_targets = {
+                item.strip().lower()
+                for item in (run_cfg.eval_targets or suite.defaults.eval_targets or [])
+            }
+            run_structural = not eval_targets or "structural" in eval_targets
+            run_policy = not eval_targets or "policy" in eval_targets
+            run_llm_judge = "llm_judge" in eval_targets
+            structural = (
+                evaluate_structural(trace, scenario, max_turns=suite.defaults.max_turns)
+                if run_structural
+                else StructuralResult(passed=True, checks={}, failures=[])
+            )
+            policy = (
+                evaluate_policy(trace, scenario)
+                if run_policy
+                else PolicyResult(passed=True, checks={}, failures=[])
+            )
+            llm_judge = (
+                evaluate_llm_judge(
+                    trace=trace,
+                    scenario=scenario,
+                    provider=suite.defaults.llm_judge_provider,
+                    model=suite.defaults.llm_judge_model,
+                    thresholds=suite.defaults.llm_judge_thresholds,
+                )
+                if run_llm_judge
+                else None
+            )
+            traces.append(trace)
+            structural_results[scenario_key] = structural
+            policy_results[scenario_key] = policy
+            llm_judge_results[scenario_key] = llm_judge
+            persistence.record_scenario(
+                trace=trace,
+                structural=structural,
+                policy=policy,
+                llm_judge=llm_judge,
+            )
+    except KeyboardInterrupt:
+        interrupted = True
+    return traces, structural_results, policy_results, llm_judge_results, skipped_scenarios, interrupted
 
 
 def _iter_execution_plan(
