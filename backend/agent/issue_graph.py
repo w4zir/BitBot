@@ -30,7 +30,6 @@ from backend.db.delivery_repo import get_delivery_period
 from backend.db.invoices_repo import get_invoice
 from backend.db.payments_repo import (
     get_payment,
-    get_refund_tracking,
     list_payment_methods,
 )
 from backend.db.products_repo import (
@@ -39,7 +38,7 @@ from backend.db.products_repo import (
     get_product_price as get_product_price_record,
     lookup_product,
 )
-from backend.db.refunds_repo import create_refund_request, get_refund_context
+from backend.db.refunds_repo import create_refund_request, get_refund_context, get_refund_tracking
 from backend.db.subscriptions_repo import (
     get_subscription,
     unsubscribe_subscription,
@@ -1347,13 +1346,13 @@ def _list_payment_methods_tool(step: dict[str, Any], state: IssueGraphState) -> 
 def _track_refund_payment_tool(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
     tool_name = str(step.get("tool") or "payment_refund_status")
     context = dict(state.get("context_data") or {})
-    tx = str(context.get("transaction_id") or "").strip().upper()
-    if not tx:
-        tx = _extract_transaction_id(state.get("messages") or [], state.get("text")) or ""
-    base: dict[str, Any] = {"tool_call": tool_name, "transaction_id": tx}
-    if not tx:
+    oid = str(context.get("order_id") or "").strip().upper()
+    if not oid:
+        oid = _extract_order_id_from_conversation(state.get("messages") or [], state.get("text")) or ""
+    base: dict[str, Any] = {"tool_call": tool_name, "order_id": oid}
+    if not oid:
         return {**base, "refund_tracking_found": False}
-    payload = get_refund_tracking(tx)
+    payload = get_refund_tracking(oid)
     if not payload.get("found"):
         return {**base, "refund_tracking_found": False, "refund_tracking_reason": payload.get("reason")}
     return {**base, "refund_tracking_found": True, **payload}

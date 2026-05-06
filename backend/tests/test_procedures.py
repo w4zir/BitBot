@@ -15,7 +15,7 @@ def test_blueprints_load() -> None:
     assert "order_status" in data
     assert "payment_issue" in data
     assert "check_payment_methods" in data
-    assert "payment_track_refund" in data
+    assert "track_refund" in data
     assert "check_invoice" in data
     assert "subscription_status" in data
     assert "unsubscribe" in data

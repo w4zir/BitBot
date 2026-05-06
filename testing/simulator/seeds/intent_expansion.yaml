@@ -25,14 +25,14 @@ seeds:
       order_status: [processing]
     multi_issue: false
 
-  - seed_id: payment_track_refund_basic
-    category: payment
+  - seed_id: refund_track_refund_basic
+    category: refund
     intent: track_refund
     difficulty: medium
     persona_id: polite_first_timer
-    description: "Customer asks for refund status using payment reference."
+    description: "Customer asks for refund status using order number."
     expected_outcome: resolved
-    expected_procedure_id: payment_track_refund
+    expected_procedure_id: track_refund
     db_filter:
       entity_type: order
       order_status: [delivered, shipped]

@@ -161,7 +161,7 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 - `POST /tools/update-shipping-address` — update shipping address (mutating)
 - `POST /tools/payment` — payment by transaction id
 - `GET /tools/payment-methods` — list configured payment methods
-- `POST /tools/payment-track-refund` — refund status for a transaction
+- `POST /tools/payment-track-refund` — refund status for an order
 - `POST /tools/invoice` — invoice lookup
 - `POST /tools/subscription-status` — subscription by account email
 - `POST /tools/subscription-unsubscribe` — unsubscribe (mutating)

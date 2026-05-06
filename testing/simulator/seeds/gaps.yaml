@@ -11,10 +11,6 @@ known_gaps:
     intent: check_refund_policy
     reason: "Refund policy inquiry procedure not yet added."
     ticket: ""
-  - category: refund
-    intent: track_refund
-    reason: "Refund category track_refund procedure not yet added."
-    ticket: ""
   - category: shipping
     intent: delivery_options
     reason: "Shipping delivery options procedure not yet added."

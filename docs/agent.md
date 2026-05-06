@@ -127,7 +127,7 @@ Current procedure-backed intents in `backend/procedures/`:
 - `product/product_availability`
 - `payment/payment_issue`
 - `payment/check_payment_methods`
-- `payment/track_refund`
+- `refund/track_refund`
 - `invoice/check_invoice`
 - `subscription/subscription_status`
 - `subscription/unsubscribe`
@@ -171,7 +171,7 @@ All routes are served from [`backend/api/routes/tools.py`](../backend/api/routes
 | POST | `/tools/update-shipping-address` | Update shipping address (`order_id`, `new_address`) |
 | POST | `/tools/payment` | Payment lookup by `transaction_id` |
 | GET | `/tools/payment-methods` | List payment methods (no body) |
-| POST | `/tools/payment-track-refund` | Refund tracking by `transaction_id` |
+| POST | `/tools/payment-track-refund` | Refund tracking by `order_id` |
 | POST | `/tools/invoice` | Invoice by `invoice_id` |
 | POST | `/tools/subscription-status` | Subscription by `account_email` |
 | POST | `/tools/subscription-unsubscribe` | Unsubscribe by `account_email` |

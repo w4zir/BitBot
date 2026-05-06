@@ -8,14 +8,14 @@ from pydantic import BaseModel, Field
 from backend.db.delivery_repo import get_delivery_period
 from backend.db.invoices_repo import get_invoice
 from backend.db.orders_repo import cancel_order, get_order_status, update_shipping_address
-from backend.db.payments_repo import get_payment, get_refund_tracking, list_payment_methods
+from backend.db.payments_repo import get_payment, list_payment_methods
 from backend.db.products_repo import (
     get_product_availability,
     get_product_info,
     get_product_price,
     lookup_product,
 )
-from backend.db.refunds_repo import create_refund_request, get_refund_context
+from backend.db.refunds_repo import create_refund_request, get_refund_context, get_refund_tracking
 from backend.db.subscriptions_repo import get_subscription, unsubscribe_subscription
 from backend.db.support_repo import create_support_ticket
 
@@ -138,8 +138,8 @@ async def tool_payment_methods() -> dict[str, Any]:
 
 
 @router.post("/payment-track-refund")
-async def tool_payment_track_refund(req: TransactionRequest) -> dict[str, Any]:
-    data = get_refund_tracking(req.transaction_id)
+async def tool_payment_track_refund(req: RefundContextRequest) -> dict[str, Any]:
+    data = get_refund_tracking(req.order_id)
     return {"ok": bool(data.get("found")), "data": data}
 
 

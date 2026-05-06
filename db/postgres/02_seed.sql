@@ -869,7 +869,6 @@ INSERT INTO category_intents (category_name, intent_name, display_name, is_activ
 -- payment
 ('payment', 'check_payment_methods', 'Check payment methods', true),
 ('payment', 'payment_issue', 'Payment issue', true),
-('payment', 'track_refund', 'Track refund', true),
 -- refund
 ('refund', 'get_refund', 'Get refund', true),
 ('refund', 'check_refund_policy', 'Check refund policy', true),

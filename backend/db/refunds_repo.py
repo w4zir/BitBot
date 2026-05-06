@@ -41,6 +41,40 @@ def get_refund_context(order_id: str) -> dict[str, Any] | None:
     }
 
 
+def get_refund_tracking(order_id: str) -> dict[str, Any]:
+    oid = (order_id or "").strip().upper()
+    if not oid:
+        return {"found": False, "reason": "missing_order_id"}
+
+    order = get_order_status(oid)
+    if not order:
+        return {"found": False, "reason": "order_not_found"}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT refund_id, decision, decision_reason, requested_at
+                FROM refund_requests
+                WHERE order_id = %s
+                ORDER BY requested_at DESC NULLS LAST, refund_id DESC
+                LIMIT 1
+                """,
+                (oid,),
+            )
+            row = cur.fetchone()
+
+    return {
+        "found": True,
+        "order_id": oid,
+        "order_status": order.get("status"),
+        "refund_id": row[0] if row else None,
+        "refund_decision": row[1] if row else None,
+        "refund_decision_reason": row[2] if row else None,
+        "refund_requested_at": row[3].isoformat() if row and row[3] else None,
+    }
+
+
 def create_refund_request(
     order_id: str,
     reason: str,
