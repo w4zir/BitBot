@@ -12,10 +12,18 @@ defaults:
 
 scenarios:
   - seed_id: order_cancel_processing_easy
+    persona_id: polite_first_timer
   - seed_id: order_status_cooperative
+    persona_id: polite_first_timer
   - seed_id: refund_delivered_easy
+    persona_id: polite_first_timer
   - seed_id: payment_issue_basic
+    persona_id: polite_first_timer
   - seed_id: invoice_check_amount
+    persona_id: polite_first_timer
   - seed_id: subscription_status_basic
+    persona_id: polite_first_timer
   - seed_id: contact_human_agent_request
+    persona_id: polite_first_timer
   - seed_id: product_info_basic
+    persona_id: polite_first_timer

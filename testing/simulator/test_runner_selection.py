@@ -9,12 +9,11 @@ from testing.simulator.config import (
 from testing.simulator.runner import _build_arg_parser, _iter_execution_plan, _select_scenarios
 
 
-def _seed(seed_id: str, *, category: str = "order", intent: str = "cancel_order", persona: str = "p1") -> SeedConfig:
+def _seed(seed_id: str, *, category: str = "order", intent: str = "cancel_order") -> SeedConfig:
     return SeedConfig(
         seed_id=seed_id,
         category=category,
         intent=intent,
-        persona_id=persona,
         db_filter=DbFilterConfig(entity_type="order"),
     )
 
@@ -30,17 +29,22 @@ def _suite() -> SuiteConfig:
 
 
 def test_select_scenarios_applies_filters() -> None:
-    suite = _suite()
+    suite = SuiteConfig(
+        run_id="r1",
+        scenarios=[
+            ScenarioRunConfig(seed_id="s1", persona_id="persona_a"),
+            ScenarioRunConfig(seed_id="s2", persona_id="persona_b"),
+        ],
+    )
     seeds_by_id = {
-        "s1": _seed("s1", category="order", intent="cancel_order", persona="persona_a"),
-        "s2": _seed("s2", category="refund", intent="get_refund", persona="persona_b"),
+        "s1": _seed("s1", category="order", intent="cancel_order"),
+        "s2": _seed("s2", category="refund", intent="get_refund"),
     }
     selected = _select_scenarios(
         suite=suite,
         seeds_by_id=seeds_by_id,
         seed_override=None,
         category_filters=["refund"],
-        difficulty_filters=[],
         persona_filters=["persona_b"],
         intent_filters=["get_refund"],
     )

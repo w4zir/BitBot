@@ -37,7 +37,8 @@ def evaluate_policy(trace: ConversationTrace, scenario: ScenarioInstance) -> Pol
                 f"Eligibility mismatch. expected={expected_eligibility}, actual={final_turn.eligibility_ok if final_turn else None}."
             )
 
-    has_boundary = "eligibility_boundary" in scenario.adversarial_flags
+    # Adversarial boundary seeds were removed; eligibility signal still checked when expected.
+    has_boundary = False
     checks["boundary_handling"] = not has_boundary or (final_turn is not None and final_turn.eligibility_ok is not None)
     if not checks["boundary_handling"]:
         failures.append("Boundary scenario did not produce a deterministic eligibility signal.")

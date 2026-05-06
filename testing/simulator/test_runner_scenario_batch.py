@@ -23,7 +23,6 @@ def _seed(seed_id: str) -> SeedConfig:
         seed_id=seed_id,
         category="order",
         intent="cancel_order",
-        persona_id="p1",
         db_filter=DbFilterConfig(entity_type="order"),
     )
 
@@ -33,21 +32,16 @@ def _scenario_for_seed(seed_id: str) -> ScenarioInstance:
         seed_id=seed_id,
         category="order",
         intent="cancel_order",
-        difficulty="easy",
+        description="Cancel",
         persona_id="p1",
         cooperation_level="cooperative",
         expected_outcome="resolved",
         expected_procedure_id="order_cancel",
-        adversarial_flags=[],
         entity={
             "entity_type": "order",
             "order_id": "ORD-123",
             "status": "processing",
         },
-        secondary_entity=None,
-        multi_issue=False,
-        secondary_category=None,
-        secondary_intent=None,
     )
 
 
@@ -122,21 +116,23 @@ def test_run_scenario_batch_skips_persona_error_and_continues(monkeypatch: pytes
 
     suite = SuiteConfig(
         run_id="r1",
-        scenarios=[ScenarioRunConfig(seed_id="s1"), ScenarioRunConfig(seed_id="s2")],
+        scenarios=[
+            ScenarioRunConfig(seed_id="s1", persona_id="p1"),
+            ScenarioRunConfig(seed_id="s2", persona_id="p1"),
+        ],
         defaults=DefaultsConfig(eval_targets=["structural"]),
     )
     seed1, seed2 = _seed("s1"), _seed("s2")
-    personas = {"p1": _persona_cfg()}
     persistence = FakePersistence()
 
     traces, _structural, _policy, _llm_judge, skipped, interrupted, batch_err = _run_scenario_batch(
         indexed_plan=[
-            (1, (ScenarioRunConfig(seed_id="s1"), seed1)),
-            (2, (ScenarioRunConfig(seed_id="s2"), seed2)),
+            (1, (ScenarioRunConfig(seed_id="s1", persona_id="p1"), seed1)),
+            (2, (ScenarioRunConfig(seed_id="s2", persona_id="p1"), seed2)),
         ],
         hydrator=FakeHydrator(),
         driver=FakeDriver(),
-        personas=personas,
+        persona_candidates=[_persona_cfg()],
         suite=suite,
         persistence=persistence,  # type: ignore[arg-type]
     )
@@ -200,21 +196,23 @@ def test_run_scenario_batch_console_reporter_callbacks(monkeypatch: pytest.Monke
 
     suite = SuiteConfig(
         run_id="r1",
-        scenarios=[ScenarioRunConfig(seed_id="s1"), ScenarioRunConfig(seed_id="s2")],
+        scenarios=[
+            ScenarioRunConfig(seed_id="s1", persona_id="p1"),
+            ScenarioRunConfig(seed_id="s2", persona_id="p1"),
+        ],
         defaults=DefaultsConfig(eval_targets=["structural"]),
     )
     seed1, seed2 = _seed("s1"), _seed("s2")
-    personas = {"p1": _persona_cfg()}
     console = FakeConsole()
 
     _traces, _s, _p, _j, _skipped, _interrupted, _batch_err = _run_scenario_batch(
         indexed_plan=[
-            (1, (ScenarioRunConfig(seed_id="s1"), seed1)),
-            (2, (ScenarioRunConfig(seed_id="s2"), seed2)),
+            (1, (ScenarioRunConfig(seed_id="s1", persona_id="p1"), seed1)),
+            (2, (ScenarioRunConfig(seed_id="s2", persona_id="p1"), seed2)),
         ],
         hydrator=FakeHydrator(),
         driver=FakeDriver(),
-        personas=personas,
+        persona_candidates=[_persona_cfg()],
         suite=suite,
         persistence=FakePersistence(),  # type: ignore[arg-type]
         console_reporter=console,
@@ -266,24 +264,23 @@ def test_run_scenario_batch_returns_partial_results_on_exception(monkeypatch: py
     suite = SuiteConfig(
         run_id="r1",
         scenarios=[
-            ScenarioRunConfig(seed_id="s1"),
-            ScenarioRunConfig(seed_id="s2"),
-            ScenarioRunConfig(seed_id="s3"),
+            ScenarioRunConfig(seed_id="s1", persona_id="p1"),
+            ScenarioRunConfig(seed_id="s2", persona_id="p1"),
+            ScenarioRunConfig(seed_id="s3", persona_id="p1"),
         ],
         defaults=DefaultsConfig(eval_targets=["structural"]),
     )
     seed1, seed2, seed3 = _seed("s1"), _seed("s2"), _seed("s3")
-    personas = {"p1": _persona_cfg()}
 
     traces, _struct, _pol, _judge, skipped, interrupted, batch_err = _run_scenario_batch(
         indexed_plan=[
-            (1, (ScenarioRunConfig(seed_id="s1"), seed1)),
-            (2, (ScenarioRunConfig(seed_id="s2"), seed2)),
-            (3, (ScenarioRunConfig(seed_id="s3"), seed3)),
+            (1, (ScenarioRunConfig(seed_id="s1", persona_id="p1"), seed1)),
+            (2, (ScenarioRunConfig(seed_id="s2", persona_id="p1"), seed2)),
+            (3, (ScenarioRunConfig(seed_id="s3", persona_id="p1"), seed3)),
         ],
         hydrator=FakeHydrator(),
         driver=FakeDriver(),
-        personas=personas,
+        persona_candidates=[_persona_cfg()],
         suite=suite,
         persistence=FakePersistence(),  # type: ignore[arg-type]
     )

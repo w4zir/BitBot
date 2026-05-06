@@ -10,17 +10,12 @@ def _order_status_scenario() -> ScenarioInstance:
         seed_id="order_status_seed",
         category="order",
         intent="order_status",
-        difficulty="easy",
+        description="Order status check",
         persona_id="polite_first_timer",
         cooperation_level="cooperative",
         expected_outcome="resolved",
         expected_procedure_id="order_status",
-        adversarial_flags=[],
         entity={"order_id": "ORD-1", "status": "shipped"},
-        secondary_entity=None,
-        multi_issue=False,
-        secondary_category=None,
-        secondary_intent=None,
     )
 
 
@@ -89,17 +84,12 @@ def test_structural_other_procedure_skips_order_status_guard() -> None:
         seed_id="cancel",
         category="order",
         intent="cancel_order",
-        difficulty="easy",
+        description="Cancel order",
         persona_id="p",
         cooperation_level="cooperative",
         expected_outcome="resolved",
         expected_procedure_id="order_cancel",
-        adversarial_flags=[],
         entity={"status": "processing"},
-        secondary_entity=None,
-        multi_issue=False,
-        secondary_category=None,
-        secondary_intent=None,
     )
     trace = ConversationTrace(
         scenario={},

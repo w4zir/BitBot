@@ -12,22 +12,81 @@ defaults:
   fail_on_regression: false
   fail_on_coverage_gap: false
 
+  
 scenarios:
   - seed_id: order_cancel_processing_easy
+    persona_id: 
   - seed_id: order_cancel_delivered_policy_ineligible
+    persona_id: 
   - seed_id: order_status_cooperative
+    persona_id: 
   - seed_id: refund_delivered_easy
+    persona_id: 
   - seed_id: refund_missing_data_resistant
+    persona_id: 
+    cooperation_level: resistant
   - seed_id: payment_issue_basic
+    persona_id: 
   - seed_id: payment_methods_lookup
+    persona_id: 
   - seed_id: refund_track_refund_basic
+    persona_id: 
   - seed_id: invoice_check_amount
+    persona_id: 
   - seed_id: subscription_status_basic
+    persona_id: 
   - seed_id: subscription_unsubscribe_active
+    persona_id: 
   - seed_id: contact_human_agent_request
+    persona_id: 
   - seed_id: delivery_period_lookup
+    persona_id: 
   - seed_id: feedback_complaint_basic
+    persona_id: 
   - seed_id: shipping_change_address_basic
+    persona_id: 
   - seed_id: product_info_basic
+    persona_id: 
   - seed_id: product_price_basic
+    persona_id: 
   - seed_id: product_availability_basic
+    persona_id: 
+
+# scenarios:
+#   - seed_id: order_cancel_processing_easy
+#     persona_id: polite_first_timer
+#   - seed_id: order_cancel_delivered_policy_ineligible
+#     persona_id: policy_prober
+#   - seed_id: order_status_cooperative
+#     persona_id: polite_first_timer
+#   - seed_id: refund_delivered_easy
+#     persona_id: polite_first_timer
+#   - seed_id: refund_missing_data_resistant
+#     persona_id: impatient_escalator
+#     cooperation_level: resistant
+#   - seed_id: payment_issue_basic
+#     persona_id: polite_first_timer
+#   - seed_id: payment_methods_lookup
+#     persona_id: polite_first_timer
+#   - seed_id: refund_track_refund_basic
+#     persona_id: polite_first_timer
+#   - seed_id: invoice_check_amount
+#     persona_id: polite_first_timer
+#   - seed_id: subscription_status_basic
+#     persona_id: polite_first_timer
+#   - seed_id: subscription_unsubscribe_active
+#     persona_id: polite_first_timer
+#   - seed_id: contact_human_agent_request
+#     persona_id: polite_first_timer
+#   - seed_id: delivery_period_lookup
+#     persona_id: polite_first_timer
+#   - seed_id: feedback_complaint_basic
+#     persona_id: policy_prober
+#   - seed_id: shipping_change_address_basic
+#     persona_id: polite_first_timer
+#   - seed_id: product_info_basic
+#     persona_id: polite_first_timer
+#   - seed_id: product_price_basic
+#     persona_id: polite_first_timer
+#   - seed_id: product_availability_basic
+#     persona_id: polite_first_timer

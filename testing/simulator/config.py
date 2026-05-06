@@ -3,11 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 CooperationLevel = Literal["cooperative", "passive", "resistant"]
-DifficultyLevel = Literal["easy", "medium", "hard", "adversarial"]
 EvalTarget = Literal["structural", "policy", "llm_judge", "regression"]
 EntityType = Literal["order", "user", "subscription"]
 
@@ -22,34 +21,18 @@ class DbFilterConfig(BaseModel):
     subscription_plan: list[str] = Field(default_factory=list)
 
 
-class SecondaryIssueConfig(BaseModel):
-    category: str
-    intent: str
-    db_filter: DbFilterConfig
-
-
 class SeedConfig(BaseModel):
+    """Scenario definition only; persona is chosen at runtime (suite or random)."""
+
+    model_config = ConfigDict(extra="forbid")
+
     seed_id: str
     category: str
     intent: str
-    difficulty: DifficultyLevel = "medium"
-    persona_id: str
     description: str = ""
     expected_outcome: str = "resolved"
     expected_procedure_id: str | None = None
-    cooperation_level: CooperationLevel | None = None
-    adversarial_flags: list[str] = Field(default_factory=list)
     db_filter: DbFilterConfig
-    multi_issue: bool = False
-    secondary_issue: SecondaryIssueConfig | None = None
-
-    @model_validator(mode="after")
-    def validate_secondary_issue(self) -> "SeedConfig":
-        if self.multi_issue and self.secondary_issue is None:
-            raise ValueError("secondary_issue is required when multi_issue is true")
-        if not self.multi_issue and self.secondary_issue is not None:
-            raise ValueError("secondary_issue must be omitted when multi_issue is false")
-        return self
 
 
 class SeedFileConfig(BaseModel):
@@ -102,6 +85,7 @@ class DefaultsConfig(BaseModel):
 
 class ScenarioRunConfig(BaseModel):
     seed_id: str
+    persona_id: str | None = None
     cooperation_level: CooperationLevel | None = None
     eval_targets: list[EvalTarget] | None = None
 

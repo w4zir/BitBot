@@ -28,7 +28,6 @@ class PersonaEngine:
     event_sink: Any | None = None
     _asks_for_human: bool = False
     _missing_prompt_count: int = 0
-    _introduced_secondary_issue: bool = False
     _state: dict[str, Any] = field(default_factory=dict)
 
     def generate_opening(self) -> str:
@@ -39,7 +38,6 @@ class PersonaEngine:
             conversation_history=[],
             agent_metadata={},
             force_challenge_missing=False,
-            force_secondary_issue=False,
             force_ask_human=False,
             force_distinct_opening=False,
         )
@@ -51,7 +49,6 @@ class PersonaEngine:
                 conversation_history=[],
                 agent_metadata={},
                 force_challenge_missing=False,
-                force_secondary_issue=False,
                 force_ask_human=False,
                 force_distinct_opening=True,
             )
@@ -81,13 +78,6 @@ class PersonaEngine:
                 self.persona.cooperation_level == "resistant" and self._missing_prompt_count <= 1
             )
 
-        force_secondary_issue = False
-        if self.scenario.multi_issue and not self._introduced_secondary_issue and turn_number >= 2:
-            second = self.scenario.secondary_entity or {}
-            second_order_id = str(second.get("order_id") or "").strip()
-            if second_order_id:
-                force_secondary_issue = True
-
         force_ask_human = False
         if self.persona.patience == "low" and turn_number >= 3 and not self._asks_for_human:
             force_ask_human = True
@@ -99,12 +89,9 @@ class PersonaEngine:
             conversation_history=conversation_history,
             agent_metadata=agent_metadata,
             force_challenge_missing=force_challenge_missing,
-            force_secondary_issue=force_secondary_issue,
             force_ask_human=force_ask_human,
             force_distinct_opening=False,
         )
-        if force_secondary_issue:
-            self._introduced_secondary_issue = True
         if force_ask_human:
             self._asks_for_human = True
         if stop:
@@ -120,14 +107,12 @@ class PersonaEngine:
         conversation_history: list[dict],
         agent_metadata: dict,
         force_challenge_missing: bool,
-        force_secondary_issue: bool,
         force_ask_human: bool,
         force_distinct_opening: bool,
     ) -> tuple[str, bool]:
         directives: list[str] = []
         missing = list(agent_metadata.get("validation_missing") or [])
         order_id = str(self.scenario.entity.get("order_id") or "").strip()
-        secondary_order_id = str((self.scenario.secondary_entity or {}).get("order_id") or "").strip()
         style_profile = self._style_profile()
 
         if mode == "opening":
@@ -163,10 +148,6 @@ class PersonaEngine:
                 )
             elif missing:
                 directives.append("Provide the missing details the assistant asked for.")
-            if force_secondary_issue:
-                directives.append(
-                    f"Introduce a second issue now and explicitly mention secondary order id '{secondary_order_id}'."
-                )
             if force_ask_human:
                 directives.append("The user has low patience. Ask to transfer to a human agent now.")
             directives.append("Set stop=true only if the user would naturally end the conversation now.")
@@ -182,7 +163,6 @@ class PersonaEngine:
             "state": {
                 "asks_for_human": self._asks_for_human,
                 "missing_prompt_count": self._missing_prompt_count,
-                "introduced_secondary_issue": self._introduced_secondary_issue,
             },
             "style_profile": style_profile,
             "directives": directives,
@@ -289,8 +269,7 @@ class PersonaEngine:
             )
 
     def _allows_missing_data_opening(self) -> bool:
-        flags = [str(item).strip().lower() for item in self.scenario.adversarial_flags]
-        return any("missing_data" in flag for flag in flags)
+        return False
 
     def _style_profile(self) -> dict[str, str]:
         cached = self._state.get("style_profile")

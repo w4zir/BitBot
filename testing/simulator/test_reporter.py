@@ -32,7 +32,8 @@ def test_issue_label_in_output() -> None:
         index=2,
         total_planned=5,
         scenario_key="seed_a#2",
-        seed=type("S", (), {"seed_id": "seed_a", "persona_id": "p1", "intent": "cancel"})(),
+        seed=type("S", (), {"seed_id": "seed_a", "intent": "cancel"})(),
+        persona_id="p1",
     )
     out = buf.getvalue()
     assert "Issue 2/5" in out
@@ -46,7 +47,8 @@ def test_issue_label_forever_style() -> None:
         index=7,
         total_planned=None,
         scenario_key="x#7",
-        seed=type("S", (), {"seed_id": "x", "persona_id": "p", "intent": "i"})(),
+        seed=type("S", (), {"seed_id": "x", "intent": "i"})(),
+        persona_id="p",
     )
     out = buf.getvalue()
     assert "Issue 7: x#7" in out

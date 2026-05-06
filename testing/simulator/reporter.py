@@ -107,15 +107,16 @@ class SimulatorConsoleReporter:
         total_planned: int | None,
         scenario_key: str,
         seed: Any,
+        persona_id: str = "",
     ) -> None:
         seed_id = str(getattr(seed, "seed_id", "") or "")
-        persona_id = str(getattr(seed, "persona_id", "") or "")
+        pid = str(persona_id or getattr(seed, "persona_id", "") or "")
         intent = str(getattr(seed, "intent", "") or "")
         self._print("")
         self._print(_issue_separator())
         self._print(f"{_issue_label(index, total_planned)}: {scenario_key}")
         self._print(
-            f"Seed: {seed_id} | Persona: {persona_id} | Intent: {intent}",
+            f"Seed: {seed_id} | Persona: {pid} | Intent: {intent}",
         )
 
     def skip_scenario(
@@ -273,6 +274,8 @@ def write_run_artifact(
                 "category": trace.scenario.get("category"),
                 "intent": trace.scenario.get("intent"),
                 "expected_outcome": trace.scenario.get("expected_outcome"),
+                "seed_snapshot": trace.scenario.get("seed_snapshot"),
+                "persona_snapshot": trace.scenario.get("persona_snapshot"),
                 "turns": len(trace.turns),
                 "final_outcome_status": trace.final_outcome_status,
                 "structural": asdict(structural),

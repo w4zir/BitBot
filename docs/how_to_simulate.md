@@ -112,8 +112,8 @@ python -m testing.simulator.runner --suite testing/simulator/suites/regression.y
 ```
 
 ```bash
-# Filter by category/intent/persona/difficulty
-python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --category order --intent cancel_order --persona policy_prober --difficulty hard
+# Filter by category/intent/persona (persona narrows runtime persona selection)
+python -m testing.simulator.runner --suite testing/simulator/suites/regression.yaml --category order --intent cancel_order --persona policy_prober
 ```
 
 ```bash

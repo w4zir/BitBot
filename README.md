@@ -176,7 +176,7 @@ See [docs/how_to_simulate.md](docs/how_to_simulate.md) for prerequisites, enviro
 The simulator CLI lives in `testing/simulator/runner.py` and supports:
 
 - bounded loops (`--iterations N`) and continuous loops (`--forever`)
-- randomized selection (`--randomize`) with `--persona`, `--category`, `--intent`, `--difficulty` filters
+- randomized selection (`--randomize`) with `--persona`, `--category`, and `--intent` filters
 - optional LLM-as-judge (`eval_targets: [llm_judge]`)
 - optional Postgres persistence (`--persist-db`) for runs/turns/messages/evaluations/training rows
 

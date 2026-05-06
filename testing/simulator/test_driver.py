@@ -11,17 +11,12 @@ def _minimal_scenario() -> ScenarioInstance:
         seed_id="s1",
         category="order",
         intent="cancel_order",
-        difficulty="easy",
+        description="Cancel",
         persona_id="p1",
         cooperation_level="cooperative",
         expected_outcome="resolved",
         expected_procedure_id="order_cancel",
-        adversarial_flags=[],
         entity={"entity_type": "order", "order_id": "ORD-1", "status": "processing"},
-        secondary_entity=None,
-        multi_issue=False,
-        secondary_category=None,
-        secondary_intent=None,
     )
 
 

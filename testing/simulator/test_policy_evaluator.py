@@ -10,17 +10,12 @@ def _refund_scenario() -> ScenarioInstance:
         seed_id="refund_delivered_easy",
         category="refund",
         intent="get_refund",
-        difficulty="medium",
+        description="Refund delivered",
         persona_id="polite_first_timer",
         cooperation_level="cooperative",
         expected_outcome="resolved",
         expected_procedure_id="get_refund",
-        adversarial_flags=[],
         entity={"order_id": "ORD-9352", "status": "delivered"},
-        secondary_entity=None,
-        multi_issue=False,
-        secondary_category=None,
-        secondary_intent=None,
     )
 
 

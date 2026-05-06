@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -19,34 +18,28 @@ class ScenarioInstance:
     seed_id: str
     category: str
     intent: str
-    difficulty: str
-    persona_id: str
-    cooperation_level: str
+    description: str
     expected_outcome: str
     expected_procedure_id: str | None
-    adversarial_flags: list[str]
+    persona_id: str
+    cooperation_level: str
     entity: dict[str, Any]
-    secondary_entity: dict[str, Any] | None
-    multi_issue: bool
-    secondary_category: str | None
-    secondary_intent: str | None
+    seed_snapshot: dict[str, Any] = field(default_factory=dict)
+    persona_snapshot: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "seed_id": self.seed_id,
             "category": self.category,
             "intent": self.intent,
-            "difficulty": self.difficulty,
-            "persona_id": self.persona_id,
-            "cooperation_level": self.cooperation_level,
+            "description": self.description,
             "expected_outcome": self.expected_outcome,
             "expected_procedure_id": self.expected_procedure_id,
-            "adversarial_flags": list(self.adversarial_flags),
+            "persona_id": self.persona_id,
+            "cooperation_level": self.cooperation_level,
             "entity": dict(self.entity),
-            "secondary_entity": dict(self.secondary_entity) if self.secondary_entity else None,
-            "multi_issue": self.multi_issue,
-            "secondary_category": self.secondary_category,
-            "secondary_intent": self.secondary_intent,
+            "seed_snapshot": dict(self.seed_snapshot),
+            "persona_snapshot": dict(self.persona_snapshot),
         }
 
 
@@ -57,30 +50,18 @@ class ScenarioHydrator:
 
     def hydrate(self, seed: SeedConfig) -> ScenarioInstance:
         entity = self._query_entity(seed.db_filter)
-        secondary_entity: dict[str, Any] | None = None
-        secondary_category: str | None = None
-        secondary_intent: str | None = None
-
-        if seed.multi_issue and seed.secondary_issue is not None:
-            secondary_entity = self._query_entity(seed.secondary_issue.db_filter)
-            secondary_category = seed.secondary_issue.category
-            secondary_intent = seed.secondary_issue.intent
-
         return ScenarioInstance(
             seed_id=seed.seed_id,
             category=seed.category,
             intent=seed.intent,
-            difficulty=seed.difficulty,
-            persona_id=seed.persona_id,
-            cooperation_level=seed.cooperation_level or "cooperative",
+            description=seed.description,
             expected_outcome=seed.expected_outcome,
             expected_procedure_id=seed.expected_procedure_id,
-            adversarial_flags=list(seed.adversarial_flags),
+            persona_id="",
+            cooperation_level="cooperative",
             entity=entity,
-            secondary_entity=secondary_entity,
-            multi_issue=seed.multi_issue,
-            secondary_category=secondary_category,
-            secondary_intent=secondary_intent,
+            seed_snapshot=seed.model_dump(mode="json"),
+            persona_snapshot={},
         )
 
     def _query_entity(self, db_filter: DbFilterConfig) -> dict[str, Any]:

@@ -22,30 +22,21 @@ def _persona(*, cooperation_level: str = "cooperative", patience: str = "medium"
     )
 
 
-def _scenario(
-    *,
-    multi_issue: bool = False,
-    adversarial_flags: list[str] | None = None,
-) -> ScenarioInstance:
+def _scenario() -> ScenarioInstance:
     return ScenarioInstance(
         seed_id="seed1",
         category="order",
         intent="cancel_order",
-        difficulty="medium",
+        description="Cancel processing order",
         persona_id="p1",
         cooperation_level="cooperative",
         expected_outcome="resolved",
         expected_procedure_id="order_cancel",
-        adversarial_flags=adversarial_flags or [],
         entity={
             "entity_type": "order",
             "order_id": "ORD-123",
             "status": "processing",
         },
-        secondary_entity={"entity_type": "order", "order_id": "ORD-999"} if multi_issue else None,
-        multi_issue=multi_issue,
-        secondary_category="order" if multi_issue else None,
-        secondary_intent="order_status" if multi_issue else None,
     )
 
 
@@ -114,19 +105,17 @@ def test_resistant_persona_can_challenge_first_missing_prompt(
     assert message == "Why do you need that first?"
 
 
-def test_force_directives_for_secondary_issue_and_human_escalation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_force_directives_for_human_escalation(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[dict] = []
 
     def _fake_chat_completion(**kwargs):
         payload = json.loads(kwargs["messages"][1]["content"])
         captured.append(payload)
-        return '{"message":"Please connect me to a human. Also, issue with order ORD-999.", "stop": false}'
+        return '{"message":"Please connect me to a human.", "stop": false}'
 
     persona = PersonaEngine(
         persona=_persona(patience="low"),
-        scenario=_scenario(multi_issue=True),
+        scenario=_scenario(),
         llm_provider="ollama",
         llm_model="llama3.2",
         llm_timeout_seconds=30.0,
@@ -141,7 +130,6 @@ def test_force_directives_for_secondary_issue_and_human_escalation(
     )
     assert captured
     directives = captured[0]["directives"]
-    assert any("secondary order id 'ORD-999'" in item for item in directives)
     assert any("transfer to a human agent" in item for item in directives)
 
 

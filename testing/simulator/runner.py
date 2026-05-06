@@ -81,12 +81,16 @@ def main() -> int:
         seeds_by_id=seeds_by_id,
         seed_override=args.seed,
         category_filters=args.category,
-        difficulty_filters=args.difficulty,
         persona_filters=args.persona,
         intent_filters=args.intent,
     )
     if not selected_scenarios:
         print("No scenarios matched the requested filters.")
+        return 1
+
+    persona_candidates = _persona_candidates(personas, args.persona)
+    if not persona_candidates:
+        print("No personas matched the requested --persona filter.")
         return 1
 
     coverage = build_coverage_report(
@@ -121,7 +125,6 @@ def main() -> int:
         "filters": {
             "seed": args.seed,
             "category": args.category,
-            "difficulty": args.difficulty,
             "persona": args.persona,
             "intent": args.intent,
         },
@@ -155,7 +158,7 @@ def main() -> int:
         ),
         hydrator=hydrator,
         driver=driver,
-        personas=personas,
+        persona_candidates=persona_candidates,
         suite=suite,
         persistence=persistence,
         console_reporter=console_reporter,
@@ -269,8 +272,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--write-baseline", action="store_true", help="Reserved for future use")
     parser.add_argument("--coverage-only", action="store_true", help="Only evaluate coverage")
     parser.add_argument("--category", nargs="*", default=[], help="Filter to categories")
-    parser.add_argument("--difficulty", nargs="*", default=[], help="Filter to difficulties")
-    parser.add_argument("--persona", nargs="*", default=[], help="Filter to personas")
+    parser.add_argument("--persona", nargs="*", default=[], help="Restrict runtime persona selection")
     parser.add_argument("--intent", nargs="*", default=[], help="Filter to intents")
     parser.add_argument(
         "--iterations",
@@ -344,19 +346,45 @@ def _planned_scenario_count(
     return n_iter * max(1, num_selected_scenarios)
 
 
+def _persona_candidates(
+    personas: dict[str, PersonaConfig], persona_filters: list[str]
+) -> list[PersonaConfig]:
+    items = list(personas.values())
+    if not persona_filters:
+        return items
+    allowed = {p.strip().lower() for p in persona_filters}
+    return [p for p in items if p.persona_id.strip().lower() in allowed]
+
+
+def _pick_persona_for_scenario(
+    *,
+    run_cfg: ScenarioRunConfig,
+    persona_candidates: list[PersonaConfig],
+) -> PersonaConfig:
+    if not persona_candidates:
+        raise RuntimeError("No persona candidates available for scenario execution.")
+    if run_cfg.persona_id:
+        want = run_cfg.persona_id.strip().lower()
+        for p in persona_candidates:
+            if p.persona_id.strip().lower() == want:
+                return p
+        raise RuntimeError(
+            f"Suite persona_id {run_cfg.persona_id!r} is not in the current persona candidate list."
+        )
+    return random.choice(persona_candidates)
+
+
 def _select_scenarios(
     *,
     suite: SuiteConfig,
     seeds_by_id: dict[str, SeedConfig],
     seed_override: str | None,
     category_filters: list[str],
-    difficulty_filters: list[str],
     persona_filters: list[str],
     intent_filters: list[str],
 ) -> list[tuple[ScenarioRunConfig, SeedConfig]]:
     selected: list[tuple[ScenarioRunConfig, SeedConfig]] = []
     allowed_categories = {c.strip().lower() for c in category_filters}
-    allowed_difficulties = {d.strip().lower() for d in difficulty_filters}
     allowed_personas = {p.strip().lower() for p in persona_filters}
     allowed_intents = {i.strip().lower() for i in intent_filters}
     for run_cfg in suite.scenarios:
@@ -367,10 +395,10 @@ def _select_scenarios(
             raise RuntimeError(f"Seed '{run_cfg.seed_id}' referenced by suite is missing.")
         if allowed_categories and seed.category.strip().lower() not in allowed_categories:
             continue
-        if allowed_difficulties and seed.difficulty.strip().lower() not in allowed_difficulties:
-            continue
-        if allowed_personas and seed.persona_id.strip().lower() not in allowed_personas:
-            continue
+        if allowed_personas:
+            if run_cfg.persona_id:
+                if run_cfg.persona_id.strip().lower() not in allowed_personas:
+                    continue
         if allowed_intents and seed.intent.strip().lower() not in allowed_intents:
             continue
         selected.append((run_cfg, seed))
@@ -382,7 +410,7 @@ def _run_scenario_batch(
     indexed_plan: Iterable[tuple[int, ScenarioRunConfig, SeedConfig]],
     hydrator: ScenarioHydrator,
     driver: ConversationDriver,
-    personas: dict[str, PersonaConfig],
+    persona_candidates: list[PersonaConfig],
     suite: SuiteConfig,
     persistence: SimulatorPersistence,
     console_reporter: SimulatorConsoleReporter | None = None,
@@ -406,9 +434,6 @@ def _run_scenario_batch(
     batch_error: BaseException | None = None
     try:
         for index, (run_cfg, seed) in indexed_plan:
-            persona_cfg = personas.get(seed.persona_id)
-            if persona_cfg is None:
-                raise RuntimeError(f"Persona '{seed.persona_id}' not found for seed '{seed.seed_id}'")
             try:
                 scenario = hydrator.hydrate(seed)
             except HydrationError:
@@ -416,10 +441,14 @@ def _run_scenario_batch(
             except Exception as exc:  # noqa: BLE001
                 raise HydrationError(f"Failed to hydrate seed '{seed.seed_id}': {exc}") from exc
 
+            persona_cfg = _pick_persona_for_scenario(
+                run_cfg=run_cfg,
+                persona_candidates=persona_candidates,
+            )
+            scenario.persona_id = persona_cfg.persona_id
+            scenario.persona_snapshot = persona_cfg.model_dump(mode="json")
             scenario.cooperation_level = (
-                run_cfg.cooperation_level
-                or seed.cooperation_level
-                or suite.defaults.cooperation_level
+                run_cfg.cooperation_level or suite.defaults.cooperation_level
             )
             scenario_key = f"{seed.seed_id}#{index}"
             scenario_snapshot = scenario.to_dict()
@@ -430,6 +459,7 @@ def _run_scenario_batch(
                     total_planned=total_planned,
                     scenario_key=scenario_key,
                     seed=seed,
+                    persona_id=persona_cfg.persona_id,
                 )
             persona = PersonaEngine(
                 persona=persona_cfg,
@@ -448,7 +478,7 @@ def _run_scenario_batch(
                 skip_record: dict[str, Any] = {
                     "scenario_key": scenario_key,
                     "seed_id": seed.seed_id,
-                    "persona_id": seed.persona_id,
+                    "persona_id": persona_cfg.persona_id,
                     "category": seed.category,
                     "intent": seed.intent,
                     "error_type": type(exc).__name__,

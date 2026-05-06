@@ -30,17 +30,12 @@ def _scenario() -> ScenarioInstance:
         seed_id="seed1",
         category="refund",
         intent="get_refund",
-        difficulty="easy",
+        description="Refund",
         persona_id="p1",
         cooperation_level="cooperative",
         expected_outcome="resolved",
         expected_procedure_id="refund_v1",
-        adversarial_flags=[],
         entity={"order_id": "ORD-1"},
-        secondary_entity=None,
-        multi_issue=False,
-        secondary_category=None,
-        secondary_intent=None,
     )
 
 
