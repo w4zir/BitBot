@@ -854,62 +854,66 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source,
   is_active = EXCLUDED.is_active;
 
-INSERT INTO category_intents (category_name, intent_name, display_name, is_active) VALUES
+ALTER TABLE category_intents
+ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+
+INSERT INTO category_intents (category_name, intent_name, display_name, description, is_active) VALUES
 -- account
-('account', 'create_account', 'Create account', true),
-('account', 'delete_account', 'Delete account', true),
-('account', 'edit_account', 'Edit account', true),
-('account', 'recover_password', 'Recover password', true),
-('account', 'registration_problems', 'Registration problems', true),
-('account', 'switch_account', 'Switch account', true),
-('account', 'verify_contact_info', 'Verify contact info', true),
+('account', 'create_account', 'Create account', 'User wants help opening a new account.', true),
+('account', 'delete_account', 'Delete account', 'User requests permanent account deletion.', true),
+('account', 'edit_account', 'Edit account', 'User needs to update profile or account settings.', true),
+('account', 'recover_password', 'Recover password', 'User cannot sign in and needs password recovery help.', true),
+('account', 'registration_problems', 'Registration problems', 'User reports issues while registering a new account.', true),
+('account', 'switch_account', 'Switch account', 'User wants to switch between multiple accounts.', true),
+('account', 'verify_contact_info', 'Verify contact info', 'User needs to confirm or update email or phone details.', true),
 -- cancel
-('cancel', 'cancel_order', 'Cancel order', true),
-('cancel', 'change_order', 'Change order', true),
-('cancel', 'check_cancellation_fee', 'Check cancellation fee', true),
+('cancel', 'cancel_order', 'Cancel order', 'User wants to cancel an existing order.', true),
+('cancel', 'change_order', 'Change order', 'User wants to modify order contents before fulfillment.', true),
+('cancel', 'check_cancellation_fee', 'Check cancellation fee', 'User asks whether cancelling will incur a fee.', true),
 -- contact
-('contact', 'contact_customer_service', 'Contact customer service', true),
-('contact', 'contact_human_agent', 'Contact human agent', true),
+('contact', 'contact_customer_service', 'Contact customer service', 'User asks how to reach customer support channels.', true),
+('contact', 'contact_human_agent', 'Contact human agent', 'User asks to speak directly with a live human agent.', true),
 -- delivery
-('delivery', 'delivery_options', 'Delivery options', true),
-('delivery', 'delivery_period', 'Delivery period', true),
-('delivery', 'lost_or_stolen_package', 'Lost or stolen package', true),
-('delivery', 'wrong_address_entered', 'Wrong address entered', true),
+('delivery', 'delivery_options', 'Delivery options', 'User asks about available shipping or delivery methods.', true),
+('delivery', 'delivery_period', 'Delivery period', 'User asks when an order will arrive.', true),
+('delivery', 'lost_or_stolen_package', 'Lost or stolen package', 'User reports a package as lost or stolen.', true),
+('delivery', 'wrong_address_entered', 'Wrong address entered', 'User says the delivery address on an order is incorrect.', true),
 -- feedback
-('feedback', 'complaint', 'Complaint', true),
-('feedback', 'review', 'Review', true),
+('feedback', 'complaint', 'Complaint', 'User submits a complaint about service or product experience.', true),
+('feedback', 'review', 'Review', 'User shares a product or service review.', true),
 -- invoice
-('invoice', 'check_invoice', 'Check invoice', true),
-('invoice', 'get_invoice', 'Get invoice', true),
+('invoice', 'check_invoice', 'Check invoice', 'User wants to verify invoice charges or invoice status.', true),
+('invoice', 'get_invoice', 'Get invoice', 'User requests a copy of an invoice.', true),
 -- order
-('order', 'order_status', 'Order status', true),
-('order', 'place_order', 'Place order', true),
-('order', 'change_order', 'Change order', true),
-('order', 'cancel_order', 'Cancel order', true),
+('order', 'order_status', 'Order status', 'User asks for the latest status of an order.', true),
+('order', 'place_order', 'Place order', 'User wants help creating a new order.', true),
+('order', 'change_order', 'Change order', 'User wants to modify an existing order.', true),
+('order', 'cancel_order', 'Cancel order', 'User requests cancellation of an order.', true),
 -- payment
-('payment', 'check_payment_methods', 'Check payment methods', true),
-('payment', 'payment_issue', 'Payment issue', true),
+('payment', 'check_payment_methods', 'Check payment methods', 'User asks which payment methods are accepted.', true),
+('payment', 'payment_issue', 'Payment issue', 'User reports a failed, incorrect, or disputed payment.', true),
 -- refund
-('refund', 'get_refund', 'Get refund', true),
-('refund', 'check_refund_policy', 'Check refund policy', true),
-('refund', 'track_refund', 'Track refund', true),
+('refund', 'get_refund', 'Get refund', 'User requests a refund for an order.', true),
+('refund', 'check_refund_policy', 'Check refund policy', 'User asks whether a purchase is eligible for refund.', true),
+('refund', 'track_refund', 'Track refund', 'User asks for the status of a refund already requested.', true),
 -- shipping
-('shipping', 'change_shipping_address', 'Change shipping address', true),
-('shipping', 'delivery_options', 'Delivery options', true),
-('shipping', 'delivery_period', 'Delivery period', true),
-('shipping', 'set_up_shipping_address', 'Set up shipping address', true),
+('shipping', 'change_shipping_address', 'Change shipping address', 'User asks to update the shipping address for an order.', true),
+('shipping', 'delivery_options', 'Delivery options', 'User asks about shipping speed or courier choices.', true),
+('shipping', 'delivery_period', 'Delivery period', 'User asks how long shipping or delivery will take.', true),
+('shipping', 'set_up_shipping_address', 'Set up shipping address', 'User wants to add or configure a shipping address.', true),
 -- subscription
-('subscription', 'newsletter_subscription', 'Newsletter subscription', true),
-('subscription', 'subscription_status', 'Subscription status', true),
-('subscription', 'unsubscribe', 'Unsubscribe', true),
+('subscription', 'newsletter_subscription', 'Newsletter subscription', 'User wants to subscribe to newsletters or updates.', true),
+('subscription', 'subscription_status', 'Subscription status', 'User asks about current subscription plan or billing status.', true),
+('subscription', 'unsubscribe', 'Unsubscribe', 'User wants to cancel or unsubscribe from a subscription.', true),
 -- no_issue (custom)
-('no_issue', 'no_issue', 'No issue', true),
+('no_issue', 'no_issue', 'No issue', 'User message is general chat and not a support issue.', true),
 -- product (custom)
-('product', 'product_info', 'Product info', true),
-('product', 'product_price', 'Product price', true),
-('product', 'product_availability', 'Product availability', true)
+('product', 'product_info', 'Product info', 'User asks for product details, features, or specifications.', true),
+('product', 'product_price', 'Product price', 'User asks for product pricing information.', true),
+('product', 'product_availability', 'Product availability', 'User asks whether a product is in stock or available.', true)
 ON CONFLICT (category_name, intent_name) DO UPDATE SET
   display_name = EXCLUDED.display_name,
+  description = EXCLUDED.description,
   is_active = EXCLUDED.is_active;
 
 COMMIT;

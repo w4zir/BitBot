@@ -116,14 +116,20 @@ def test_classify_full_flow_validation_missing(
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
     monkeypatch.setattr(
-        "backend.agent.issue_graph.get_intents_for_category",
-        lambda _category: ["order_status", "cancel_order"],
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [
+            {"intent_name": "order_status", "description": "User asks for order status."},
+            {"intent_name": "cancel_order", "description": "User wants to cancel an order."},
+        ],
     )
+
+    captured: dict[str, str] = {}
 
     def chat_completion(**kwargs):
         msgs = kwargs.get("messages") or []
         system = str(msgs[0].get("content") if msgs else "")
         if "classify a customer support session" in system:
+            captured["intent_system_prompt"] = system
             return '{"intent": "order_status", "problem_to_solve": "Check order status"}'
         return '{"valid": false, "missing_field_names": ["order_id", "email"], "notes": "need ids"}'
 
@@ -137,6 +143,9 @@ def test_classify_full_flow_validation_missing(
     assert "order_id" in (data.get("validation_missing") or [])
     assert data.get("assistant_reply")
     assert data["session_issue"]["is_resolved"] is False
+    system_prompt = captured.get("intent_system_prompt") or ""
+    assert "- order_status: User asks for order status." in system_prompt
+    assert "- cancel_order: User wants to cancel an order." in system_prompt
 
 
 def test_classify_full_flow_interrupt_sets_pending_action(
@@ -173,8 +182,8 @@ def test_classify_full_flow_interrupt_sets_pending_action(
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
     monkeypatch.setattr(
-        "backend.agent.issue_graph.get_intents_for_category",
-        lambda _category: ["get_refund"],
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [{"intent_name": "get_refund", "description": "User requests a refund."}],
     )
 
     def chat_completion(**kwargs):
@@ -240,8 +249,11 @@ def test_classify_intent_stays_locked_second_message(
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
     monkeypatch.setattr(
-        "backend.agent.issue_graph.get_intents_for_category",
-        lambda _category: ["order_status", "cancel_order"],
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [
+            {"intent_name": "order_status", "description": "User asks for order status."},
+            {"intent_name": "cancel_order", "description": "User wants to cancel an order."},
+        ],
     )
 
     chat_calls: list[int] = []
@@ -318,8 +330,11 @@ def test_classify_new_issue_after_resolution(
     monkeypatch.setattr("backend.api.routes.classify.get_query_classifier", lambda: qc)
     monkeypatch.setattr("backend.agent.issue_graph.get_query_classifier", lambda: qc)
     monkeypatch.setattr(
-        "backend.agent.issue_graph.get_intents_for_category",
-        lambda _category: ["order_status", "cancel_order"],
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [
+            {"intent_name": "order_status", "description": "User asks for order status."},
+            {"intent_name": "cancel_order", "description": "User wants to cancel an order."},
+        ],
     )
 
     def chat_completion(**kwargs):
@@ -442,7 +457,10 @@ def test_classify_exposes_agent_state_and_policy_variable_maps(
         "backend.agent.issue_graph.get_order_status",
         lambda order_id: {"order_id": order_id, "status": "processing", "total_amount": 88.0},
     )
-    monkeypatch.setattr("backend.agent.issue_graph.get_intents_for_category", lambda _category: ["order_status"])
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [{"intent_name": "order_status", "description": "User asks for order status."}],
+    )
 
     def chat_completion(**kwargs):
         msgs = kwargs.get("messages") or []
@@ -506,8 +524,8 @@ def test_classify_validation_wait_limit_escalates(
         lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.9)),
     )
     monkeypatch.setattr(
-        "backend.agent.issue_graph.get_intents_for_category",
-        lambda _category: ["order_status"],
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [{"intent_name": "order_status", "description": "User asks for order status."}],
     )
     monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
 
@@ -556,8 +574,8 @@ def test_classify_order_id_loophole_recovers_when_llm_returns_false_without_miss
         lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.96)),
     )
     monkeypatch.setattr(
-        "backend.agent.issue_graph.get_intents_for_category",
-        lambda _category: ["order_status"],
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [{"intent_name": "order_status", "description": "User asks for order status."}],
     )
     monkeypatch.setattr(
         "backend.agent.issue_graph.get_order_status",
@@ -611,8 +629,8 @@ def test_classify_order_id_requires_ord_prefix(
         lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.95)),
     )
     monkeypatch.setattr(
-        "backend.agent.issue_graph.get_intents_for_category",
-        lambda _category: ["order_status"],
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [{"intent_name": "order_status", "description": "User asks for order status."}],
     )
     monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
 

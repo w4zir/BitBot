@@ -235,10 +235,14 @@ CREATE TABLE IF NOT EXISTS category_intents (
     category_name   VARCHAR(100) NOT NULL REFERENCES intent_categories (name) ON DELETE CASCADE,
     intent_name     VARCHAR(200) NOT NULL,
     display_name    VARCHAR(200) NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (category_name, intent_name)
 );
+
+ALTER TABLE category_intents
+ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_category_intents_category ON category_intents (category_name);
 

@@ -226,6 +226,7 @@ CREATE TABLE category_intents (
     category_name   VARCHAR(100) NOT NULL REFERENCES intent_categories (name) ON DELETE CASCADE,
     intent_name     VARCHAR(200) NOT NULL,
     display_name    VARCHAR(200) NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (category_name, intent_name)
