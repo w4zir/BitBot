@@ -248,6 +248,9 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             "stage_metadata": graph_out.get("stage_metadata")
             if isinstance(graph_out.get("stage_metadata"), dict)
             else {},
+            "agent_trace": graph_out.get("agent_trace")
+            if isinstance(graph_out.get("agent_trace"), dict)
+            else {},
             "output_validation": graph_out.get("output_validation")
             if isinstance(graph_out.get("output_validation"), dict)
             else {},

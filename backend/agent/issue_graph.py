@@ -129,30 +129,51 @@ def _with_stage_metadata(
     stage_metadata = dict(state.get("stage_metadata") or {})
     context = dict(state.get("context_data") or {})
     policy = dict(state.get("policy_constraints") or {})
-    stage_metadata[stage_name] = {
-        "ts": _utc_now_iso(),
-        "state_context": {
-            "text": str(state.get("text") or ""),
-            "category": str(state.get("category") or ""),
-            "intent": str(state.get("intent") or ""),
-            "procedure_id": str(state.get("procedure_id") or ""),
-            "current_step_index": int(state.get("current_step_index") or 0),
-            "validation_ok": state.get("validation_ok"),
-            "validation_missing": list(state.get("validation_missing") or []),
-            "validation_wait_count": int(state.get("validation_wait_count") or 0),
-            "validation_wait_limit": int(state.get("validation_wait_limit") or _validation_wait_limit()),
-            "eligibility_ok": state.get("eligibility_ok"),
-            "outcome_status": state.get("outcome_status"),
-            "order_status_before": context.get("order_status_before"),
-            "order_status_after": context.get("order_status_after"),
-            "context_data": _compact_context_data(context),
-            "policy": {
-                "eligible": policy.get("eligible"),
-                "reason": policy.get("reason"),
-                "policy_doc_names": list(policy.get("policy_doc_names") or []),
-            },
+    ts = _utc_now_iso()
+    state_context = {
+        "text": str(state.get("text") or ""),
+        "category": str(state.get("category") or ""),
+        "intent": str(state.get("intent") or ""),
+        "procedure_id": str(state.get("procedure_id") or ""),
+        "current_step_index": int(state.get("current_step_index") or 0),
+        "validation_ok": state.get("validation_ok"),
+        "validation_missing": list(state.get("validation_missing") or []),
+        "validation_wait_count": int(state.get("validation_wait_count") or 0),
+        "validation_wait_limit": int(state.get("validation_wait_limit") or _validation_wait_limit()),
+        "eligibility_ok": state.get("eligibility_ok"),
+        "outcome_status": state.get("outcome_status"),
+        "order_status_before": context.get("order_status_before"),
+        "order_status_after": context.get("order_status_after"),
+        "context_data": _compact_context_data(context),
+        "policy": {
+            "eligible": policy.get("eligible"),
+            "reason": policy.get("reason"),
+            "policy_doc_names": list(policy.get("policy_doc_names") or []),
         },
-        **(details or {}),
+    }
+    detail_map = dict(details or {})
+    step_entry = {
+        "ts": ts,
+        "step_id": str(detail_map.get("step_id") or ""),
+        "step_type": str(detail_map.get("step_type") or ""),
+        "state": state_context,
+        "context": {
+            "details": detail_map,
+            "context_data": dict(state_context.get("context_data") or {}),
+            "tool_call": (state_context.get("context_data") or {}).get("tool_call"),
+        },
+    }
+    existing = stage_metadata.get(stage_name)
+    prior_steps = []
+    if isinstance(existing, dict):
+        raw_steps = existing.get("steps")
+        if isinstance(raw_steps, list):
+            prior_steps = [item for item in raw_steps if isinstance(item, dict)]
+    stage_metadata[stage_name] = {
+        "ts": ts,
+        "state_context": state_context,
+        **detail_map,
+        "steps": [*prior_steps, step_entry],
     }
     return {
         **state,
@@ -219,6 +240,63 @@ def _build_agent_state_snapshot(state: IssueGraphState) -> dict[str, Any]:
         "policy_load_attempts": int(state.get("policy_load_attempts") or 0),
         "executor_turn_count": int(state.get("executor_turn_count") or 0),
         "max_node_turns": MAX_NODE_TURNS,
+    }
+
+
+def build_agent_trace(
+    *,
+    agent_state: dict[str, Any] | None,
+    stage_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    nodes: dict[str, Any] = {}
+    for node_name, node_raw in dict(stage_metadata or {}).items():
+        if not isinstance(node_name, str):
+            continue
+        if not isinstance(node_raw, dict):
+            continue
+        steps_raw = node_raw.get("steps")
+        step_dicts: list[dict[str, Any]] = []
+        if isinstance(steps_raw, list):
+            step_dicts = [item for item in steps_raw if isinstance(item, dict)]
+        if not step_dicts:
+            synthesized_state = dict(node_raw.get("state_context") or {})
+            synthesized_details = {
+                k: v
+                for k, v in node_raw.items()
+                if k not in {"state_context", "steps"}
+            }
+            step_dicts = [
+                {
+                    "ts": node_raw.get("ts"),
+                    "step_id": str(synthesized_details.get("step_id") or ""),
+                    "step_type": str(synthesized_details.get("step_type") or ""),
+                    "state": synthesized_state,
+                    "context": {
+                        "details": synthesized_details,
+                        "context_data": dict(synthesized_state.get("context_data") or {}),
+                        "tool_call": (synthesized_state.get("context_data") or {}).get("tool_call"),
+                    },
+                }
+            ]
+        formatted_steps: list[dict[str, Any]] = []
+        for index, step in enumerate(step_dicts, start=1):
+            state_at_step = dict(step.get("state") or node_raw.get("state_context") or {})
+            context_at_step = dict(step.get("context") or {})
+            step_id = str(step.get("step_id") or context_at_step.get("step_id") or f"{node_name}_{index}")
+            step_type = str(step.get("step_type") or context_at_step.get("step_type") or "node_operation")
+            formatted_steps.append(
+                {
+                    "step_id": step_id,
+                    "step_type": step_type,
+                    "timestamp": step.get("ts") or node_raw.get("ts"),
+                    "state": state_at_step,
+                    "context": context_at_step,
+                }
+            )
+        nodes[node_name] = {"steps": formatted_steps}
+    return {
+        "state": dict(agent_state or {}),
+        "nodes": nodes,
     }
 
 
@@ -2071,12 +2149,14 @@ def run_conversation_graph(
     policy_constraints = dict(out.get("policy_constraints") or {})
     agent_state = _build_agent_state_snapshot(out)  # type: ignore[arg-type]
     stage_metadata = dict(out.get("stage_metadata") or {})
+    agent_trace = build_agent_trace(agent_state=agent_state, stage_metadata=stage_metadata)
     assistant_metadata = {
         **(out.get("assistant_metadata") or {}),
         "outcome_status": out.get("outcome_status"),
         "specialist_agent_id": out.get("specialist_agent_id"),
         "agent_state": agent_state,
         "stage_metadata": stage_metadata,
+        "agent_trace": agent_trace,
         "validation_wait_count": out.get("validation_wait_count"),
         "validation_wait_limit": out.get("validation_wait_limit"),
         "output_validation": dict(out.get("output_validation") or {}),
@@ -2097,6 +2177,7 @@ def run_conversation_graph(
         "policy_constraints": policy_constraints,
         "agent_state": agent_state,
         "stage_metadata": stage_metadata,
+        "agent_trace": agent_trace,
         "output_validation": dict(out.get("output_validation") or {}),
         "context_summary": dict(out.get("context_summary") or {}),
         "validation_wait_count": int(out.get("validation_wait_count") or 0),

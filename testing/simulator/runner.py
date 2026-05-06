@@ -142,6 +142,7 @@ def main() -> int:
         llm_judge_results,
         skipped_scenarios,
         interrupted,
+        batch_error,
     ) = _run_scenario_batch(
         indexed_plan=enumerate(
             _iter_execution_plan(
@@ -160,10 +161,22 @@ def main() -> int:
         console_reporter=console_reporter,
         total_planned=total_planned,
     )
-    loop_status = "interrupted" if interrupted else "completed"
+    if interrupted:
+        loop_status = "interrupted"
+    elif batch_error is not None:
+        loop_status = "aborted"
+    else:
+        loop_status = "completed"
     if interrupted:
         print("Simulator interrupted by user.")
+    elif batch_error is not None:
+        print(f"Simulator aborted after {len(traces)} scenario(s): {batch_error}", file=sys.stderr)
 
+    run_error = (
+        None
+        if batch_error is None
+        else {"error_type": type(batch_error).__name__, "error_message": str(batch_error)}
+    )
     artifact_path = write_run_artifact(
         run_id=suite.run_id,
         suite_path=str(suite_path),
@@ -177,6 +190,8 @@ def main() -> int:
         skipped_scenarios=skipped_scenarios,
         output_dir=simulator_root / "results",
         started_at=started_at,
+        run_error=run_error,
+        run_loop_status=loop_status,
     )
     print("")
     print(
@@ -198,6 +213,13 @@ def main() -> int:
         coverage,
         suite,
     )
+    if batch_error is not None and exit_code == 0:
+        exit_code = 2
+    persist_status = (
+        "interrupted"
+        if loop_status == "interrupted"
+        else ("failed" if loop_status == "aborted" else ("completed" if exit_code == 0 else "failed"))
+    )
     persistence.complete_run(
         summary={
             "exit_code": exit_code,
@@ -206,8 +228,9 @@ def main() -> int:
             "scenarios_executed": len(traces),
             "scenarios_skipped": len(skipped_scenarios),
             "skipped_scenarios": skipped_scenarios,
+            "run_error": run_error,
         },
-        status=loop_status if loop_status != "completed" else ("completed" if exit_code == 0 else "failed"),
+        status=persist_status,
     )
     return exit_code
 
@@ -371,14 +394,16 @@ def _run_scenario_batch(
     dict[str, LlmJudgeResult | None],
     list[dict[str, Any]],
     bool,
+    BaseException | None,
 ]:
-    """Execute simulator scenarios; returns partial results if interrupted."""
+    """Execute simulator scenarios; returns partial results if interrupted or on error."""
     traces: list[ConversationTrace] = []
     structural_results: dict[str, StructuralResult] = {}
     policy_results: dict[str, PolicyResult] = {}
     llm_judge_results: dict[str, LlmJudgeResult | None] = {}
     skipped_scenarios: list[dict[str, Any]] = []
     interrupted = False
+    batch_error: BaseException | None = None
     try:
         for index, (run_cfg, seed) in indexed_plan:
             persona_cfg = personas.get(seed.persona_id)
@@ -494,7 +519,9 @@ def _run_scenario_batch(
                 )
     except KeyboardInterrupt:
         interrupted = True
-    return traces, structural_results, policy_results, llm_judge_results, skipped_scenarios, interrupted
+    except Exception as exc:  # noqa: BLE001
+        batch_error = exc
+    return traces, structural_results, policy_results, llm_judge_results, skipped_scenarios, interrupted, batch_error
 
 
 def _iter_execution_plan(

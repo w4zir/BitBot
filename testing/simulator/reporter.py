@@ -51,6 +51,46 @@ def _issue_label(index: int, total_planned: int | None) -> str:
     return f"Issue {index}/{total_planned}"
 
 
+def _issue_separator() -> str:
+    return "-" * 72
+
+
+def _synthesized_nodes_from_stage_metadata(stage_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    nodes: dict[str, Any] = {}
+    for node_name, raw_meta in dict(stage_metadata or {}).items():
+        if not isinstance(node_name, str) or not isinstance(raw_meta, dict):
+            continue
+        steps = raw_meta.get("steps")
+        if not isinstance(steps, list):
+            steps = [
+                {
+                    "step_id": str(raw_meta.get("step_id") or ""),
+                    "step_type": str(raw_meta.get("step_type") or "node_operation"),
+                    "timestamp": raw_meta.get("ts"),
+                    "state": dict(raw_meta.get("state_context") or {}),
+                    "context": {"details": {k: v for k, v in raw_meta.items() if k not in {"steps", "state_context"}}},
+                }
+            ]
+        nodes[node_name] = {"steps": [item for item in steps if isinstance(item, dict)]}
+    return nodes
+
+
+def _format_turn_trace(turn: Any) -> dict[str, Any]:
+    trace = dict(getattr(turn, "agent_trace", {}) or {})
+    nodes = trace.get("nodes") if isinstance(trace.get("nodes"), dict) else {}
+    if not nodes:
+        nodes = _synthesized_nodes_from_stage_metadata(getattr(turn, "stage_metadata", {}) or {})
+    return {
+        "turn_number": int(getattr(turn, "turn_number", 0) or 0),
+        "user_message": str(getattr(turn, "user_message", "") or ""),
+        "agent_response": str(getattr(turn, "agent_response", "") or ""),
+        "outcome_status": str(getattr(turn, "outcome_status", "") or ""),
+        "intent": str(getattr(turn, "intent", "") or ""),
+        "procedure_id": str(getattr(turn, "procedure_id", "") or ""),
+        "nodes": nodes,
+    }
+
+
 class SimulatorConsoleReporter:
     """Incremental stdout reporter for simulator runs (scenario progress + LLM/agent exchanges)."""
 
@@ -72,6 +112,7 @@ class SimulatorConsoleReporter:
         persona_id = str(getattr(seed, "persona_id", "") or "")
         intent = str(getattr(seed, "intent", "") or "")
         self._print("")
+        self._print(_issue_separator())
         self._print(f"{_issue_label(index, total_planned)}: {scenario_key}")
         self._print(
             f"Seed: {seed_id} | Persona: {persona_id} | Intent: {intent}",
@@ -131,15 +172,32 @@ class SimulatorConsoleReporter:
     ) -> None:
         req = request_payload or {}
         user_text = str(req.get("text") or "")
-        self._print("")
-        self._print(f"[Agent Request] turn {turn_number}")
-        self._print(_pretty_json({"text": user_text}))
-        self._print("")
-        self._print(f"[Agent Response] turn {turn_number}")
+        assistant_meta = {}
+        if isinstance(response_payload, dict):
+            assistant_meta = response_payload.get("assistant_metadata") or {}
+            if not isinstance(assistant_meta, dict):
+                assistant_meta = {}
+        nodes = {}
+        agent_trace = assistant_meta.get("agent_trace")
+        if isinstance(agent_trace, dict) and isinstance(agent_trace.get("nodes"), dict):
+            nodes = dict(agent_trace.get("nodes") or {})
+        elif isinstance(assistant_meta.get("stage_metadata"), dict):
+            nodes = _synthesized_nodes_from_stage_metadata(assistant_meta.get("stage_metadata"))
         reply = ""
         if isinstance(response_payload, dict):
             reply = str(response_payload.get("assistant_reply") or "")
-        self._print(reply if reply.strip() else "(empty)")
+        turn_json = {
+            "turn_number": turn_number,
+            "user_message": user_text,
+            "agent_response": reply,
+            "outcome_status": str(assistant_meta.get("outcome_status") or ""),
+            "intent": str(assistant_meta.get("intent") or ""),
+            "procedure_id": str(assistant_meta.get("procedure_id") or ""),
+            "nodes": nodes,
+        }
+        self._print("")
+        self._print(f"[Agent Turn] {turn_number}")
+        self._print(_pretty_json(turn_json))
 
 
 def write_run_artifact(
@@ -156,6 +214,8 @@ def write_run_artifact(
     output_dir: Path,
     started_at: datetime,
     skipped_scenarios: list[dict[str, Any]] | None = None,
+    run_error: dict[str, Any] | None = None,
+    run_loop_status: str | None = None,
 ) -> Path:
     completed_at = datetime.now(timezone.utc)
     skipped = list(skipped_scenarios or [])
@@ -202,6 +262,7 @@ def write_run_artifact(
 
         scenarios.append(
             {
+                "run_scenario_id": scenario_key,
                 "seed_id": seed_id,
                 "entity_id": (
                     trace.scenario.get("entity", {}).get("order_id")
@@ -209,14 +270,16 @@ def write_run_artifact(
                     or trace.scenario.get("entity", {}).get("account_email")
                 ),
                 "persona_id": trace.scenario.get("persona_id"),
+                "category": trace.scenario.get("category"),
+                "intent": trace.scenario.get("intent"),
+                "expected_outcome": trace.scenario.get("expected_outcome"),
                 "turns": len(trace.turns),
                 "final_outcome_status": trace.final_outcome_status,
-                "expected_outcome": trace.scenario.get("expected_outcome"),
                 "structural": asdict(structural),
                 "policy": asdict(policy),
                 "llm_judge": asdict(llm_judge) if llm_judge is not None else None,
                 "regression": None,
-                "trace": [asdict(turn) for turn in trace.turns],
+                "trace": [_format_turn_trace(turn) for turn in trace.turns],
             }
         )
 
@@ -235,6 +298,8 @@ def write_run_artifact(
         "suite": suite_path,
         "started_at": started_at.isoformat(),
         "completed_at": completed_at.isoformat(),
+        "run_loop_status": run_loop_status or "completed",
+        "run_error": run_error,
         "db_snapshot": db_snapshot,
         "agent_url": agent_url,
         "coverage": coverage.to_dict(),

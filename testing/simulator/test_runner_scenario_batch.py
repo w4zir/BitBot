@@ -129,7 +129,7 @@ def test_run_scenario_batch_skips_persona_error_and_continues(monkeypatch: pytes
     personas = {"p1": _persona_cfg()}
     persistence = FakePersistence()
 
-    traces, _structural, _policy, _llm_judge, skipped, interrupted = _run_scenario_batch(
+    traces, _structural, _policy, _llm_judge, skipped, interrupted, batch_err = _run_scenario_batch(
         indexed_plan=[
             (1, (ScenarioRunConfig(seed_id="s1"), seed1)),
             (2, (ScenarioRunConfig(seed_id="s2"), seed2)),
@@ -142,6 +142,7 @@ def test_run_scenario_batch_skips_persona_error_and_continues(monkeypatch: pytes
     )
 
     assert not interrupted
+    assert batch_err is None
     assert len(skipped) == 1
     assert skipped[0]["seed_id"] == "s1"
     assert len(traces) == 1
@@ -206,7 +207,7 @@ def test_run_scenario_batch_console_reporter_callbacks(monkeypatch: pytest.Monke
     personas = {"p1": _persona_cfg()}
     console = FakeConsole()
 
-    _traces, _s, _p, _j, _skipped, _interrupted = _run_scenario_batch(
+    _traces, _s, _p, _j, _skipped, _interrupted, _batch_err = _run_scenario_batch(
         indexed_plan=[
             (1, (ScenarioRunConfig(seed_id="s1"), seed1)),
             (2, (ScenarioRunConfig(seed_id="s2"), seed2)),
@@ -227,3 +228,69 @@ def test_run_scenario_batch_console_reporter_callbacks(monkeypatch: pytest.Monke
     assert console.skips[0]["scenario_key"] == "s1#1"
     assert len(console.finishes) == 1
     assert console.finishes[0]["scenario_key"] == "s2#2"
+    assert not _interrupted
+    assert _batch_err is None
+
+
+def test_run_scenario_batch_returns_partial_results_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "testing.simulator.runner.evaluate_structural",
+        lambda *_a, **_k: StructuralResult(passed=True, checks={}, failures=[]),
+    )
+    monkeypatch.setattr(
+        "testing.simulator.runner.evaluate_policy",
+        lambda *_a, **_k: PolicyResult(passed=True, checks={}, failures=[]),
+    )
+
+    class FakeHydrator:
+        def hydrate(self, seed: SeedConfig) -> ScenarioInstance:
+            return _scenario_for_seed(seed.seed_id)
+
+    class FakeDriver:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, scenario: ScenarioInstance, persona) -> ConversationTrace:  # noqa: ANN001
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated agent failure")
+            return _minimal_trace(scenario)
+
+    class FakePersistence:
+        def record_skipped_scenario(self, **_kwargs) -> None:
+            return None
+
+        def record_scenario(self, **_kwargs) -> None:
+            return None
+
+    suite = SuiteConfig(
+        run_id="r1",
+        scenarios=[
+            ScenarioRunConfig(seed_id="s1"),
+            ScenarioRunConfig(seed_id="s2"),
+            ScenarioRunConfig(seed_id="s3"),
+        ],
+        defaults=DefaultsConfig(eval_targets=["structural"]),
+    )
+    seed1, seed2, seed3 = _seed("s1"), _seed("s2"), _seed("s3")
+    personas = {"p1": _persona_cfg()}
+
+    traces, _struct, _pol, _judge, skipped, interrupted, batch_err = _run_scenario_batch(
+        indexed_plan=[
+            (1, (ScenarioRunConfig(seed_id="s1"), seed1)),
+            (2, (ScenarioRunConfig(seed_id="s2"), seed2)),
+            (3, (ScenarioRunConfig(seed_id="s3"), seed3)),
+        ],
+        hydrator=FakeHydrator(),
+        driver=FakeDriver(),
+        personas=personas,
+        suite=suite,
+        persistence=FakePersistence(),  # type: ignore[arg-type]
+    )
+
+    assert not interrupted
+    assert batch_err is not None
+    assert isinstance(batch_err, RuntimeError)
+    assert len(traces) == 1
+    assert traces[0].scenario.get("seed_id") == "s1"
+    assert len(skipped) == 0

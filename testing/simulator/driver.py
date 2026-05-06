@@ -92,6 +92,7 @@ class ConversationDriver:
                 issue_locked=_bool_or_none(assistant_metadata.get("issue_locked")),
                 agent_state=_dict_or_none(assistant_metadata.get("agent_state")),
                 stage_metadata=_dict_or_none(assistant_metadata.get("stage_metadata")),
+                agent_trace=_dict_or_none(assistant_metadata.get("agent_trace")),
                 output_validation=_dict_or_none(assistant_metadata.get("output_validation")),
                 context_summary=_dict_or_none(assistant_metadata.get("context_summary")),
                 validation_wait_count=_int_or_none(assistant_metadata.get("validation_wait_count")),

@@ -57,7 +57,10 @@ def test_conversation_driver_emits_agent_exchange(monkeypatch: pytest.MonkeyPatc
         return {
             "session_id": "sess-1",
             "assistant_reply": "Done.",
-            "assistant_metadata": {"outcome_status": "resolved"},
+            "assistant_metadata": {
+                "outcome_status": "resolved",
+                "agent_trace": {"nodes": {"classify_intent": {"steps": [{"step_id": "intent"}]}}},
+            },
         }
 
     monkeypatch.setattr(ConversationDriver, "_post_classify", fake_post)
@@ -66,6 +69,7 @@ def test_conversation_driver_emits_agent_exchange(monkeypatch: pytest.MonkeyPatc
     assert len(trace.turns) == 1
     assert len(captured) == 1
     assert captured[0]["turn_number"] == 1
+    assert trace.turns[0].agent_trace == {"nodes": {"classify_intent": {"steps": [{"step_id": "intent"}]}}}
     req = captured[0]["request_payload"]
     assert isinstance(req, dict)
     assert req.get("text") == "Cancel ORD-1 please"

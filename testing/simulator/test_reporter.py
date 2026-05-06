@@ -86,21 +86,33 @@ def test_finish_scenario_line() -> None:
     assert "turns=1" in text
 
 
-def test_agent_exchange_shows_text_only_and_plain_reply() -> None:
+def test_agent_exchange_outputs_structured_turn_json() -> None:
     buf = io.StringIO()
     rep = SimulatorConsoleReporter(file=buf)
     rep.agent_exchange(
         turn_number=1,
         request_payload={"text": "hi", "token": "abc", "full_flow": True},
-        response_payload={"assistant_reply": "ok", "session_id": "s"},
+        response_payload={
+            "assistant_reply": "ok",
+            "session_id": "s",
+            "assistant_metadata": {
+                "outcome_status": "resolved",
+                "intent": "order_status",
+                "procedure_id": "order_status",
+                "agent_trace": {"nodes": {"classify_intent": {"steps": [{"step_id": "step_1"}]}}},
+            },
+        },
     )
     text = buf.getvalue()
-    assert "[Agent Request] turn 1" in text
-    assert '"text": "hi"' in text
+    assert "[Agent Turn] 1" in text
+    assert '"user_message": "hi"' in text
+    assert '"agent_response": "ok"' in text
+    assert '"outcome_status": "resolved"' in text
+    assert '"intent": "order_status"' in text
+    assert '"procedure_id": "order_status"' in text
+    assert '"classify_intent"' in text
     assert "token" not in text
     assert "session_id" not in text
-    assert "[Agent Response] turn 1" in text
-    assert text.strip().endswith("ok")
 
 
 def test_persona_exchange_is_silent() -> None:

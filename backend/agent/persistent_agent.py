@@ -13,6 +13,7 @@ from backend.agent.issue_graph import (
     _build_agent_state_snapshot,
     _compact_context_data,
     _validation_wait_limit,
+    build_agent_trace,
     build_issue_classification_graph,
     get_category_for_stored_intent,
     graph_suggests_session_resolved,
@@ -125,12 +126,14 @@ def run_persistent_conversation(
     policy_constraints = dict(out.get("policy_constraints") or {})
     agent_state = _build_agent_state_snapshot(out)  # type: ignore[arg-type]
     stage_metadata = dict(out.get("stage_metadata") or {})
+    agent_trace = build_agent_trace(agent_state=agent_state, stage_metadata=stage_metadata)
     assistant_metadata = {
         **(out.get("assistant_metadata") or {}),
         "outcome_status": out.get("outcome_status"),
         "specialist_agent_id": out.get("specialist_agent_id"),
         "agent_state": agent_state,
         "stage_metadata": stage_metadata,
+        "agent_trace": agent_trace,
         "validation_wait_count": out.get("validation_wait_count"),
         "validation_wait_limit": out.get("validation_wait_limit"),
         "output_validation": dict(out.get("output_validation") or {}),
@@ -151,6 +154,7 @@ def run_persistent_conversation(
         "policy_constraints": policy_constraints,
         "agent_state": agent_state,
         "stage_metadata": stage_metadata,
+        "agent_trace": agent_trace,
         "output_validation": dict(out.get("output_validation") or {}),
         "context_summary": dict(out.get("context_summary") or {}),
         "validation_wait_count": int(out.get("validation_wait_count") or 0),

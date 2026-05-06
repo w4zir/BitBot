@@ -289,10 +289,10 @@ def main() -> None:
                 if isinstance(assistant_meta.get("agent_state"), dict)
                 else {}
             )
-        with st.expander("Agent metadata by stage (JSON)"):
+        with st.expander("Agent trace (JSON)"):
             st.json(
-                assistant_meta.get("stage_metadata")
-                if isinstance(assistant_meta.get("stage_metadata"), dict)
+                assistant_meta.get("agent_trace")
+                if isinstance(assistant_meta.get("agent_trace"), dict)
                 else {}
             )
 

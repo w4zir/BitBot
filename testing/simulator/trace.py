@@ -22,6 +22,7 @@ class TurnRecord:
     issue_locked: bool | None = None
     agent_state: dict[str, Any] | None = None
     stage_metadata: dict[str, Any] | None = None
+    agent_trace: dict[str, Any] | None = None
     output_validation: dict[str, Any] | None = None
     context_summary: dict[str, Any] | None = None
     validation_wait_count: int | None = None

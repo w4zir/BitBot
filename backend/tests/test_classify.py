@@ -458,6 +458,7 @@ def test_classify_exposes_agent_state_and_policy_variable_maps(
     md = data["assistant_metadata"]
     assert isinstance(md.get("agent_state"), dict)
     assert isinstance(md.get("stage_metadata"), dict)
+    assert isinstance(md.get("agent_trace"), dict)
     policy_constraints = md.get("policy_constraints") or {}
     assert isinstance(policy_constraints.get("variables"), dict)
     assert isinstance(policy_constraints.get("validation_results"), dict)

@@ -5,6 +5,7 @@ from backend.agent.issue_graph import (
     _outcome_validator_node,
     _policy_load_node,
     _structured_executor_node,
+    build_agent_trace,
 )
 
 
@@ -245,6 +246,40 @@ def test_stage_metadata_has_state_context_without_policy_content(monkeypatch) ->
     assert isinstance(state_context, dict)
     assert state_context.get("context_data", {}).get("order_status_before") == "processing"
     assert state_context.get("policy", {}).get("policy_doc_names") == ["Order Policy"]
+
+
+def test_build_agent_trace_includes_structured_executor_steps(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_order_status",
+        lambda order_id: {"order_id": order_id, "status": "processing", "total_amount": 25.0},
+    )
+    state = {
+        "text": "status ORD-9000",
+        "messages": [{"role": "user", "content": "status ORD-9000"}],
+        "category": "order",
+        "intent": "order_status",
+        "procedure_id": "order_status",
+        "todo_list": [{"id": "lookup_order", "type": "tool_call", "tool": "check_order_status"}],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+        "validation_missing": [],
+        "validation_wait_count": 0,
+        "validation_wait_limit": 5,
+    }
+    out = _structured_executor_node(state)
+    trace = build_agent_trace(
+        agent_state=_build_agent_state_snapshot(out),
+        stage_metadata=out.get("stage_metadata"),
+    )
+    nodes = trace.get("nodes") or {}
+    structured = nodes.get("structured_executor") or {}
+    steps = structured.get("steps") or []
+    assert steps
+    assert steps[0].get("step_id") == "lookup_order"
+    assert steps[0].get("step_type") == "tool_call"
+    assert isinstance(steps[0].get("state"), dict)
+    assert isinstance(steps[0].get("context"), dict)
 
 
 def test_order_status_share_status_reply_is_deterministic() -> None:
