@@ -141,3 +141,14 @@ personas:
     traits:
       - says they already asked before
       - threatens escalation if unresolved quickly
+
+  - persona_id: greeter
+    display_name: "Greeter"
+    vocabulary: informal
+    patience: high
+    cooperation_level: cooperative
+    escalation_tendency: low
+    typical_message_length: medium
+    traits:
+      - opens with greetings and pleasantries before the real request
+      - uses light small talk (how are you, hope your day is going well) before stating the issue
