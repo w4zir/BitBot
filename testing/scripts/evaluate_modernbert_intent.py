@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from backend.agent.issue_graph import _classify_intent_node
+from backend.db.intents_repo import get_intents_for_category
 from backend.rag.query_classifier import QueryClassifier
 
 
@@ -276,7 +277,12 @@ def _print_sample_progress(*, record: dict[str, Any], processed: int, total: int
     print("=" * 80)
 
 
-def _print_terminal_summary(*, summary_payload: dict[str, Any], output_file: Path) -> None:
+def _print_terminal_summary(
+    *,
+    summary_payload: dict[str, Any],
+    metadata_payload: dict[str, Any],
+    output_file: Path,
+) -> None:
     counts = dict(summary_payload.get("counts") or {})
     metrics = dict(summary_payload.get("metrics") or {})
     category_metrics = dict(metrics.get("category") or {})
@@ -285,7 +291,7 @@ def _print_terminal_summary(*, summary_payload: dict[str, Any], output_file: Pat
     category_weighted = dict(category_metrics.get("weighted") or {})
     intent_macro = dict(intent_metrics.get("macro") or {})
     intent_weighted = dict(intent_metrics.get("weighted") or {})
-    config = dict(summary_payload.get("config") or {})
+    config = dict(metadata_payload.get("config") or {})
 
     print("\n" + "#" * 80)
     print("Evaluation summary")
@@ -327,6 +333,8 @@ def _run_evaluation(
     category_correct_total = 0
     intent_eval_total = 0
 
+    allowed_intents_cache: dict[str, list[str]] = {}
+
     total = len(rows)
     for processed, row in enumerate(rows, start=1):
         predicted_category = "unknown"
@@ -352,27 +360,50 @@ def _run_evaluation(
         is_intent_correct = None
         intent_evaluated = False
         if is_category_correct:
-            intent_evaluated = True
-            intent_eval_total += 1
-            try:
-                state: dict[str, Any] = {
-                    "text": row.text,
-                    "category": predicted_category,
-                    "confidence": category_confidence,
-                    "messages": [{"role": "user", "content": row.text, "metadata": {"source": "eval"}}],
-                    "assistant_metadata": {},
-                    "issue_locked": False,
-                }
-                intent_out = _classify_intent_node(state)
-                predicted_intent = _normalize_intent(str(intent_out.get("intent") or ""))
-                intent_metadata = dict(intent_out.get("assistant_metadata") or {})
-            except Exception as exc:  # noqa: BLE001
-                intent_error = str(exc)
-                predicted_intent = ""
+            if predicted_category not in allowed_intents_cache:
+                try:
+                    cached_allowed = get_intents_for_category(predicted_category)
+                except Exception:  # noqa: BLE001
+                    cached_allowed = []
+                allowed_intents_cache[predicted_category] = [
+                    _normalize_intent(item) for item in cached_allowed if _normalize_intent(item)
+                ]
+            allowed_intents = allowed_intents_cache.get(predicted_category, [])
+            intent_metadata["allowed_intents"] = allowed_intents
+            if not allowed_intents:
+                intent_error = (
+                    f"No DB allowed intents configured for category '{predicted_category}'; "
+                    "skipping intent evaluation."
+                )
+            else:
+                intent_evaluated = True
+                intent_eval_total += 1
+                try:
+                    state: dict[str, Any] = {
+                        "text": row.text,
+                        "category": predicted_category,
+                        "confidence": category_confidence,
+                        "messages": [{"role": "user", "content": row.text, "metadata": {"source": "eval"}}],
+                        "assistant_metadata": {},
+                        "issue_locked": False,
+                    }
+                    intent_out = _classify_intent_node(state)
+                    predicted_intent = _normalize_intent(str(intent_out.get("intent") or ""))
+                    intent_metadata.update(dict(intent_out.get("assistant_metadata") or {}))
+                except Exception as exc:  # noqa: BLE001
+                    intent_error = str(exc)
+                    predicted_intent = ""
 
-            is_intent_correct = predicted_intent == row.gold_intent
-            intent_gold.append(row.gold_intent)
-            intent_pred.append(predicted_intent)
+                if predicted_intent and predicted_intent not in allowed_intents:
+                    intent_error = (
+                        f"Predicted intent '{predicted_intent}' is outside allowed DB intents "
+                        f"for category '{predicted_category}'."
+                    )
+                    predicted_intent = ""
+
+                is_intent_correct = predicted_intent == row.gold_intent
+                intent_gold.append(row.gold_intent)
+                intent_pred.append(predicted_intent)
 
         record = {
             "type": "example",
@@ -420,14 +451,19 @@ def _write_results(
     output_dir: Path,
     records: list[dict[str, Any]],
     summary_payload: dict[str, Any],
+    metadata_payload: dict[str, Any],
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"run_{ts}.jsonl"
+    output_file = output_dir / f"run_{ts}.json"
+    payload = {
+        "summary": {"type": "summary", **summary_payload},
+        "metadata": {"type": "metadata", **metadata_payload},
+        "records": records,
+    }
     with output_file.open("w", encoding="utf-8", newline="\n") as f:
-        for rec in records:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        f.write(json.dumps({"type": "summary", **summary_payload}, ensure_ascii=False) + "\n")
+        json.dump(payload, f, ensure_ascii=False)
+        f.write("\n")
     return output_file
 
 
@@ -446,7 +482,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),
-        help=f"Directory for run_YYYYMMDD_HHMMSS.jsonl output (default: {DEFAULT_OUTPUT_DIR}).",
+        help=f"Directory for run_YYYYMMDD_HHMMSS.json output (default: {DEFAULT_OUTPUT_DIR}).",
     )
     parser.add_argument(
         "--bentoml-url",
@@ -480,6 +516,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional override for OLLAMA_BASE_URL (used for intent LLM and preflight).",
     )
+    parser.add_argument(
+        "--postgres-host",
+        default="",
+        help="Optional override for POSTGRES_HOST (used by DB-backed intent lookup).",
+    )
     return parser
 
 
@@ -496,9 +537,13 @@ def main() -> int:
     intent_model_provider = os.getenv("INTENT_MODEL_PROVIDER", "ollama").strip().lower()
     intent_model = os.getenv("INTENT_MODEL", "llama3.2").strip()
     ollama_url_cli = str(args.ollama_url or "").strip()
+    postgres_host_cli = str(args.postgres_host or "").strip()
     if ollama_url_cli:
         os.environ["OLLAMA_BASE_URL"] = ollama_url_cli.rstrip("/")
+    if postgres_host_cli:
+        os.environ["POSTGRES_HOST"] = postgres_host_cli
     effective_ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    effective_postgres_host = os.getenv("POSTGRES_HOST", "").strip()
     if timeout_seconds is None:
         timeout_seconds = float(os.getenv("CLASSIFIER_BENTOML_TIMEOUT_SECONDS", "5"))
 
@@ -523,7 +568,8 @@ def main() -> int:
         return 2
 
     timestamp_utc = datetime.now(timezone.utc).isoformat()
-    summary_payload = {
+    summary_payload = {**raw_summary}
+    metadata_payload = {
         "timestamp_utc": timestamp_utc,
         "config": {
             "input_file": str(input_file),
@@ -538,16 +584,21 @@ def main() -> int:
             "intent_model_provider": intent_model_provider,
             "intent_model": intent_model,
             "ollama_base_url": effective_ollama_base_url,
+            "postgres_host": effective_postgres_host,
         },
-        **raw_summary,
     }
     output_file = _write_results(
         output_dir=output_dir,
         records=records,
         summary_payload=summary_payload,
+        metadata_payload=metadata_payload,
     )
 
-    _print_terminal_summary(summary_payload=summary_payload, output_file=output_file)
+    _print_terminal_summary(
+        summary_payload=summary_payload,
+        metadata_payload=metadata_payload,
+        output_file=output_file,
+    )
     return 0
 
 
