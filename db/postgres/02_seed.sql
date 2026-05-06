@@ -231,6 +231,26 @@ ON CONFLICT (user_id) DO UPDATE SET
   update_date = NOW(),
   update_source = 'system';
 
+-- Bulk subscriptions: +500 rows for stable simulator hydration on subscription intents
+INSERT INTO subscription_accounts (account_email, plan, next_renewal_at, last_charge_at, subscription_status)
+SELECT
+  format('bulk_sub_%s@example.com', lpad(seq::text, 4, '0')) AS account_email,
+  (ARRAY['Basic', 'Plus', 'Premium'])[((seq - 1) % 3) + 1] AS plan,
+  TIMESTAMP '2026-06-01 09:00:00' + ((seq % 60) || ' days')::interval AS next_renewal_at,
+  TIMESTAMP '2026-04-01 09:00:00' + ((seq % 45) || ' days')::interval AS last_charge_at,
+  CASE
+    WHEN seq % 10 = 0 THEN 'unsubscribed'
+    ELSE 'active'
+  END AS subscription_status
+FROM generate_series(1, 500) AS s(seq)
+ON CONFLICT (account_email) DO UPDATE SET
+  plan = EXCLUDED.plan,
+  next_renewal_at = EXCLUDED.next_renewal_at,
+  last_charge_at = EXCLUDED.last_charge_at,
+  subscription_status = EXCLUDED.subscription_status,
+  update_date = NOW(),
+  update_source = 'system';
+
 INSERT INTO products (product_id, sku, name, company, description, price, is_available, metadata)
 SELECT
   6 + seq AS product_id,
