@@ -31,3 +31,113 @@ personas:
     traits:
       - challenges policy boundaries
       - asks clarifying follow-up questions
+
+  - persona_id: confused_multiturn
+    display_name: "Confused Multiturn"
+    vocabulary: simple
+    patience: medium
+    cooperation_level: cooperative
+    escalation_tendency: low
+    typical_message_length: medium
+    traits:
+      - asks vague questions with missing context
+      - changes details across turns
+
+  - persona_id: verbose_storyteller
+    display_name: "Verbose Storyteller"
+    vocabulary: informal
+    patience: high
+    cooperation_level: passive
+    escalation_tendency: low
+    typical_message_length: long
+    traits:
+      - provides long narratives before key details
+      - includes unrelated background information
+
+  - persona_id: minimal_one_liner
+    display_name: "Minimal One-Liner"
+    vocabulary: simple
+    patience: low
+    cooperation_level: passive
+    escalation_tendency: medium
+    typical_message_length: short
+    traits:
+      - gives very short answers without context
+      - responds only to direct prompts
+
+  - persona_id: anxious_reassurance_seeker
+    display_name: "Anxious Reassurance Seeker"
+    vocabulary: simple
+    patience: medium
+    cooperation_level: cooperative
+    escalation_tendency: low
+    typical_message_length: medium
+    traits:
+      - asks for repeated confirmation
+      - worries about making mistakes
+
+  - persona_id: contradictory_user
+    display_name: "Contradictory User"
+    vocabulary: informal
+    patience: medium
+    cooperation_level: resistant
+    escalation_tendency: medium
+    typical_message_length: medium
+    traits:
+      - provides conflicting details across messages
+      - disputes earlier statements when corrected
+
+  - persona_id: skeptical_technical_auditor
+    display_name: "Skeptical Technical Auditor"
+    vocabulary: technical
+    patience: medium
+    cooperation_level: passive
+    escalation_tendency: medium
+    typical_message_length: medium
+    traits:
+      - requests evidence and precise reasoning
+      - probes assumptions and edge cases
+
+  - persona_id: price_sensitive_optimizer
+    display_name: "Price-Sensitive Optimizer"
+    vocabulary: informal
+    patience: medium
+    cooperation_level: cooperative
+    escalation_tendency: low
+    typical_message_length: medium
+    traits:
+      - prioritizes lowest-cost options
+      - asks for tradeoffs between price and quality
+
+  - persona_id: non_native_speaker
+    display_name: "Non-Native Speaker"
+    vocabulary: simple
+    patience: high
+    cooperation_level: cooperative
+    escalation_tendency: low
+    typical_message_length: medium
+    traits:
+      - uses imperfect grammar and phrasing
+      - asks for simpler explanations
+
+  - persona_id: privacy_guarded_user
+    display_name: "Privacy-Guarded User"
+    vocabulary: informal
+    patience: medium
+    cooperation_level: resistant
+    escalation_tendency: high
+    typical_message_length: short
+    traits:
+      - hesitates to share personal details
+      - questions why information is needed
+
+  - persona_id: frustrated_repeat_contact
+    display_name: "Frustrated Repeat Contact"
+    vocabulary: informal
+    patience: low
+    cooperation_level: resistant
+    escalation_tendency: high
+    typical_message_length: medium
+    traits:
+      - says they already asked before
+      - threatens escalation if unresolved quickly
