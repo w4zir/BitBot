@@ -149,6 +149,9 @@ training/**/results/
 training/data/bitext/
 training/data/bitext_binary_issue/
 
+# simulated data
+data/raw/simulated/
+
 # Virtual environments & local Python installs
 .env
 .envrc
