@@ -22,6 +22,36 @@ Local (from repo root)::
     pip install -r training/requirements-train.txt
     python training/experiments/src/train_multiclass_modernbert.py \\
         --dataset-dir training/data/bitext --num-epochs 5
+
+Common CLI examples (from repo root)::
+
+    # 1) Basic run with defaults (dataset under training/data/bitext).
+    python training/experiments/src/train_multiclass_modernbert.py
+
+    # 2) Train from a custom dataset folder and keep a fixed output directory name.
+    python training/experiments/src/train_multiclass_modernbert.py \\
+        --dataset-dir training/data/bitext_category_jsonl_multifile_tmp \\
+        --output-dir training/models/bitext_multiclass_finetuned \\
+        --no-output-timestamp
+
+    # 3) Override individual data files instead of --dataset-dir defaults.
+    python training/experiments/src/train_multiclass_modernbert.py \\
+        --train-file training/data/bitext/train.jsonl \\
+        --eval-file training/data/bitext/eval.jsonl \\
+        --test-file training/data/bitext/test.jsonl \\
+        --label2id-file training/data/bitext/label2id.json
+
+    # 4) Continue from an existing fine-tuned local model/checkpoint directory.
+    #    Point --local-base-model-dir to a HF-compatible folder (e.g. prior winner/).
+    python training/experiments/src/train_multiclass_modernbert.py \\
+        --dataset-dir training/data/bitext_category_jsonl_multifile_tmp \\
+        --local-base-model-dir training/models/bitext_multiclass_finetuned_20260506T120000Z/winner \\
+        --num-epochs 2
+
+    # 5) If local model dir is missing, choose a hub model id to download once.
+    python training/experiments/src/train_multiclass_modernbert.py \\
+        --local-base-model-dir training/models/modernbert-base-zeroshot-v2.0 \\
+        --hub-model-id MoritzLaurer/ModernBERT-base-zeroshot-v2.0
 """
 
 from __future__ import annotations

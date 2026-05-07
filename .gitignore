@@ -151,6 +151,8 @@ training/data/bitext_binary_issue/
 
 # simulated data
 data/raw/simulated/
+data/processed/simulated/
+training/data/
 
 # Virtual environments & local Python installs
 .env

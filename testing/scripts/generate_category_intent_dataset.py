@@ -145,6 +145,17 @@ def _llm_temperature(value: str) -> float:
     return parsed
 
 
+def _append_rows_jsonl(output_path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("a", encoding="utf-8", newline="\n") as out_f:
+        for row in rows:
+            out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        out_f.flush()
+        os.fsync(out_f.fileno())
+
+
 def _apply_user_llm_env_overrides(suite: SuiteConfig) -> None:
     simulator_user_llm_provider = os.getenv("SIMULATOR_USER_LLM_PROVIDER", "").strip().lower()
     if simulator_user_llm_provider:
@@ -238,6 +249,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "Overrides suite default and SIMULATOR_USER_LLM_TEMPERATURE when set."
         ),
     )
+    parser.add_argument(
+        "--save-every",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=(
+            "Checkpoint interval for incremental JSONL persistence. "
+            "When set, append every N generated rows so interruptions keep prior progress."
+        ),
+    )
     return parser
 
 
@@ -258,6 +279,7 @@ def run_generation(
     persona_filters: list[str],
     randomize: bool,
     temperature_override: float | None = None,
+    save_every: int | None = None,
     stderr_print: Callable[[str], None] | None = None,
     max_attempt_multiplier: int = 50,
 ) -> GenerationResult:
@@ -305,10 +327,18 @@ def run_generation(
     skipped = 0
     max_attempts = max_limit * max_attempt_multiplier
 
-    print(
-        f"Generating up to {max_limit} sample(s) → {output_path} (writes after all succeed)",
-        flush=True,
-    )
+    if save_every is None:
+        print(
+            f"Generating up to {max_limit} sample(s) → {output_path} (writes after all succeed)",
+            flush=True,
+        )
+    else:
+        print(
+            f"Generating up to {max_limit} sample(s) → {output_path} "
+            f"(checkpoint append every {save_every} row(s))",
+            flush=True,
+        )
+    persisted_rows = 0
     while len(successful_rows) < max_limit and attempts < max_attempts:
         attempts += 1
         try:
@@ -384,6 +414,10 @@ def run_generation(
         print(f"Intent: {seed.intent}", flush=True)
         print(f"Seed ID: {seed.seed_id}", flush=True)
         print(f"Persona: {persona_cfg.persona_id}", flush=True)
+        if save_every is not None and rows_written % save_every == 0:
+            _append_rows_jsonl(output_path, successful_rows[persisted_rows:rows_written])
+            persisted_rows = rows_written
+            print(f"Checkpoint persisted: {persisted_rows} row(s)", flush=True)
 
     rows_written = len(successful_rows)
 
@@ -396,10 +430,16 @@ def run_generation(
     if rows_written == 0:
         raise RuntimeError("No rows were written; generation failed.")
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", newline="\n") as out_f:
-        for row in successful_rows:
-            out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if save_every is None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8", newline="\n") as out_f:
+            for row in successful_rows:
+                out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    else:
+        if persisted_rows < rows_written:
+            _append_rows_jsonl(output_path, successful_rows[persisted_rows:rows_written])
+            persisted_rows = rows_written
+            print(f"Final checkpoint persisted: {persisted_rows}/{rows_written} row(s)", flush=True)
 
     return GenerationResult(
         output_path=output_path,
@@ -433,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
             persona_filters=list(args.persona or []),
             randomize=bool(args.randomize),
             temperature_override=args.temperature,
+            save_every=args.save_every,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

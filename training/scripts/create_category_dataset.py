@@ -22,7 +22,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 try:
     from datasets import load_dataset  # type: ignore
@@ -39,6 +39,7 @@ DEFAULT_INPUT_DIR = _REPO_ROOT / "data" / "raw" / "synthetic" / "no_issue"
 DEFAULT_SYNTHETIC_GLOB = "no_issue_*.json"
 DEFAULT_OUTPUT_DIR = _REPO_TRAINING / "data" / "bitext"
 DEFAULT_SEED = 42
+DEFAULT_JSONL_GLOB = "*.jsonl"
 
 BINARY_NO_ISSUE = "no_issue"
 BINARY_ISSUE = "issue"
@@ -49,6 +50,116 @@ def normalize_text_key(text: str) -> str:
     s = text.strip().lower()
     s = re.sub(r"\s+", " ", s)
     return s
+
+
+def normalize_category_label(label: str) -> str:
+    """Normalize category labels to existing mapping convention."""
+    s = label.strip()
+    if s == "no_issue":
+        return s
+    return s.upper()
+
+
+def load_label2id_mapping(path: Path) -> dict[str, int]:
+    """Load and validate external label2id mapping."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError) as e:
+        raise RuntimeError(f"Failed to read label2id mapping from {path}: {e}") from e
+
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"label2id mapping at {path} must be a JSON object")
+
+    out: dict[str, int] = {}
+    seen_ids: set[int] = set()
+    for k, v in raw.items():
+        if not isinstance(k, str) or not k.strip():
+            raise RuntimeError("label2id contains an empty or non-string key")
+        if not isinstance(v, int):
+            raise RuntimeError(f"label2id value for {k!r} must be int, got {type(v).__name__}")
+        if v in seen_ids:
+            raise RuntimeError(f"label2id contains duplicate id value {v}")
+        out[k] = v
+        seen_ids.add(v)
+    return out
+
+
+def collect_jsonl_files(
+    explicit_files: Iterable[Path] | None, input_dir: Path | None, input_glob: str
+) -> list[Path]:
+    """Resolve JSONL files from explicit list and/or directory glob."""
+    files: list[Path] = []
+    if explicit_files:
+        files.extend(explicit_files)
+    if input_dir is not None:
+        files.extend(sorted(input_dir.glob(input_glob)))
+
+    seen: set[Path] = set()
+    resolved: list[Path] = []
+    for p in files:
+        rp = p.resolve()
+        if rp in seen:
+            continue
+        seen.add(rp)
+        resolved.append(p)
+    return resolved
+
+
+def load_jsonl_rows(
+    jsonl_files: list[Path], mode: Mode, skip_reasons: Counter[str]
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Load rows from category/intent JSONL sources."""
+    line_errors: Counter[str] = Counter()
+    out: list[dict[str, Any]] = []
+    label_key = "category" if mode == "category" else "intent"
+
+    for path in jsonl_files:
+        if not path.is_file():
+            raise RuntimeError(f"JSONL input does not exist or is not a file: {path}")
+        try:
+            with path.open("r", encoding="utf-8-sig") as f:
+                for line_no, raw_line in enumerate(f, start=1):
+                    line = raw_line.strip()
+                    if not line:
+                        line_errors["jsonl_empty_line"] += 1
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        line_errors["jsonl_invalid_json"] += 1
+                        continue
+                    if not isinstance(obj, dict):
+                        line_errors["jsonl_non_object"] += 1
+                        continue
+
+                    text = obj.get("text")
+                    if text is None or not isinstance(text, str) or not text.strip():
+                        line_errors["jsonl_missing_or_empty_text"] += 1
+                        continue
+
+                    label_raw = obj.get(label_key)
+                    if label_raw is None or not isinstance(label_raw, str) or not label_raw.strip():
+                        line_errors[f"jsonl_missing_or_empty_{label_key}"] += 1
+                        continue
+
+                    label = label_raw.strip()
+                    if mode == "category":
+                        label = normalize_category_label(label)
+
+                    out.append(
+                        {
+                            "text": text.strip(),
+                            "label": label,
+                            "source_file": path.name,
+                            "source_line": line_no,
+                        }
+                    )
+        except OSError as e:
+            raise RuntimeError(f"Failed to read JSONL file {path}: {e}") from e
+
+    for k, v in line_errors.items():
+        skip_reasons[k] += v
+    return out, line_errors
 
 
 def load_samples_from_file(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -392,6 +503,32 @@ def parse_args() -> argparse.Namespace:
         help="Dataset split to load (default: train)",
     )
     parser.add_argument(
+        "--input-files",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Optional explicit JSONL files with fields: text/category/intent. "
+        "When provided (or --jsonl-input-dir is set), script uses JSONL ingestion mode.",
+    )
+    parser.add_argument(
+        "--jsonl-input-dir",
+        type=Path,
+        default=None,
+        help="Optional directory containing JSONL category/intent files.",
+    )
+    parser.add_argument(
+        "--jsonl-glob",
+        type=str,
+        default=DEFAULT_JSONL_GLOB,
+        help="Glob pattern used with --jsonl-input-dir (default: *.jsonl).",
+    )
+    parser.add_argument(
+        "--label2id-path",
+        type=Path,
+        default=None,
+        help="Optional path to existing label2id.json to use as authoritative mapping in non-binary modes.",
+    )
+    parser.add_argument(
         "--input-dir",
         "--synthetic-dir",
         type=Path,
@@ -454,44 +591,95 @@ def main() -> int:
     json_files: list[Path] = []
     synth_rows: list[dict[str, Any]] = []
     root_issues = 0
+    jsonl_files_used: list[Path] = []
+    jsonl_line_issues: Counter[str] = Counter()
+    jsonl_mode = bool(args.input_files) or args.jsonl_input_dir is not None
 
-    if not args.bitext_only:
-        if not synthetic_dir.is_dir():
-            print(f"Error: input directory does not exist: {synthetic_dir}", file=sys.stderr)
+    skip_reasons: Counter[str] = Counter()
+    bitext_rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]]
+
+    if jsonl_mode:
+        if mode == "binary":
+            print("Error: JSONL ingestion mode only supports --mode category or --mode intent", file=sys.stderr)
             return 1
 
-        json_files = sorted(synthetic_dir.glob(args.synthetic_glob))
-        if not json_files:
+        input_files = collect_jsonl_files(args.input_files, args.jsonl_input_dir, args.jsonl_glob)
+        if not input_files:
             print(
-                f"Error: no files matching {args.synthetic_glob!r} in {synthetic_dir}",
+                "Error: no JSONL files resolved from --input-files/--jsonl-input-dir",
                 file=sys.stderr,
             )
             return 1
+        jsonl_files_used = input_files
+        try:
+            rows, jsonl_line_issues = load_jsonl_rows(jsonl_files_used, mode, skip_reasons)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+    else:
+        if not args.bitext_only:
+            if not synthetic_dir.is_dir():
+                print(f"Error: input directory does not exist: {synthetic_dir}", file=sys.stderr)
+                return 1
 
-    skip_reasons: Counter[str] = Counter()
-    bitext_rows = load_bitext_rows(args.hf_dataset, args.hf_split, skip_reasons)
+            json_files = sorted(synthetic_dir.glob(args.synthetic_glob))
+            if not json_files:
+                print(
+                    f"Error: no files matching {args.synthetic_glob!r} in {synthetic_dir}",
+                    file=sys.stderr,
+                )
+                return 1
 
-    if not args.bitext_only:
-        synth_samples: list[dict[str, Any]] = []
-        for jf in json_files:
-            samples, st = load_samples_from_file(jf)
-            root_issues += st["malformed_root"] + st["missing_samples"]
-            synth_samples.extend(samples)
+        bitext_rows = load_bitext_rows(args.hf_dataset, args.hf_split, skip_reasons)
 
-        for s in synth_samples:
-            row, reason = row_from_no_issue_sample(s)
-            if row is None:
-                skip_reasons[reason or "unknown"] += 1
-                continue
-            synth_rows.append(row)
+        if not args.bitext_only:
+            synth_samples: list[dict[str, Any]] = []
+            for jf in json_files:
+                samples, st = load_samples_from_file(jf)
+                root_issues += st["malformed_root"] + st["missing_samples"]
+                synth_samples.extend(samples)
 
-    rows = apply_mode_labels(bitext_rows, synth_rows, mode)
+            for s in synth_samples:
+                row, reason = row_from_no_issue_sample(s)
+                if row is None:
+                    skip_reasons[reason or "unknown"] += 1
+                    continue
+                synth_rows.append(row)
+
+        rows = apply_mode_labels(bitext_rows, synth_rows, mode)
     rows_before_dedup = len(rows)
     rows, n_dup = dedupe_by_text(rows)
 
     if not rows:
         print("Error: no rows after loading and validation", file=sys.stderr)
         return 1
+
+    all_labels = sorted({str(r["label"]) for r in rows})
+    if mode != "binary" and args.label2id_path is not None:
+        try:
+            label2id = load_label2id_mapping(args.label2id_path)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        rows_before_mapping_filter = len(rows)
+        rows = [r for r in rows if str(r["label"]) in label2id]
+        filtered_out = rows_before_mapping_filter - len(rows)
+        if filtered_out > 0:
+            skip_reasons["label_missing_in_label2id"] += filtered_out
+            print(
+                f"Warning: dropped {filtered_out} rows with labels not present in label2id mapping",
+                file=sys.stderr,
+            )
+        if not rows:
+            print(
+                "Error: all rows were filtered out because labels were missing from label2id mapping",
+                file=sys.stderr,
+            )
+            return 1
+        all_labels = sorted({str(r["label"]) for r in rows})
+    else:
+        label2id = build_label2id(all_labels)
 
     test_ratio_effective = 1.0 - args.train_ratio - args.eval_ratio
     try:
@@ -507,9 +695,6 @@ def main() -> int:
     except ValueError as e:
         print(f"Error: invalid split ratios: {e}", file=sys.stderr)
         return 1
-
-    all_labels = sorted({str(r["label"]) for r in rows})
-    label2id = build_label2id(all_labels)
 
     train_path = output_dir / "train.jsonl"
     eval_path = output_dir / "eval.jsonl"
@@ -529,6 +714,13 @@ def main() -> int:
         "mode": mode,
         "hf_dataset": args.hf_dataset,
         "hf_split": args.hf_split,
+        "jsonl_mode": jsonl_mode,
+        "jsonl_input_files": [str(p) for p in (args.input_files or [])],
+        "jsonl_input_dir": str(args.jsonl_input_dir.resolve()) if args.jsonl_input_dir else None,
+        "jsonl_glob": args.jsonl_glob,
+        "jsonl_files_resolved": [str(p.resolve()) for p in jsonl_files_used],
+        "jsonl_line_issues": dict(jsonl_line_issues),
+        "label2id_path": str(args.label2id_path.resolve()) if args.label2id_path else None,
         "bitext_only": bool(args.bitext_only),
         "input_dir": str(synthetic_dir.resolve()) if not args.bitext_only else None,
         "synthetic_glob": args.synthetic_glob,
@@ -587,11 +779,15 @@ def main() -> int:
 
     total = len(rows)
     print(f"Bitext multi-mode dataset build complete (mode={mode})")
-    print(f"  HF:     {args.hf_dataset} (split={args.hf_split}) -> {len(bitext_rows)} rows")
-    if not args.bitext_only:
-        print(f"  Synth:  {synthetic_dir} ({len(json_files)} files) -> {len(synth_rows)} no_issue rows")
+    if jsonl_mode:
+        print(f"  JSONL:  {len(jsonl_files_used)} files -> {rows_before_dedup} rows before dedup")
+        print(f"  JSONL issues: {sum(jsonl_line_issues.values())} {dict(jsonl_line_issues) if jsonl_line_issues else ''}")
     else:
-        print("  Synth:  (skipped --bitext-only)")
+        print(f"  HF:     {args.hf_dataset} (split={args.hf_split}) -> {len(bitext_rows)} rows")
+        if not args.bitext_only:
+            print(f"  Synth:  {synthetic_dir} ({len(json_files)} files) -> {len(synth_rows)} no_issue rows")
+        else:
+            print("  Synth:  (skipped --bitext-only)")
     print(f"  Rows:   {total} after dedup ({rows_before_dedup} before, {n_dup} dupes removed)")
     print(f"  Split:  train={len(train_rows)}, eval={len(eval_rows)}, test={len(test_rows)}")
     if mode != "binary":
