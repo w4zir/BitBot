@@ -14,6 +14,13 @@ steps:
   - id: lookup_order
     type: tool_call
     tool: check_order_status
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    policy_rules:
+      - order_must_exist
+    on_true: branch_lookup
+    on_false: order_not_found
   - id: branch_lookup
     type: logic_gate
     condition:

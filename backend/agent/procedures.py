@@ -8,8 +8,10 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field
 
+from backend.agent.policy_constraints import load_policy_constraints_for_intent
 
-StepType = Literal["tool_call", "logic_gate", "interrupt", "llm_response"]
+
+StepType = Literal["tool_call", "logic_gate", "policy_check", "interrupt", "llm_response"]
 
 
 class RequiredDataField(BaseModel):
@@ -43,6 +45,8 @@ class ProcedureStep(BaseModel):
     condition: ConditionSpec | None = None
     on_true: str | None = None
     on_false: str | None = None
+    policy_rules: list[str] = Field(default_factory=list)
+    policy_phase: str | None = None
     message: str | None = None
     action_type: str | None = None
     action_id: str | None = None
@@ -129,10 +133,21 @@ def validate_blueprints() -> list[str]:
         if len({s.id for s in bp.steps}) != len(bp.steps):
             errors.append(f"{bp.id} has duplicate step ids")
         step_ids = {s.id for s in bp.steps}
+        available_policy_rule_ids: set[str] = set()
         if bp.policy_required:
             policy_path = policy_constraints_dir() / bp.category.lower() / f"{bp.intent.lower()}.yaml"
             if not policy_path.is_file():
                 errors.append(f"{bp.id} missing policy constraints file: {policy_path}")
+            else:
+                model = load_policy_constraints_for_intent(bp.category, bp.intent)
+                for rule in [
+                    *list(model.eligibility_rules or []),
+                    *list(model.required_conditions or []),
+                    *list(model.escalation_conditions or []),
+                ]:
+                    rid = str(rule.id or "").strip()
+                    if rid:
+                        available_policy_rule_ids.add(rid)
         for step in bp.steps:
             if step.type == "logic_gate":
                 if not isinstance(step.condition, ConditionSpec):
@@ -150,6 +165,20 @@ def validate_blueprints() -> list[str]:
                     errors.append(f"{bp.id}:{step.id} on_true={step.on_true} unknown")
                 if step.on_false not in step_ids:
                     errors.append(f"{bp.id}:{step.id} on_false={step.on_false} unknown")
+            if step.type == "policy_check":
+                if not step.on_true or not step.on_false:
+                    errors.append(f"{bp.id}:{step.id} missing on_true/on_false")
+                    continue
+                if step.on_true not in step_ids:
+                    errors.append(f"{bp.id}:{step.id} on_true={step.on_true} unknown")
+                if step.on_false not in step_ids:
+                    errors.append(f"{bp.id}:{step.id} on_false={step.on_false} unknown")
+                phase = str(step.policy_phase or "runtime").strip().lower()
+                if phase not in {"pre_validation", "runtime", "any"}:
+                    errors.append(f"{bp.id}:{step.id} policy_phase={phase} invalid")
+                for rule_id in step.policy_rules:
+                    if rule_id not in available_policy_rule_ids:
+                        errors.append(f"{bp.id}:{step.id} policy_rule={rule_id} unknown")
         for outcome in bp.expected_outcomes:
             if bool(outcome.value is not None and outcome.value_from):
                 errors.append(f"{bp.id}:expected_outcome:{outcome.id} cannot set both value and value_from")

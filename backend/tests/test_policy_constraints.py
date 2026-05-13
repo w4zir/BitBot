@@ -15,6 +15,7 @@ def test_load_policy_constraints_by_intent() -> None:
     assert model.eligibility_rules
     first = model.eligibility_rules[0]
     assert getattr(first, "failure_reason", "").strip(), "eligibility rules should include customer-facing failure_reason"
+    assert getattr(first, "applies_to", "") == "runtime"
 
 
 def test_missing_policy_constraints_fail_closed() -> None:

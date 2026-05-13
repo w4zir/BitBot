@@ -13,6 +13,13 @@ steps:
   - id: lookup_refund_status
     type: tool_call
     tool: payment_refund_status
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    policy_rules:
+      - tracking_must_exist
+    on_true: branch_refund_tracking_found
+    on_false: refund_tracking_not_found
   - id: branch_refund_tracking_found
     type: logic_gate
     condition:

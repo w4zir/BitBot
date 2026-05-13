@@ -13,6 +13,11 @@ steps:
   - id: create_complaint
     type: tool_call
     tool: create_complaint_ticket
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    on_true: branch_complaint_created
+    on_false: complaint_failed
   - id: branch_complaint_created
     type: logic_gate
     condition:

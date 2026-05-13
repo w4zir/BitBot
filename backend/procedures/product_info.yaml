@@ -14,6 +14,13 @@ steps:
   - id: lookup_product_info
     type: tool_call
     tool: product_info_lookup
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    policy_rules:
+      - product_must_exist
+    on_true: branch_product_found
+    on_false: product_not_found
   - id: branch_product_found
     type: logic_gate
     condition:

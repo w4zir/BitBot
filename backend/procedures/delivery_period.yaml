@@ -13,6 +13,13 @@ steps:
   - id: lookup_delivery_period
     type: tool_call
     tool: delivery_period_lookup
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    policy_rules:
+      - delivery_record_exists
+    on_true: branch_delivery_info_found
+    on_false: delivery_period_not_found
   - id: branch_delivery_info_found
     type: logic_gate
     condition:

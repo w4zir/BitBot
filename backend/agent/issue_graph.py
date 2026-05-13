@@ -2061,6 +2061,66 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
                 "executor_turn_count": turn_count,
             },
         )
+    elif step_type == "policy_check":
+        phase = str(step.get("policy_phase") or "runtime").strip().lower() or "runtime"
+        selected_rule_ids = {str(x).strip() for x in (step.get("policy_rules") or []) if str(x).strip()}
+        constraints = dict(state.get("policy_constraints") or {})
+        if selected_rule_ids:
+            scoped_rules: list[dict[str, Any]] = []
+            for rule in list(constraints.get("eligibility_rules") or []):
+                if not isinstance(rule, dict):
+                    continue
+                if str(rule.get("id") or "").strip() in selected_rule_ids:
+                    scoped_rules.append(rule)
+            scoped_constraints = {**constraints, "eligibility_rules": scoped_rules}
+        else:
+            scoped_constraints = constraints
+        rules_ok, rules_reason, rule_checks = _evaluate_policy_rules(
+            policy_constraints=scoped_constraints,
+            context_data=context,
+            phase=phase,
+        )
+        normalized_checks = [{**check, "source": "procedure_policy_check"} for check in rule_checks]
+        combined_checks = [*list(state.get("policy_check_results") or []), *normalized_checks]
+        eligibility_ok = bool(constraints.get("eligible", True)) and rules_ok
+        reason = (
+            rules_reason
+            or str(constraints.get("reason") or "").strip()
+            or str(constraints.get("default_ineligible_reason") or "").strip()
+        )
+        target = str(step.get("on_true") if eligibility_ok else step.get("on_false") or "")
+        return _with_stage_metadata(
+            _jump_to_step(
+                {
+                    **state,
+                    "context_data": {
+                        **context,
+                        "policy_eligible": eligibility_ok,
+                        "policy_ineligibility_reason": "" if eligibility_ok else reason,
+                        "policy_check_results": combined_checks,
+                    },
+                    "policy_constraints": {
+                        **constraints,
+                        "eligible": eligibility_ok,
+                        "reason": "" if eligibility_ok else reason,
+                    },
+                    "policy_check_results": combined_checks,
+                    "executor_turn_count": turn_count,
+                },
+                target,
+            ),
+            "structured_executor",
+            {
+                "step_id": step.get("id"),
+                "step_type": step_type,
+                "policy_phase": phase,
+                "rules_evaluated": len(normalized_checks),
+                "policy_eligible": eligibility_ok,
+                "policy_reason": "" if eligibility_ok else reason,
+                "branch_target": target,
+                "executor_turn_count": turn_count,
+            },
+        )
     elif step_type == "interrupt":
         return _with_stage_metadata(
             _handle_interrupt_step(step, {**state, "context_data": context, "executor_turn_count": turn_count}, idx, todo),

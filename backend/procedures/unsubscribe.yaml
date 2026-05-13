@@ -12,6 +12,11 @@ steps:
   - id: unsubscribe_account
     type: tool_call
     tool: unsubscribe_subscription
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    on_true: branch_unsubscribe_succeeded
+    on_false: unsubscribe_failed
   - id: branch_unsubscribe_succeeded
     type: logic_gate
     condition:

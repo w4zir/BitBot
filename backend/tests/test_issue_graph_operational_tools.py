@@ -443,6 +443,93 @@ def test_logic_gate_failure_reason_survives_in_policy_check_results() -> None:
     assert "could not find" in str(failed[-1].get("reason") or "").lower()
 
 
+def test_policy_check_step_passes_and_branches_true() -> None:
+    state = {
+        "todo_list": [
+            {
+                "id": "check_policy_constraints",
+                "type": "policy_check",
+                "policy_phase": "runtime",
+                "policy_rules": ["must_be_eligible"],
+                "on_true": "allowed",
+                "on_false": "blocked",
+            },
+            {"id": "allowed", "type": "llm_response", "message": "allowed"},
+            {"id": "blocked", "type": "llm_response", "message": "blocked"},
+        ],
+        "current_step_index": 0,
+        "context_data": {"is_eligible": True},
+        "policy_constraints": {
+            "eligible": True,
+            "reason": "",
+            "default_ineligible_reason": "Not eligible.",
+            "eligibility_rules": [
+                {
+                    "id": "must_be_eligible",
+                    "field": "is_eligible",
+                    "op": "eq",
+                    "value": True,
+                    "failure_reason": "Policy denied request.",
+                    "applies_to": "runtime",
+                }
+            ],
+        },
+        "policy_check_results": [],
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 1
+    assert out["context_data"]["policy_eligible"] is True
+    checks = out.get("policy_check_results") or []
+    assert checks
+    assert checks[-1]["source"] == "procedure_policy_check"
+    assert checks[-1]["passed"] is True
+
+
+def test_policy_check_step_fails_and_branches_false() -> None:
+    state = {
+        "todo_list": [
+            {
+                "id": "check_policy_constraints",
+                "type": "policy_check",
+                "policy_phase": "runtime",
+                "policy_rules": ["must_be_eligible"],
+                "on_true": "allowed",
+                "on_false": "blocked",
+            },
+            {"id": "allowed", "type": "llm_response", "message": "allowed"},
+            {"id": "blocked", "type": "llm_response", "message": "blocked"},
+        ],
+        "current_step_index": 0,
+        "context_data": {"is_eligible": False},
+        "policy_constraints": {
+            "eligible": True,
+            "reason": "",
+            "default_ineligible_reason": "Not eligible.",
+            "eligibility_rules": [
+                {
+                    "id": "must_be_eligible",
+                    "field": "is_eligible",
+                    "op": "eq",
+                    "value": True,
+                    "failure_reason": "Policy denied request.",
+                    "applies_to": "runtime",
+                }
+            ],
+        },
+        "policy_check_results": [],
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 2
+    assert out["context_data"]["policy_eligible"] is False
+    assert out["context_data"]["policy_ineligibility_reason"] == "Policy denied request."
+    checks = out.get("policy_check_results") or []
+    assert checks
+    assert checks[-1]["source"] == "procedure_policy_check"
+    assert checks[-1]["passed"] is False
+
+
 def test_outcome_validator_appends_failure_summary_for_tool_error() -> None:
     state = {
         "intent": "order_status",

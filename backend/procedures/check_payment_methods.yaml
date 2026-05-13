@@ -10,6 +10,11 @@ steps:
   - id: lookup_methods
     type: tool_call
     tool: list_payment_methods
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    on_true: share_methods
+    on_false: share_methods
   - id: share_methods
     type: llm_response
     message: >

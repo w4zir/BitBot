@@ -13,6 +13,13 @@ steps:
   - id: lookup_payment
     type: tool_call
     tool: payment_lookup
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    policy_rules:
+      - payment_must_exist
+    on_true: branch_payment_found
+    on_false: payment_not_found
   - id: branch_payment_found
     type: logic_gate
     condition:

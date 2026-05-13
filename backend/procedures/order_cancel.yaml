@@ -14,6 +14,15 @@ steps:
   - id: lookup_order
     type: tool_call
     tool: check_order_status
+  - id: check_policy_constraints
+    type: policy_check
+    policy_phase: runtime
+    policy_rules:
+      - order_must_exist
+      - order_not_delivered
+      - order_within_time_limit
+    on_true: branch_order_found
+    on_false: cancellation_not_allowed
   - id: branch_order_found
     type: logic_gate
     condition:
