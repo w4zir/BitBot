@@ -14,7 +14,13 @@ steps:
     tool: unsubscribe_subscription
   - id: branch_unsubscribe_succeeded
     type: logic_gate
-    condition: {op: eq, field: unsubscribe_succeeded, value: true}
+    condition:
+      {
+        op: eq,
+        field: unsubscribe_succeeded,
+        value: true,
+        failure_reason: Unsubscribe could not be completed for this account.
+      }
     on_true: unsubscribe_confirmed
     on_false: unsubscribe_failed
   - id: unsubscribe_confirmed

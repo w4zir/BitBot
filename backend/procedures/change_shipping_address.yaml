@@ -18,7 +18,13 @@ steps:
     tool: check_order_status
   - id: branch_order_found
     type: logic_gate
-    condition: {op: eq, field: order_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: order_found,
+        value: true,
+        failure_reason: We could not find that order in our system.
+      }
     on_true: branch_order_delivered
     on_false: order_not_found
   - id: order_not_found
@@ -28,7 +34,13 @@ steps:
       them to validate the order ID and try again.
   - id: branch_order_delivered
     type: logic_gate
-    condition: {op: neq, field: order_status, value: delivered}
+    condition:
+      {
+        op: neq,
+        field: order_status,
+        value: delivered,
+        failure_reason: The order is already delivered, so the shipping address cannot be changed.
+      }
     on_true: apply_shipping_address_change
     on_false: already_delivered
   - id: apply_shipping_address_change
@@ -36,7 +48,13 @@ steps:
     tool: update_shipping_address
   - id: branch_address_update_succeeded
     type: logic_gate
-    condition: {op: eq, field: shipping_address_updated, value: true}
+    condition:
+      {
+        op: eq,
+        field: shipping_address_updated,
+        value: true,
+        failure_reason: The shipping address could not be updated.
+      }
     on_true: shipping_address_confirmed
     on_false: shipping_address_failed
   - id: shipping_address_confirmed

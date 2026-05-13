@@ -15,7 +15,13 @@ steps:
     tool: payment_lookup
   - id: branch_payment_found
     type: logic_gate
-    condition: {op: eq, field: payment_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: payment_found,
+        value: true,
+        failure_reason: We could not find that transaction in our system.
+      }
     on_true: create_issue_ticket
     on_false: payment_not_found
   - id: create_issue_ticket
@@ -23,7 +29,13 @@ steps:
     tool: create_payment_issue_ticket
   - id: branch_ticket_created
     type: logic_gate
-    condition: {op: eq, field: payment_issue_ticket_created, value: true}
+    condition:
+      {
+        op: eq,
+        field: payment_issue_ticket_created,
+        value: true,
+        failure_reason: A payment issue ticket could not be created.
+      }
     on_true: issue_ticket_created
     on_false: issue_ticket_failed
   - id: issue_ticket_created

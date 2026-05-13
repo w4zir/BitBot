@@ -11,6 +11,7 @@ from langgraph.types import Command
 
 from backend.agent.issue_graph import (
     _build_agent_state_snapshot,
+    _collect_failure_reasons,
     _compact_context_data,
     _validation_wait_limit,
     build_agent_trace,
@@ -140,6 +141,7 @@ def run_persistent_conversation(
         "output_validation": dict(out.get("output_validation") or {}),
         "context_summary": dict(out.get("context_summary") or {}),
         "policy_check_results": list(out.get("policy_check_results") or []),
+        "failure_reasons": _collect_failure_reasons(out),  # type: ignore[arg-type]
     }
     return {
         "text": out.get("text", ""),

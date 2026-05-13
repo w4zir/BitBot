@@ -475,6 +475,8 @@ def test_classify_exposes_agent_state_and_policy_variable_maps(
     assert policy_constraints.get("schema_version") == "1.0"
     assert isinstance(policy_constraints.get("eligibility_rules"), list)
     assert "raw_chunks" not in policy_constraints
+    assert "failure_reasons" in md
+    assert isinstance(md["failure_reasons"], list)
 
 
 def test_classify_full_flow_returns_503_when_postgres_unreachable(

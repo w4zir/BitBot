@@ -23,6 +23,7 @@ class ConditionSpec(BaseModel):
     field: str
     value: Any | None = None
     value_from: str | None = None
+    failure_reason: str = ""
 
 
 class OutcomeAssertion(BaseModel):

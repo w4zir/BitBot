@@ -207,6 +207,7 @@ def _compact_context_data(context_data: dict[str, Any]) -> dict[str, Any]:
         "policy_ineligibility_reason",
         "policy_doc_names",
         "policy_check_results",
+        "failure_reasons",
         "tool_call",
         "order_status_before",
         "order_status_after",
@@ -222,6 +223,92 @@ def _compact_context_data(context_data: dict[str, Any]) -> dict[str, Any]:
         "product_found",
     }
     return {k: v for k, v in context_data.items() if k in keep_keys}
+
+
+def _is_internal_gate_reason(reason: str) -> bool:
+    r = (reason or "").strip().lower()
+    return bool(
+        r.startswith("condition_failed:")
+        or r.startswith("unsupported_operator")
+        or r.startswith("condition_eval_error")
+    )
+
+
+def _collect_failure_reasons(state: dict[str, Any]) -> list[str]:
+    """Customer-facing / LLM-facing failure strings from policy, procedure gates, tools, and validation."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        t = (s or "").strip()
+        if not t or t.lower() == "ok":
+            return
+        if t in seen:
+            return
+        seen.add(t)
+        out.append(t)
+
+    meta = dict(state.get("assistant_metadata") or {})
+    add(str(meta.get("tool_error") or ""))
+    add(str(meta.get("step_error") or ""))
+
+    ctx = dict(state.get("context_data") or {})
+    add(str(ctx.get("policy_ineligibility_reason") or ""))
+
+    pc = dict(state.get("policy_constraints") or {})
+    if not bool(pc.get("eligible", True)):
+        add(str(pc.get("reason") or "").strip())
+        if not pc.get("reason"):
+            add(str(pc.get("default_ineligible_reason") or "").strip())
+
+    for chk in state.get("policy_check_results") or []:
+        if not isinstance(chk, dict):
+            continue
+        if chk.get("passed"):
+            continue
+        r = str(chk.get("reason") or "").strip()
+        if r and not _is_internal_gate_reason(r):
+            add(r)
+
+    ov = dict(state.get("output_validation") or {})
+    checks = ov.get("checks")
+    if isinstance(checks, dict):
+        for _cid, item in checks.items():
+            if not isinstance(item, dict):
+                continue
+            if item.get("valid"):
+                continue
+            r = str(item.get("reason") or "").strip()
+            if r and r.lower() != "ok":
+                add(r)
+    return out
+
+
+def _merge_failure_reasons_into_state(state: dict[str, Any]) -> dict[str, Any]:
+    reasons = _collect_failure_reasons(state)
+    ctx = dict(state.get("context_data") or {})
+    ctx["failure_reasons"] = reasons
+    meta = dict(state.get("assistant_metadata") or {})
+    meta["failure_reasons"] = reasons
+    return {**state, "context_data": ctx, "assistant_metadata": meta}
+
+
+def _maybe_augment_blocked_final_response(*, outcome_status: str, final_response: str, reasons: list[str]) -> str | None:
+    """Append explicit failure reasons when outcome is blocked and the reply omits them."""
+    if outcome_status not in {"unresolvable", "tool_error", "step_error"}:
+        return None
+    if not reasons:
+        return None
+    summary = "; ".join(reasons)
+    if not summary.strip():
+        return None
+    fr = (final_response or "").strip()
+    if summary.lower() in fr.lower():
+        return fr if fr else None
+    tail = "We could not complete or confirm this request because: " + summary
+    if not fr:
+        return tail
+    return f"{fr}\n\n{tail}"
 
 
 def _build_agent_state_snapshot(state: IssueGraphState) -> dict[str, Any]:
@@ -507,17 +594,29 @@ def _generate_ineligibility_response(
     reason: str,
     messages: list[dict[str, Any]],
     text: str,
+    failure_reasons: list[str] | None = None,
 ) -> str:
     provider = os.getenv("NO_ISSUE_MODEL_PROVIDER", "ollama").strip().lower()
     model = os.getenv("NO_ISSUE_MODEL", "llama3.2").strip()
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in [*(failure_reasons or []), reason]:
+        t = (item or "").strip()
+        if t and t not in seen:
+            seen.add(t)
+            merged.append(t)
+    reasons_json = json.dumps(merged, ensure_ascii=False)
     system = (
         "You are a customer support assistant. Explain policy ineligibility clearly and politely, "
-        "and provide a concise next step when possible. Do not mention internal system details."
+        "and provide a concise next step when possible. Do not mention internal system details. "
+        "Ground your explanation in the provided policy ineligibility reasons JSON array; "
+        "prefer those strings when explaining why the request cannot be completed."
     )
     transcript = json.dumps(_messages_for_llm(messages), ensure_ascii=False)
     user_prompt = (
         f"Latest user message: {text or '(empty)'}\n"
-        f"Policy ineligibility reason: {reason or 'Not eligible under current policy.'}\n"
+        f"Policy ineligibility reasons (JSON array): {reasons_json}\n"
+        f"Primary summary reason: {reason or 'Not eligible under current policy.'}\n"
         f"Conversation transcript JSON: {transcript}\n"
         "Write one concise customer-facing response."
     )
@@ -531,7 +630,11 @@ def _generate_ineligibility_response(
             ],
         )
     except Exception:  # noqa: BLE001
-        fallback_reason = reason.strip() or "this request is not eligible under our current policy."
+        fallback_reason = (
+            "; ".join(merged).strip()
+            if merged
+            else (reason.strip() or "this request is not eligible under our current policy.")
+        )
         return (
             "I am sorry, but I cannot complete that request because "
             f"{fallback_reason} Please let me know if you want help with an alternative next step."
@@ -1075,17 +1178,19 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
             meta["validation_interrupt_pending"] = True
         out["assistant_metadata"] = meta
     elif not eligibility_ok:
+        reason_list = _collect_failure_reasons(out)
         out["final_response"] = _generate_ineligibility_response(
             reason=reason,
             messages=validated.get("messages") or [],
             text=str(validated.get("text") or ""),
+            failure_reasons=reason_list,
         )
         out["outcome_status"] = "policy_ineligible"
         out["validation_wait_count"] = 0
     else:
         out["validation_wait_count"] = 0
     return _with_stage_metadata(
-        out,
+        _merge_failure_reasons_into_state(out),
         "validate_required",
         {
             "validation_ok": out.get("validation_ok"),
@@ -1700,10 +1805,15 @@ def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> str:
     msgs = _messages_for_llm(state.get("messages") or [])
     summary = json.dumps(state.get("context_data") or {}, ensure_ascii=False)
     validation_summary = json.dumps(state.get("output_validation") or {}, ensure_ascii=False)
+    failure_reasons = _collect_failure_reasons(state)
+    failure_summary = json.dumps(failure_reasons, ensure_ascii=False)
     step_msg = str(step.get("message") or "").strip()
     user_prompt = (
         "Use only the resolved deterministic facts in context_data, policy_check_results, and output_validation. "
-        "Do not decide eligibility or invent constraints.\n\n"
+        "Do not decide eligibility or invent constraints.\n"
+        "If the customer's request could not be completed or was blocked, explain why using the "
+        f"failure_reasons JSON array below (prefer these exact customer-facing strings when they apply).\n"
+        f"failure_reasons: {failure_summary}\n\n"
         f"Procedure context: {summary}\n"
         f"Validation context: {validation_summary}"
     )
@@ -1907,6 +2017,8 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             {"step_id": step.get("id"), "step_type": step_type, "executor_turn_count": turn_count},
         )
     elif step_type == "llm_response":
+        reasons = _collect_failure_reasons({**state, "context_data": context})
+        context["failure_reasons"] = reasons
         state_with_ctx = {**state, "context_data": context}
         deterministic_reply = _draft_order_cancel_terminal_response(state_with_ctx, step)
         if deterministic_reply is None:
@@ -2017,10 +2129,11 @@ def _outcome_validator_node(state: IssueGraphState) -> IssueGraphState:
     state = _with_final_order_status(state)
     status = state.get("outcome_status")
     if status in {"needs_more_data", "policy_ineligible", "pending_escalation"}:
-        out_terminal = {
+        out_terminal: IssueGraphState = {
             **state,
             "output_validation": _run_output_validation(state),
         }
+        out_terminal = _merge_failure_reasons_into_state(out_terminal)  # type: ignore[assignment]
         out_terminal["context_summary"] = _build_context_summary(out_terminal)  # type: ignore[index]
         return _with_stage_metadata(out_terminal, "outcome_validator", {"outcome_status": status})
     meta = dict(state.get("assistant_metadata") or {})
@@ -2039,6 +2152,15 @@ def _outcome_validator_node(state: IssueGraphState) -> IssueGraphState:
     if not output_validation.get("all_valid"):
         out["outcome_status"] = "unresolvable"
     out["output_validation"] = output_validation
+    out = _merge_failure_reasons_into_state(out)  # type: ignore[assignment]
+    reasons = _collect_failure_reasons(out)
+    augmented = _maybe_augment_blocked_final_response(
+        outcome_status=str(out.get("outcome_status") or ""),
+        final_response=str(out.get("final_response") or ""),
+        reasons=reasons,
+    )
+    if augmented is not None:
+        out["final_response"] = augmented
     out["context_summary"] = _build_context_summary(out)
     return _with_stage_metadata(
         out,
@@ -2290,6 +2412,7 @@ def run_conversation_graph(
         "output_validation": dict(out.get("output_validation") or {}),
         "context_summary": dict(out.get("context_summary") or {}),
         "policy_check_results": list(out.get("policy_check_results") or []),
+        "failure_reasons": _collect_failure_reasons(out),  # type: ignore[arg-type]
     }
     return {
         "text": out.get("text", ""),

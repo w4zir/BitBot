@@ -15,7 +15,13 @@ steps:
     tool: payment_refund_status
   - id: branch_refund_tracking_found
     type: logic_gate
-    condition: {op: eq, field: refund_tracking_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: refund_tracking_found,
+        value: true,
+        failure_reason: Refund tracking information could not be found for this transaction.
+      }
     on_true: share_refund_status
     on_false: refund_tracking_not_found
   - id: share_refund_status

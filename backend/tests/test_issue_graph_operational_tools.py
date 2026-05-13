@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.agent.issue_graph import (
     _build_agent_state_snapshot,
+    _collect_failure_reasons,
     _outcome_validator_node,
     _policy_load_node,
     _structured_executor_node,
@@ -360,6 +361,77 @@ def test_policy_load_reads_yaml_by_intent() -> None:
     assert context_data.get("policy_eligible") is True
     assert constraints.get("eligible") is True
     assert constraints.get("reason") == ""
+
+
+def test_collect_failure_reasons_dedupes_and_skips_ok() -> None:
+    state = {
+        "assistant_metadata": {"tool_error": "Unknown tool 'bad_tool'"},
+        "context_data": {"policy_ineligibility_reason": ""},
+        "policy_constraints": {"eligible": True},
+        "policy_check_results": [
+            {"passed": False, "reason": "We could not find that order in our system.", "source": "procedure_gate"},
+            {"passed": True, "reason": "ok", "source": "procedure_gate"},
+        ],
+        "output_validation": {"checks": {"x": {"valid": False, "reason": "Missing cancellation outcome in context."}}},
+    }
+    reasons = _collect_failure_reasons(state)
+    blob = " ".join(reasons)
+    assert "Unknown tool" in blob
+    assert any("could not find" in r.lower() for r in reasons)
+    assert any("missing cancellation" in r.lower() for r in reasons)
+
+
+def test_logic_gate_failure_reason_survives_in_policy_check_results() -> None:
+    state = {
+        "procedure_id": "order_cancel",
+        "text": "cancel",
+        "messages": [{"role": "user", "content": "cancel ORD-1"}],
+        "todo_list": [
+            {
+                "id": "branch_order_found",
+                "type": "logic_gate",
+                "condition": {
+                    "op": "eq",
+                    "field": "order_found",
+                    "value": True,
+                    "failure_reason": "We could not find that order in our system.",
+                },
+                "on_true": "confirm_cancelled",
+                "on_false": "cancellation_not_allowed",
+            },
+            {"id": "cancellation_not_allowed", "type": "llm_response", "message": "deny"},
+            {"id": "confirm_cancelled", "type": "llm_response", "message": "ok"},
+        ],
+        "current_step_index": 0,
+        "context_data": {"order_found": False},
+        "policy_constraints": {},
+        "policy_check_results": [],
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    checks = out.get("policy_check_results") or []
+    failed = [c for c in checks if c.get("passed") is False]
+    assert failed
+    assert "could not find" in str(failed[-1].get("reason") or "").lower()
+
+
+def test_outcome_validator_appends_failure_summary_for_tool_error() -> None:
+    state = {
+        "intent": "order_status",
+        "context_data": {},
+        "assistant_metadata": {"tool_error": "Unknown tool 'x'"},
+        "validation_ok": True,
+        "todo_list": [],
+        "current_step_index": 0,
+        "final_response": "I could not run a required backend tool for this request.",
+    }
+    out = _outcome_validator_node(state)
+    assert out.get("outcome_status") == "tool_error"
+    fr = str(out.get("final_response") or "")
+    assert "could not complete or confirm" in fr.lower()
+    assert "unknown tool" in fr.lower()
+    assert "failure_reasons" in (out.get("context_data") or {})
+    assert "Unknown tool" in (out.get("context_data") or {}).get("failure_reasons", [""])[0]
 
 
 def test_refund_logic_gate_records_policy_check_result(monkeypatch) -> None:

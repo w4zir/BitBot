@@ -6,7 +6,7 @@ policy_doc_names:
 source_query: payment check_payment_methods policy
 auto_resolvable: true
 requires_evidence: false
-default_ineligible_reason: ""
+default_ineligible_reason: Payment method information could not be provided under current policy.
 time_limits: {}
 eligibility_rules: []
 required_conditions: []

@@ -14,7 +14,13 @@ steps:
     tool: get_subscription_status
   - id: branch_subscription_found
     type: logic_gate
-    condition: {op: eq, field: subscription_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: subscription_found,
+        value: true,
+        failure_reason: We could not find an active subscription for that account.
+      }
     on_true: share_subscription_status
     on_false: subscription_not_found
   - id: share_subscription_status

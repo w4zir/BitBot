@@ -38,6 +38,14 @@ def test_track_order_no_longer_maps_to_order_status() -> None:
     assert bp is None
 
 
+def test_logic_gate_condition_failure_reason_preserved_on_blueprint() -> None:
+    procedures.load_blueprints.cache_clear()
+    bp = procedures.load_blueprints()["order_cancel"]
+    step = next(s for s in bp.steps if s.id == "branch_order_within_cancel_window")
+    assert step.condition is not None
+    assert "expired" in (step.condition.failure_reason or "").lower()
+
+
 def test_blueprints_validate() -> None:
     procedures.load_blueprints.cache_clear()
     errors = procedures.validate_blueprints()

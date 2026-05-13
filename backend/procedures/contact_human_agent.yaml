@@ -15,7 +15,13 @@ steps:
     tool: create_contact_handoff
   - id: branch_handoff_created
     type: logic_gate
-    condition: {op: eq, field: handoff_created, value: true}
+    condition:
+      {
+        op: eq,
+        field: handoff_created,
+        value: true,
+        failure_reason: A human agent handoff ticket could not be created.
+      }
     on_true: handoff_confirmed
     on_false: handoff_failed
   - id: handoff_confirmed

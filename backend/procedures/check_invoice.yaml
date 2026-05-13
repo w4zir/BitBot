@@ -15,7 +15,13 @@ steps:
     tool: check_invoice_value
   - id: branch_invoice_found
     type: logic_gate
-    condition: {op: eq, field: invoice_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: invoice_found,
+        value: true,
+        failure_reason: We could not find that invoice in our system.
+      }
     on_true: share_invoice_value
     on_false: invoice_not_found
   - id: share_invoice_value

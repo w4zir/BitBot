@@ -15,7 +15,13 @@ steps:
     tool: delivery_period_lookup
   - id: branch_delivery_info_found
     type: logic_gate
-    condition: {op: eq, field: delivery_info_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: delivery_info_found,
+        value: true,
+        failure_reason: Delivery timing information could not be found for this order or route.
+      }
     on_true: share_delivery_period
     on_false: delivery_period_not_found
   - id: share_delivery_period

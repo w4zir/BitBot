@@ -22,7 +22,13 @@ steps:
     tool: refund_context_lookup
   - id: branch_order_found
     type: logic_gate
-    condition: {op: eq, field: order_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: order_found,
+        value: true,
+        failure_reason: We could not find that order in our system.
+      }
     on_true: branch_refund_window_open
     on_false: order_not_found
   - id: order_not_found
@@ -41,7 +47,13 @@ steps:
     tool: create_refund_request
   - id: branch_refund_created
     type: logic_gate
-    condition: {op: eq, field: refund_request_created, value: true}
+    condition:
+      {
+        op: eq,
+        field: refund_request_created,
+        value: true,
+        failure_reason: A refund request could not be created for this order.
+      }
     on_true: confirm_refund_submitted
     on_false: refund_not_created
   - id: confirm_refund_submitted

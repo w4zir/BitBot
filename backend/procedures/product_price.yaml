@@ -15,7 +15,13 @@ steps:
     tool: product_price_lookup
   - id: branch_product_found
     type: logic_gate
-    condition: {op: eq, field: product_found, value: true}
+    condition:
+      {
+        op: eq,
+        field: product_found,
+        value: true,
+        failure_reason: We could not find that product in our catalog.
+      }
     on_true: share_price
     on_false: product_not_found
   - id: share_price

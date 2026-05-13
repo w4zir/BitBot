@@ -15,7 +15,13 @@ steps:
     tool: create_complaint_ticket
   - id: branch_complaint_created
     type: logic_gate
-    condition: {op: eq, field: complaint_created, value: true}
+    condition:
+      {
+        op: eq,
+        field: complaint_created,
+        value: true,
+        failure_reason: A complaint ticket could not be created.
+      }
     on_true: complaint_confirmed
     on_false: complaint_failed
   - id: complaint_confirmed
