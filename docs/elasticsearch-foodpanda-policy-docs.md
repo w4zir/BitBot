@@ -12,9 +12,7 @@ The backend retriever (`backend/rag/policy_retriever.py`) runs a `multi_match` q
 | `content` | Main body text (your Markdown or plain text). |
 | `tags` | Optional keywords (string or array of strings, depending on mapping); included in search. |
 
-Environment variables (see `.env.example`): `ES_HOST`, `ES_PORT`, `ES_SCHEME`, **`ES_POLICY_INDEX`** (default `policy_docs`), `ES_TIMEOUT_SECONDS`. Use the same index name for uploads as in `ES_POLICY_INDEX`.
-
-## Source files
+Environment variables (see `.env.example`; **host** uploads: copy `.env.local.example` to `.env.local` so `ES_HOST=localhost`, or pass `--host localhost`): `ES_HOST`, `ES_PORT`, `ES_SCHEME`, **`ES_POLICY_INDEX`** (default `policy_docs`), `ES_TIMEOUT_SECONDS`. Use the same index name for uploads as in `ES_POLICY_INDEX`.
 
 The Foodpanda sample policies are **twelve** Markdown files under `data/policy_docs/foodpanda/policy_docs/`:
 
@@ -37,7 +35,7 @@ The repository includes a small uploader: [`scripts/upload_foodpanda_policy_docs
 
 - Run commands from the **repository root** (`BitBot/`).
 - Elasticsearch **reachable** on HTTP (this project’s Compose disables Elasticsearch security for local dev).
-- Python 3.10+ (stdlib only; no extra packages).
+- Python 3.10+ and the repo virtualenv / dependencies (the uploader loads `.env` then `.env.local` via [`backend/repo_dotenv.py`](../backend/repo_dotenv.py), same as other scripts).
 
 Start Elasticsearch if needed:
 
@@ -157,6 +155,6 @@ Post to `POST /{index}/_bulk` with `Content-Type: application/x-ndjson` and a tr
 | Script exits with bulk errors | Re-run with a fresh index or fix mapping conflicts; stderr lists failing items. |
 | `Create index failed` | Permissions, wrong URL, or cluster not ready. |
 | Backend returns no policy hits | Set `ES_HOST` for the backend; index name must match `ES_POLICY_INDEX`. |
-| Wrong host from `.env` | `.env` may set `ES_HOST=elasticsearch` (for Compose). For a script on the host, pass `--host localhost` or unset `ES_HOST`. |
+| Wrong host from `.env` | `.env` uses Docker service names (`elasticsearch`). For uploads from the host, use `.env.local` from `.env.local.example`, pass `--host localhost`, or set `ES_HOST=localhost` for that shell only. |
 
 For more generic Compose-oriented examples, see the [README](../README.md) section “How to add data to Elasticsearch”.

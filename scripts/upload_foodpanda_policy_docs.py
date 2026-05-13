@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Upload Foodpanda policy Markdown files to Elasticsearch via the bulk API.
 
-Run from the repository root. Uses only the Python standard library.
+Run from the repository root. Loads ``.env`` then ``.env.local`` via
+``backend.repo_dotenv`` (same as other repo scripts).
 
-Environment (defaults in parentheses; align with `.env.example`):
+Environment (defaults in parentheses; align with `.env.example` / `.env.local.example`):
   ES_HOST (localhost), ES_PORT (9200), ES_SCHEME (http),
   ES_POLICY_INDEX (policy_docs), ES_TIMEOUT_SECONDS (60 for this script).
 
@@ -24,6 +25,14 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from backend.repo_dotenv import load_repo_dotenv
+
+load_repo_dotenv(REPO_ROOT)
 
 DEFAULT_SOURCE = Path("data/policy_docs/foodpanda/policy_docs")
 

@@ -46,7 +46,7 @@ flowchart LR
 
 ## How to add data to Elasticsearch
 
-Policy retrieval (`backend/rag/policy_retriever.py`) queries Elasticsearch with a `multi_match` on **`title`**, **`content`**, and **`tags`**. Configure the cluster with `.env` (see `.env.example`): `ES_HOST`, `ES_PORT`, `ES_SCHEME`, **`ES_POLICY_INDEX`** (default: `policy_docs`), and `ES_TIMEOUT_SECONDS`. With Docker Compose, these are passed into the `backend` service.
+Policy retrieval (`backend/rag/policy_retriever.py`) queries Elasticsearch with a `multi_match` on **`title`**, **`content`**, and **`tags`**. Configure the cluster with `.env` (see `.env.example`; host scripts also use `.env.local` from `.env.local.example`). `ES_HOST`, `ES_PORT`, `ES_SCHEME`, **`ES_POLICY_INDEX`** (default: `policy_docs`), and `ES_TIMEOUT_SECONDS`. With Docker Compose, `docker-compose.yml` passes these into the `backend` service (with defaults when a key is missing).
 
 **Foodpanda sample policies:** to index the Markdown under `data/policy_docs/foodpanda/policy_docs/`, use the bundled script (see [docs/elasticsearch-foodpanda-policy-docs.md](docs/elasticsearch-foodpanda-policy-docs.md)):
 
@@ -113,31 +113,33 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
    Set `POSTGRES_USER`, `POSTGRES_PASSWORD`, and any overrides.
 
-   **vLLM in Compose:** the default `docker-compose.yml` includes a `vllm` service (prebuilt `vllm/vllm-openai` image) that needs **NVIDIA GPU** support in Docker (`gpus: all`). Add **`VLLM_MODEL=<huggingface-model-id>`** to `.env` before `docker compose up` — the stack uses `${VLLM_MODEL:?…}` so Compose fails fast if it is missing. To use **host Ollama** instead, keep `*_MODEL_PROVIDER=ollama` (defaults); the backend does not need the `vllm` container to be healthy for that path, but the container still starts unless you remove or override the `vllm` service locally.
+2. **Host scripts** (Python from your machine, not inside Compose): copy [`.env.local.example`](.env.local.example) to `.env.local` so `localhost` URLs override the Docker-oriented values in `.env`. Compose does **not** read `.env.local`; repo scripts load `.env` then `.env.local` via [`backend/repo_dotenv.py`](backend/repo_dotenv.py) (skipped inside containers).
 
-2. **Train and export** a model to `training/models/modernbert_finetuned/` (see [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md)). The `modernbert` container mounts this path read-only; without valid tokenizer + model files, that service will not start.
+3. **vLLM in Compose:** the default `docker-compose.yml` includes a `vllm` service (prebuilt `vllm/vllm-openai` image) that needs **NVIDIA GPU** support in Docker (`gpus: all`). Add **`VLLM_MODEL=<huggingface-model-id>`** to `.env` before `docker compose up` — the stack uses `${VLLM_MODEL:?…}` so Compose fails fast if it is missing. To use **host Ollama** instead, keep `*_MODEL_PROVIDER=ollama` (defaults); the backend does not need the `vllm` container to be healthy for that path, but the container still starts unless you remove or override the `vllm` service locally.
 
-3. Start services:
+4. **Train and export** a model to `training/models/modernbert_finetuned/` (see [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md)). The `modernbert` container mounts this path read-only; without valid tokenizer + model files, that service will not start.
+
+5. Start services:
 
    ```bash
    docker compose up --build
    ```
 
-4. Open the UI at **http://localhost:8501** (backend API: **http://localhost:8000**).
+6. Open the UI at **http://localhost:8501** (backend API: **http://localhost:8000**).
 
-5. Try classification (Bento only, no Postgres/LLM). The **`elasticsearch`** image includes `curl` and shares the Compose network with **`backend`**, so call the API by service name:
+7. Try classification (Bento only, no Postgres/LLM). The **`elasticsearch`** image includes `curl` and shares the Compose network with **`backend`**, so call the API by service name:
 
    ```bash
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\",\"full_flow\":false}"
    ```
 
-6. Full conversation flow (Postgres + LangGraph + LLM): choose **Ollama** (local), **Cerebras** (cloud API key), or **vLLM** (OpenAI-compatible; default Compose wires `VLLM_API_BASE=http://vllm:8000/v1`). Set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `INTENT_MODEL_PROVIDER` / `INTENT_MODEL` in `.env` (see `.env.example`). For **Ollama**, set `OLLAMA_BASE_URL` and ensure the server is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). For **vLLM**, set providers to `vllm` and `*_MODEL` to the same HuggingFace model id as `VLLM_MODEL` on the server. Then:
+8. Full conversation flow (Postgres + LangGraph + LLM): choose **Ollama** (local), **Cerebras** (cloud API key), or **vLLM** (OpenAI-compatible; default Compose wires `VLLM_API_BASE=http://vllm:8000/v1`). Set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `INTENT_MODEL_PROVIDER` / `INTENT_MODEL` in `.env` (see `.env.example`). For **Ollama**, set `OLLAMA_BASE_URL` and ensure the server is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). For **vLLM**, set providers to `vllm` and `*_MODEL` to the same HuggingFace model id as `VLLM_MODEL` on the server. Then:
 
    ```bash
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"
    ```
 
-7. Escalation decision action (for pending `interrupt` steps in procedures):
+9. Escalation decision action (for pending `interrupt` steps in procedures):
 
    ```bash
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/escalations/decision -H "Content-Type: application/json" -d "{\"session_id\":\"<session-uuid>\",\"action_id\":\"<action-id>\",\"decision\":\"accept\"}"

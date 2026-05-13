@@ -1,18 +1,52 @@
 #!/usr/bin/env python3
+"""
+Extract policy constraints from retrieved policy documents and write validated
+per-intent YAML artifacts under `backend/policy_constraints`.
+
+Usage:
+  python scripts/extract_policy_constraints.py
+  python scripts/extract_policy_constraints.py --dry-run
+  python scripts/extract_policy_constraints.py --intent order_cancel
+  python scripts/extract_policy_constraints.py --log-level DEBUG
+
+CLI options:
+  --dry-run           Do not write output YAML files.
+  --intent <intent>   Extract constraints for one intent only.
+  --log-level <lvl>   Python logging level (default: INFO).
+
+Environment variables are loaded from the repository ``.env`` then optional
+``.env.local`` (host scripts only; see ``backend/repo_dotenv.py``). Values
+already set in the process environment are preserved for ``.env``; ``.env.local``
+overrides those defaults.
+
+If the configured LLM endpoint is unreachable (for example Ollama not running),
+the script still exits successfully and writes default constraints, with
+``metadata.llm_error`` recording the failure.
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from backend.repo_dotenv import load_repo_dotenv
+
+load_repo_dotenv(REPO_ROOT)
 
 from backend.agent.policy_constraints import PolicyConstraints, policy_constraints_dir
 from backend.agent.procedures import load_blueprints
 from backend.llm.providers import chat_completion, extract_json_object
-from backend.rag.policy_retriever import search_policy_docs
+from backend.rag.policy_retriever import ping_elasticsearch, search_policy_docs
 
 logger = logging.getLogger("extract_policy_constraints")
 
@@ -80,6 +114,14 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO))
+
+    es_ok, es_reason = ping_elasticsearch()
+    if not es_ok:
+        msg = f"Elasticsearch is not reachable: {es_reason}"
+        logger.error(msg)
+        print(f"Error: {msg}", file=sys.stderr)
+        return 1
+
     base_dir = policy_constraints_dir()
     blueprints = sorted(load_blueprints().values(), key=lambda x: (x.category, x.intent))
     for bp in blueprints:
@@ -90,8 +132,32 @@ def main() -> int:
         query = f"{category} {intent} policy"
         docs = search_policy_docs(query)
         logger.info("extract start category=%s intent=%s docs=%s", category, intent, len(docs))
+        if not docs:
+            warn_msg = (
+                f"No matching policy documents in Elasticsearch for category={category!r} "
+                f"intent={intent!r} query={query!r}"
+            )
+            logger.warning(warn_msg)
+            print(f"Warning: {warn_msg}", file=sys.stderr)
 
-        parsed = _llm_extract(category, intent, docs, query) if docs else {}
+        llm_error_msg: str | None = None
+        parsed: dict[str, Any] = {}
+        if docs:
+            try:
+                parsed = _llm_extract(category, intent, docs, query)
+            except httpx.HTTPError as exc:
+                llm_error_msg = str(exc)
+                logger.warning(
+                    "llm_extract_failed category=%s intent=%s error=%s",
+                    category,
+                    intent,
+                    exc,
+                )
+                print(
+                    f"Warning: LLM request failed for intent={intent!r}: {exc}. Using default constraints.",
+                    file=sys.stderr,
+                )
+
         model: PolicyConstraints
         try:
             merged = {**_default_constraints(category, intent, docs, query).model_dump(), **parsed}
@@ -106,6 +172,10 @@ def main() -> int:
             model = _default_constraints(category, intent, docs, query)
             model.auto_resolvable = False
             model.metadata = {**model.metadata, "validation_error": str(exc)}
+
+        if llm_error_msg is not None:
+            model.auto_resolvable = False
+            model.metadata = {**model.metadata, "llm_error": llm_error_msg}
 
         output = base_dir / category / f"{intent}.yaml"
         _write_yaml(output, model, args.dry_run)

@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 import uuid
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-load_dotenv()
+from backend.repo_dotenv import load_repo_dotenv
+
+load_repo_dotenv()
 
 import backend.config  # noqa: F401 — configure logging
 from backend.api.routes.classify import router as classify_router

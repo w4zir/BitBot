@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -19,15 +18,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from backend.agent.issue_graph import _classify_intent_node
 from backend.db.intents_repo import get_intents_for_category
+from backend.repo_dotenv import load_repo_dotenv
 from backend.rag.query_classifier import QueryClassifier
 
 
 DEFAULT_INPUT_FILE = REPO_ROOT / "data" / "raw" / "simulated" / "category_intent.jsonl"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "testing" / "results" / "modernbert_n_intent"
-
-
-def _load_project_env() -> None:
-    load_dotenv(REPO_ROOT / ".env")
 
 
 @dataclass(frozen=True)
@@ -522,7 +518,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    _load_project_env()
+    load_repo_dotenv(REPO_ROOT)
     parser = _build_parser()
     args = parser.parse_args()
 

@@ -893,7 +893,7 @@ The current implementation is already functional with:
 - **Judge LLM config**: LLM judge keeps separate provider/model settings (`llm_judge_*`).
 - **Postgres fixture**: `testing/simulator/fixtures/` should contain a minimal anonymised snapshot generated with `pg_dump --data-only --table=orders --table=users --table=subscriptions`. This allows deterministic re-runs in CI without a live DB.
 - **CI integration**: run `testing/simulator/suites/smoke.yaml` on every PR (fast, small scenario set; omit `llm_judge` if you need zero LLM cost). Run `testing/simulator/suites/regression.yaml` nightly (full suite; add `llm_judge` / baseline diff when those are wired and stable).
-- **Environment variables** required by the simulator:
+- **Environment variables** required by the simulator (typical **host** run: copy `.env.local.example` to `.env.local` next to `.env`, or export `localhost` URLs yourself; inside Compose the runner skips `.env.local` — see `backend/repo_dotenv.py`):
 
 ```bash
 SIMULATOR_AGENT_URL=http://localhost:8000/classify
@@ -902,7 +902,6 @@ POSTGRES_PORT=5432
 POSTGRES_DB=ecom_support
 POSTGRES_USER=admin
 POSTGRES_PASSWORD=...
-POSTGRES_HOST_SIMULATOR=localhost
 
 # Persona (user-message generation) LLM
 SIMULATOR_USER_LLM_PROVIDER=ollama

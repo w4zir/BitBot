@@ -12,11 +12,11 @@ from itertools import cycle
 from pathlib import Path
 from typing import Any, Callable
 
-from dotenv import load_dotenv
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from backend.repo_dotenv import load_repo_dotenv
 
 from testing.simulator.config import SeedConfig, SuiteConfig
 from testing.simulator.hydrator import ScenarioInstance
@@ -450,8 +450,7 @@ def run_generation(
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_dotenv(REPO_ROOT / ".env", override=False)
-    load_dotenv(override=False)
+    load_repo_dotenv(REPO_ROOT)
 
     parser = _build_parser()
     args = parser.parse_args(argv)

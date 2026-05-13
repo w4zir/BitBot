@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import sys
 import tempfile
 import time
 import urllib.error
@@ -13,13 +14,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AbstractSet
 
-from dotenv import load_dotenv
 from openai import APIError, OpenAI
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.repo_dotenv import load_repo_dotenv
 
 # Write full JSON checkpoint every N successful batches (final write is always performed).
 CHECKPOINT_EVERY_N_SUCCESSFUL_BATCHES = 5
 
-ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / "data" / "issue_classification" / "generated_is_issue_dataset.json"
 
 CATEGORIES = [
@@ -94,14 +99,6 @@ FEW_SHOT_ISSUE = [
         "notes": "Delivery discrepancy requiring tracking/investigation",
     },
 ]
-
-
-def load_env() -> None:
-    candidates = [Path.cwd() / ".env", ROOT / ".env", Path(__file__).resolve().parent / ".env"]
-    for env_file in candidates:
-        if env_file.exists():
-            load_dotenv(env_file, override=False)
-            return
 
 
 def resolve_provider(args_provider: str | None) -> str:
@@ -736,7 +733,7 @@ def print_dry_run_sample_chat_request(
 
 
 def generate_dataset(args: argparse.Namespace) -> None:
-    load_env()
+    load_repo_dotenv(ROOT)
     provider = resolve_provider(args.provider)
     model = resolve_model(provider, args.model)
     output_path, output_was_directory = resolve_output_path(args.output)

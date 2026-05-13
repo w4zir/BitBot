@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
-from dotenv import load_dotenv
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from backend.repo_dotenv import load_repo_dotenv
 
 from testing.simulator.config import (
     PersonaConfig,
@@ -36,12 +41,7 @@ from testing.simulator.trace import ConversationTrace
 
 
 def main() -> int:
-    # Load repo-level .env for local simulator runs, while preserving explicit shell env.
-    load_dotenv(override=False)
-    simulator_pg_host = os.getenv("POSTGRES_HOST_SIMULATOR", "").strip()
-    if simulator_pg_host:
-        # Simulator can run against a different postgres host than app runtime.
-        os.environ["POSTGRES_HOST"] = simulator_pg_host
+    load_repo_dotenv(REPO_ROOT)
 
     parser = _build_arg_parser()
     args = parser.parse_args()

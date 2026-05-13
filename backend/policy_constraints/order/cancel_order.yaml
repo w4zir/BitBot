@@ -1,42 +1,21 @@
-schema_version: "1.0"
+schema_version: '1.0'
 category: order
 intent: cancel_order
 policy_doc_names:
-  - Order Cancellation Policy
-source_query: order cancel_order cancellation policy
-auto_resolvable: true
+- Order Cancellation Policy
+- Fraud Prevention & Order Verification
+- Delivery Period Policy
+source_query: order cancel_order policy
+auto_resolvable: false
 requires_evidence: false
-default_ineligible_reason: Cancellation is not allowed for this order under current policy.
-time_limits:
-  order_age_hours_max: 24
-eligibility_rules:
-  - id: order_must_exist
-    description: Order must exist before cancellation.
-    field: order_found
-    op: eq
-    value: true
-    failure_reason: We could not find the order.
-  - id: order_not_delivered
-    description: Delivered orders cannot be cancelled.
-    field: order_status
-    op: neq
-    value: delivered
-    failure_reason: Delivered orders are not cancellable.
-  - id: order_within_time_limit
-    description: Cancellation is only available for recent orders.
-    field: order_age_hours
-    op: lte
-    value_from: policy.time_limits.order_age_hours_max
-    failure_reason: Cancellation window has expired.
+default_ineligible_reason: The request does not satisfy policy constraints.
+time_limits: {}
+eligibility_rules: []
 required_conditions: []
-escalation_conditions:
-  - id: cancel_not_auto_resolvable
-    description: Escalate when policy blocks auto-resolution.
-    field: policy_eligible
-    op: eq
-    value: false
-    failure_reason: Escalation needed for cancellation review.
-response_guidance:
-  - Explain cancellation result and include order id.
+escalation_conditions: []
+response_guidance: []
 metadata:
-  artifact: order/cancel_order
+  extractor: offline_policy_pipeline
+  llm_error: 'Client error ''404 Not Found'' for url ''http://localhost:11434/api/chat''
+
+    For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404'

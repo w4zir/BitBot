@@ -41,7 +41,9 @@ for payment, invoice, subscription, contact, delivery, feedback, shipping addres
    docker compose exec -T postgres psql -U "${POSTGRES_USER:-admin}" -d "${POSTGRES_DB:-ecom_support}" -f - < db/postgres/03_smoke_checks.sql
    ```
 
-Required environment variables (minimum):
+Required environment variables (minimum for running the simulator **on the host** against a Compose database):
+
+Copy [`.env.local.example`](../.env.local.example) to `.env.local` next to your `.env` so repo scripts override Docker service hostnames with `localhost` (see [`backend/repo_dotenv.py`](../backend/repo_dotenv.py)). Alternatively set:
 
 ```bash
 POSTGRES_HOST=localhost
@@ -56,9 +58,6 @@ Common simulator variables:
 ```bash
 # Override classify endpoint if needed
 SIMULATOR_AGENT_URL=http://localhost:8000/classify
-
-# Optional dedicated DB host for simulator process
-POSTGRES_HOST_SIMULATOR=localhost
 
 # User-message generation LLM (required). Provider: ollama | cerebras | vllm
 SIMULATOR_USER_LLM_PROVIDER=ollama
@@ -76,6 +75,7 @@ SIMULATOR_USER_LLM_REPEAT_PENALTY=1.1
 
 # LLM judge provider/timeout when llm_judge is enabled (ollama | cerebras | vllm)
 SIMULATOR_LLM_PROVIDER=ollama
+SIMULATOR_LLM_MODEL=llama3.2
 SIMULATOR_LLM_TIMEOUT_SECONDS=120
 ```
 
