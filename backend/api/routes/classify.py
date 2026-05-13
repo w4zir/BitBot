@@ -234,32 +234,16 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             "problem_to_solve": problem_to_solve,
             "procedure_id": procedure_id,
             "confidence": conf,
-            "context_data": graph_out.get("context_data") if isinstance(graph_out.get("context_data"), dict) else {},
-            "policy_constraints": graph_out.get("policy_constraints")
-            if isinstance(graph_out.get("policy_constraints"), dict)
-            else {},
-            "policy_check_results": graph_out.get("policy_check_results")
-            if isinstance(graph_out.get("policy_check_results"), list)
-            else [],
-            "eligibility_ok": graph_out.get("eligibility_ok")
-            if isinstance(graph_out.get("eligibility_ok"), bool)
-            else None,
-            "outcome_status": str(graph_out.get("outcome_status") or ""),
             "agent_state": graph_out.get("agent_state")
             if isinstance(graph_out.get("agent_state"), dict)
-            else {},
-            "stage_metadata": graph_out.get("stage_metadata")
-            if isinstance(graph_out.get("stage_metadata"), dict)
             else {},
             "agent_trace": graph_out.get("agent_trace")
             if isinstance(graph_out.get("agent_trace"), dict)
             else {},
-            "output_validation": graph_out.get("output_validation")
-            if isinstance(graph_out.get("output_validation"), dict)
-            else {},
-            "context_summary": graph_out.get("context_summary")
-            if isinstance(graph_out.get("context_summary"), dict)
-            else {},
+            "eligibility_ok": graph_out.get("eligibility_ok")
+            if isinstance(graph_out.get("eligibility_ok"), bool)
+            else None,
+            "outcome_status": str(graph_out.get("outcome_status") or ""),
             "validation_wait_count": int(graph_out.get("validation_wait_count") or 0),
             "validation_wait_limit": int(graph_out.get("validation_wait_limit") or 0),
             **(meta if isinstance(meta, dict) else {}),

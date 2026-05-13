@@ -422,7 +422,7 @@ def test_escalation_decision_endpoint(client: TestClient, monkeypatch: pytest.Mo
     assert inserted and inserted[0]["metadata"]["pending_human_action"] is False
 
 
-def test_classify_exposes_agent_state_and_policy_variable_maps(
+def test_classify_persists_compact_assistant_metadata(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
 ) -> None:
     messages_store: list[dict] = []
@@ -468,13 +468,15 @@ def test_classify_exposes_agent_state_and_policy_variable_maps(
     assert r.status_code == 200
     data = r.json()
     md = data["assistant_metadata"]
+    assert isinstance(md.get("validation_wait_count"), int)
+    assert isinstance(md.get("validation_wait_limit"), int)
+    assert md.get("outcome_status") in {"needs_more_data", "resolved"}
     assert isinstance(md.get("agent_state"), dict)
-    assert isinstance(md.get("stage_metadata"), dict)
+    assert md.get("agent_state")
+    assert "stage_metadata" not in md
     assert isinstance(md.get("agent_trace"), dict)
-    policy_constraints = md.get("policy_constraints") or {}
-    assert policy_constraints.get("schema_version") == "1.0"
-    assert isinstance(policy_constraints.get("eligibility_rules"), list)
-    assert "raw_chunks" not in policy_constraints
+    assert md.get("agent_trace")
+    assert "policy_constraints" not in md
     assert "failure_reasons" in md
     assert isinstance(md["failure_reasons"], list)
 

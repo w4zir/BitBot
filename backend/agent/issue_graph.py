@@ -129,44 +129,21 @@ def _with_stage_metadata(
     state: IssueGraphState,
     stage_name: str,
     details: dict[str, Any] | None = None,
+    *,
+    llm_call: dict[str, Any] | None = None,
 ) -> IssueGraphState:
     stage_metadata = dict(state.get("stage_metadata") or {})
-    context = dict(state.get("context_data") or {})
-    policy = dict(state.get("policy_constraints") or {})
     ts = _utc_now_iso()
-    state_context = {
-        "text": str(state.get("text") or ""),
-        "category": str(state.get("category") or ""),
-        "intent": str(state.get("intent") or ""),
-        "procedure_id": str(state.get("procedure_id") or ""),
-        "current_step_index": int(state.get("current_step_index") or 0),
-        "validation_ok": state.get("validation_ok"),
-        "validation_missing": list(state.get("validation_missing") or []),
-        "validation_wait_count": int(state.get("validation_wait_count") or 0),
-        "validation_wait_limit": int(state.get("validation_wait_limit") or _validation_wait_limit()),
-        "eligibility_ok": state.get("eligibility_ok"),
-        "outcome_status": state.get("outcome_status"),
-        "order_status_before": context.get("order_status_before"),
-        "order_status_after": context.get("order_status_after"),
-        "context_data": _compact_context_data(context),
-        "policy": {
-            "eligible": policy.get("eligible"),
-            "reason": policy.get("reason"),
-            "policy_doc_names": list(policy.get("policy_doc_names") or []),
-        },
-    }
-    detail_map = dict(details or {})
+    detail_map = {k: v for k, v in dict(details or {}).items() if v is not None}
+    llm_payload = dict(llm_call or {}) if isinstance(llm_call, dict) else None
     step_entry = {
-        "ts": ts,
+        "timestamp": ts,
         "step_id": str(detail_map.get("step_id") or ""),
-        "step_type": str(detail_map.get("step_type") or ""),
-        "state": state_context,
-        "context": {
-            "details": detail_map,
-            "context_data": dict(state_context.get("context_data") or {}),
-            "tool_call": (state_context.get("context_data") or {}).get("tool_call"),
-        },
+        "step_type": str(detail_map.get("step_type") or ("llm_call" if llm_payload else "node_operation")),
+        "details": detail_map,
     }
+    if llm_payload:
+        step_entry["llm_call"] = llm_payload
     existing = stage_metadata.get(stage_name)
     prior_steps = []
     if isinstance(existing, dict):
@@ -174,9 +151,7 @@ def _with_stage_metadata(
         if isinstance(raw_steps, list):
             prior_steps = [item for item in raw_steps if isinstance(item, dict)]
     stage_metadata[stage_name] = {
-        "ts": ts,
-        "state_context": state_context,
-        **detail_map,
+        "timestamp": ts,
         "steps": [*prior_steps, step_entry],
     }
     return {
@@ -352,40 +327,34 @@ def build_agent_trace(
         if isinstance(steps_raw, list):
             step_dicts = [item for item in steps_raw if isinstance(item, dict)]
         if not step_dicts:
-            synthesized_state = dict(node_raw.get("state_context") or {})
             synthesized_details = {
                 k: v
                 for k, v in node_raw.items()
-                if k not in {"state_context", "steps"}
+                if k not in {"steps"}
             }
             step_dicts = [
                 {
-                    "ts": node_raw.get("ts"),
+                    "timestamp": node_raw.get("timestamp"),
                     "step_id": str(synthesized_details.get("step_id") or ""),
                     "step_type": str(synthesized_details.get("step_type") or ""),
-                    "state": synthesized_state,
-                    "context": {
-                        "details": synthesized_details,
-                        "context_data": dict(synthesized_state.get("context_data") or {}),
-                        "tool_call": (synthesized_state.get("context_data") or {}).get("tool_call"),
-                    },
+                    "details": synthesized_details,
                 }
             ]
         formatted_steps: list[dict[str, Any]] = []
         for index, step in enumerate(step_dicts, start=1):
-            state_at_step = dict(step.get("state") or node_raw.get("state_context") or {})
-            context_at_step = dict(step.get("context") or {})
-            step_id = str(step.get("step_id") or context_at_step.get("step_id") or f"{node_name}_{index}")
-            step_type = str(step.get("step_type") or context_at_step.get("step_type") or "node_operation")
-            formatted_steps.append(
-                {
-                    "step_id": step_id,
-                    "step_type": step_type,
-                    "timestamp": step.get("ts") or node_raw.get("ts"),
-                    "state": state_at_step,
-                    "context": context_at_step,
-                }
-            )
+            details = dict(step.get("details") or {})
+            step_id = str(step.get("step_id") or details.get("step_id") or f"{node_name}_{index}")
+            step_type = str(step.get("step_type") or details.get("step_type") or "node_operation")
+            formatted = {
+                "step_id": step_id,
+                "step_type": step_type,
+                "timestamp": step.get("timestamp") or node_raw.get("timestamp"),
+                "details": details,
+            }
+            llm_call = step.get("llm_call")
+            if isinstance(llm_call, dict):
+                formatted["llm_call"] = llm_call
+            formatted_steps.append(formatted)
         nodes[node_name] = {"steps": formatted_steps}
     return {
         "state": dict(agent_state or {}),
@@ -505,6 +474,7 @@ def _build_policy_check_result(
     actual_value: Any,
     expected_value: Any,
     source: str,
+    condition: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return PolicyCheckResult(
         check_id=check_id,
@@ -513,6 +483,7 @@ def _build_policy_check_result(
         actual_value=actual_value,
         expected_value=expected_value,
         source=source,
+        condition=dict(condition or {}),
     ).model_dump()
 
 
@@ -565,11 +536,13 @@ def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
     meta["branch"] = "no_issue_direct"
     meta["model_provider"] = provider
     meta["model"] = model
+    llm_error = ""
     try:
         reply = chat_completion(provider=provider, model=model, messages=llm_messages)
     except Exception as e:  # noqa: BLE001
         reply = f"(Model error: {e})"
         meta["error"] = str(e)
+        llm_error = str(e)
 
     out: IssueGraphState = {
         **state,
@@ -586,6 +559,13 @@ def _no_issue_direct_node(state: IssueGraphState) -> IssueGraphState:
         out,
         "no_issue_direct",
         {"model_provider": provider, "model": model, "response_generated": bool(reply)},
+        llm_call={
+            "provider": provider,
+            "model": model,
+            "messages": llm_messages,
+            "raw_response": reply,
+            "error": llm_error,
+        },
     )
 
 
@@ -595,7 +575,7 @@ def _generate_ineligibility_response(
     messages: list[dict[str, Any]],
     text: str,
     failure_reasons: list[str] | None = None,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     provider = os.getenv("NO_ISSUE_MODEL_PROVIDER", "ollama").strip().lower()
     model = os.getenv("NO_ISSUE_MODEL", "llama3.2").strip()
     merged: list[str] = []
@@ -621,7 +601,7 @@ def _generate_ineligibility_response(
         "Write one concise customer-facing response."
     )
     try:
-        return chat_completion(
+        raw = chat_completion(
             provider=provider,
             model=model,
             messages=[
@@ -629,15 +609,34 @@ def _generate_ineligibility_response(
                 {"role": "user", "content": user_prompt},
             ],
         )
+        return (
+            raw,
+            {
+                "provider": provider,
+                "model": model,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
+                "raw_response": raw,
+            },
+        )
     except Exception:  # noqa: BLE001
         fallback_reason = (
             "; ".join(merged).strip()
             if merged
             else (reason.strip() or "this request is not eligible under our current policy.")
         )
-        return (
+        fallback = (
             "I am sorry, but I cannot complete that request because "
             f"{fallback_reason} Please let me know if you want help with an alternative next step."
+        )
+        return (
+            fallback,
+            {
+                "provider": provider,
+                "model": model,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
+                "raw_response": fallback,
+                "error": "model_error",
+            },
         )
 
 
@@ -769,6 +768,8 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
     ]
     data: dict[str, Any] = {}
     attempt_count = 0
+    llm_error = ""
+    raw = ""
     for attempt_count in range(1, MAX_NODE_TURNS + 1):
         try:
             raw = chat_completion(provider=provider, model=model, messages=llm_messages)
@@ -781,6 +782,7 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
                 break
         except Exception as e:  # noqa: BLE001
             meta["intent_classifier_error"] = str(e)
+            llm_error = str(e)
 
     intent = str(data.get("intent") or f"{category}_general").strip()
     if not intent:
@@ -811,6 +813,15 @@ def _classify_intent_node(state: IssueGraphState) -> IssueGraphState:
             "problem_to_solve": problem_to_solve,
             "allowed_intents_count": len(allowed_intents),
             "attempts": attempt_count,
+        },
+        llm_call={
+            "provider": provider,
+            "model": model,
+            "messages": llm_messages,
+            "raw_response": raw,
+            "parsed_output": data,
+            "attempts": attempt_count,
+            "error": llm_error,
         },
     )
 
@@ -962,6 +973,7 @@ def _evaluate_policy_rules(
             actual_value=eval_out.get("actual_value"),
             expected_value=eval_out.get("expected_value"),
             source="policy_rule",
+            condition=rule,
         )
         results.append(check)
         if not check["passed"]:
@@ -1030,6 +1042,14 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
                 "validation_ok": False,
                 "error": str(last_err),
                 "attempts": validation_attempts,
+            },
+            llm_call={
+                "provider": provider,
+                "model": model,
+                "messages": msgs,
+                "raw_response": raw,
+                "attempts": validation_attempts,
+                "error": str(last_err),
             },
         )
     data = extract_json_object(raw)
@@ -1124,6 +1144,14 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
             "validation_ok": valid,
             "validation_missing": missing_strs,
         },
+        llm_call={
+            "provider": provider,
+            "model": model,
+            "messages": msgs,
+            "raw_response": raw,
+            "parsed_output": data,
+            "attempts": validation_attempts,
+        },
     )
 
 
@@ -1132,6 +1160,7 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
     policy_constraints = dict(validated.get("policy_constraints") or {})
     context_data = dict(validated.get("context_data") or {})
     loaded_checks = list(validated.get("policy_check_results") or [])
+    ineligibility_llm_call: dict[str, Any] | None = None
     rules_ok, rules_reason, rule_checks = _evaluate_policy_rules(
         policy_constraints=policy_constraints,
         context_data=context_data,
@@ -1179,12 +1208,13 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
         out["assistant_metadata"] = meta
     elif not eligibility_ok:
         reason_list = _collect_failure_reasons(out)
-        out["final_response"] = _generate_ineligibility_response(
+        ineligible_response, ineligibility_llm_call = _generate_ineligibility_response(
             reason=reason,
             messages=validated.get("messages") or [],
             text=str(validated.get("text") or ""),
             failure_reasons=reason_list,
         )
+        out["final_response"] = ineligible_response
         out["outcome_status"] = "policy_ineligible"
         out["validation_wait_count"] = 0
     else:
@@ -1200,6 +1230,7 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
             "validation_wait_count": out.get("validation_wait_count"),
             "validation_wait_limit": wait_limit,
         },
+        llm_call=ineligibility_llm_call,
     )
 
 
@@ -1795,7 +1826,7 @@ def _evaluate_condition(
         }
 
 
-def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> str:
+def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     provider = os.getenv("NO_ISSUE_MODEL_PROVIDER", "ollama").strip().lower()
     model = os.getenv("NO_ISSUE_MODEL", "llama3.2").strip()
     system = os.getenv(
@@ -1825,9 +1856,28 @@ def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> str:
     llm_messages.extend(msgs)
     llm_messages.append({"role": "user", "content": user_prompt})
     try:
-        return chat_completion(provider=provider, model=model, messages=llm_messages)
+        raw = chat_completion(provider=provider, model=model, messages=llm_messages)
+        return (
+            raw,
+            {
+                "provider": provider,
+                "model": model,
+                "messages": llm_messages,
+                "raw_response": raw,
+            },
+        )
     except Exception as e:  # noqa: BLE001
-        return f"(Model error: {e})"
+        fallback = f"(Model error: {e})"
+        return (
+            fallback,
+            {
+                "provider": provider,
+                "model": model,
+                "messages": llm_messages,
+                "raw_response": fallback,
+                "error": str(e),
+            },
+        )
 
 
 def _draft_order_cancel_terminal_response(state: IssueGraphState, step: dict[str, Any]) -> str | None:
@@ -1983,6 +2033,7 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
                 actual_value=gate_eval.get("actual_value"),
                 expected_value=gate_eval.get("expected_value"),
                 source="procedure_gate",
+                condition=cond if isinstance(cond, dict) else {},
             )
         )
         return _with_stage_metadata(
@@ -2023,7 +2074,11 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
         deterministic_reply = _draft_order_cancel_terminal_response(state_with_ctx, step)
         if deterministic_reply is None:
             deterministic_reply = _draft_order_status_terminal_response(state_with_ctx, step)
-        reply = deterministic_reply if deterministic_reply is not None else _draft_response(state, step)
+        llm_call: dict[str, Any] | None = None
+        if deterministic_reply is None:
+            reply, llm_call = _draft_response(state, step)
+        else:
+            reply = deterministic_reply
         return _with_stage_metadata(
             {
             **state,
@@ -2034,6 +2089,7 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             },
             "structured_executor",
             {"step_id": step.get("id"), "step_type": step_type, "executor_turn_count": turn_count},
+            llm_call=llm_call,
         )
     else:
         meta = dict(state.get("assistant_metadata") or {})
@@ -2103,8 +2159,8 @@ def _build_context_summary(state: IssueGraphState) -> dict[str, Any]:
         "procedure_id": str(state.get("procedure_id") or ""),
         "outcome_status": str(state.get("outcome_status") or ""),
         "validation_missing": list(state.get("validation_missing") or []),
-        "policy_check_results": list(state.get("policy_check_results") or []),
         "context_data": context,
+        "failure_reasons": list(_collect_failure_reasons(state)),
     }
 
 
@@ -2405,14 +2461,14 @@ def run_conversation_graph(
         "outcome_status": out.get("outcome_status"),
         "specialist_agent_id": out.get("specialist_agent_id"),
         "agent_state": agent_state,
-        "stage_metadata": stage_metadata,
         "agent_trace": agent_trace,
         "validation_wait_count": out.get("validation_wait_count"),
         "validation_wait_limit": out.get("validation_wait_limit"),
-        "output_validation": dict(out.get("output_validation") or {}),
-        "context_summary": dict(out.get("context_summary") or {}),
-        "policy_check_results": list(out.get("policy_check_results") or []),
         "failure_reasons": _collect_failure_reasons(out),  # type: ignore[arg-type]
+        "tool_error": (out.get("assistant_metadata") or {}).get("tool_error"),
+        "step_error": (out.get("assistant_metadata") or {}).get("step_error"),
+        "pending_human_action": (out.get("assistant_metadata") or {}).get("pending_human_action"),
+        "escalation_decision": (out.get("assistant_metadata") or {}).get("escalation_decision"),
     }
     return {
         "text": out.get("text", ""),

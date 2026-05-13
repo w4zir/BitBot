@@ -30,6 +30,7 @@ class PolicyCheckResult(BaseModel):
     actual_value: Any | None = None
     expected_value: Any | None = None
     source: str = "policy"
+    condition: dict[str, Any] = Field(default_factory=dict)
 
 
 class PolicyConstraints(BaseModel):

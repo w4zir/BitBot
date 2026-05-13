@@ -134,14 +134,14 @@ def run_persistent_conversation(
         "outcome_status": out.get("outcome_status"),
         "specialist_agent_id": out.get("specialist_agent_id"),
         "agent_state": agent_state,
-        "stage_metadata": stage_metadata,
         "agent_trace": agent_trace,
         "validation_wait_count": out.get("validation_wait_count"),
         "validation_wait_limit": out.get("validation_wait_limit"),
-        "output_validation": dict(out.get("output_validation") or {}),
-        "context_summary": dict(out.get("context_summary") or {}),
-        "policy_check_results": list(out.get("policy_check_results") or []),
         "failure_reasons": _collect_failure_reasons(out),  # type: ignore[arg-type]
+        "tool_error": (out.get("assistant_metadata") or {}).get("tool_error"),
+        "step_error": (out.get("assistant_metadata") or {}).get("step_error"),
+        "pending_human_action": (out.get("assistant_metadata") or {}).get("pending_human_action"),
+        "escalation_decision": (out.get("assistant_metadata") or {}).get("escalation_decision"),
     }
     return {
         "text": out.get("text", ""),

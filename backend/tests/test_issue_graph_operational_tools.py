@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.agent.issue_graph import (
     _build_agent_state_snapshot,
+    _classify_intent_node,
     _collect_failure_reasons,
     _outcome_validator_node,
     _policy_load_node,
@@ -220,7 +221,7 @@ def test_order_status_before_after_are_db_backed(monkeypatch) -> None:
     assert snap["order_status_after"] == "cancelled"
 
 
-def test_stage_metadata_has_state_context_without_policy_content(monkeypatch) -> None:
+def test_stage_metadata_compact_step_details(monkeypatch) -> None:
     monkeypatch.setattr(
         "backend.agent.issue_graph.get_order_status",
         lambda order_id: {"order_id": order_id, "status": "processing", "total_amount": 12.0},
@@ -243,10 +244,12 @@ def test_stage_metadata_has_state_context_without_policy_content(monkeypatch) ->
 
     out = _structured_executor_node(state)
     stage = (out.get("stage_metadata") or {}).get("structured_executor") or {}
-    state_context = stage.get("state_context") or {}
-    assert isinstance(state_context, dict)
-    assert state_context.get("context_data", {}).get("order_status_before") == "processing"
-    assert state_context.get("policy", {}).get("policy_doc_names") == ["Order Policy"]
+    steps = stage.get("steps") or []
+    assert steps
+    assert isinstance(steps[0].get("details"), dict)
+    assert steps[0]["details"]["step_id"] == "lookup_order"
+    assert steps[0]["details"]["step_type"] == "tool_call"
+    assert "state_context" not in stage
 
 
 def test_build_agent_trace_includes_structured_executor_steps(monkeypatch) -> None:
@@ -279,8 +282,33 @@ def test_build_agent_trace_includes_structured_executor_steps(monkeypatch) -> No
     assert steps
     assert steps[0].get("step_id") == "lookup_order"
     assert steps[0].get("step_type") == "tool_call"
-    assert isinstance(steps[0].get("state"), dict)
-    assert isinstance(steps[0].get("context"), dict)
+    assert isinstance(steps[0].get("details"), dict)
+
+
+def test_classify_intent_stage_keeps_llm_messages(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_intent_definitions_for_category",
+        lambda _category: [{"intent_name": "order_status", "description": "Track order status"}],
+    )
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.chat_completion",
+        lambda **_kwargs: '{"intent":"order_status","problem_to_solve":"Track order"}',
+    )
+    state = {
+        "category": "order",
+        "confidence": 0.9,
+        "messages": [{"role": "user", "content": "where is order ORD-9"}],
+        "assistant_metadata": {},
+        "stage_metadata": {},
+    }
+    out = _classify_intent_node(state)
+    stage = (out.get("stage_metadata") or {}).get("classify_intent") or {}
+    steps = stage.get("steps") or []
+    assert steps
+    llm_call = steps[0].get("llm_call") or {}
+    assert llm_call.get("provider")
+    assert llm_call.get("model")
+    assert isinstance(llm_call.get("messages"), list)
 
 
 def test_order_status_share_status_reply_is_deterministic() -> None:
