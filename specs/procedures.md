@@ -13,10 +13,10 @@ In **this** repository, procedures are not under a generic `blueprints/` folder.
 | Procedure YAML assets | [`backend/procedures/*.yaml`](../backend/procedures/) (one blueprint per supported `(category, intent)`; 16 files at time of writing) |
 | Schema validation, load helpers, duplicate step-id checks | [`backend/agent/procedures.py`](../backend/agent/procedures.py) |
 | Blueprint selection fallback chain | 1) `(category, intent)` 2) `(category, *_general)` 3) `(unknown, *_general)` — not a single `general_research` intent; see [docs/agent.md](../docs/agent.md) § `fetch_procedure` |
-| Deterministic step execution (`retrieval`, `logic_gate`, `tool_call`, `llm_response`, `interrupt`) | [`backend/agent/issue_graph.py`](../backend/agent/issue_graph.py) (`structured_executor` and related nodes) |
+| Deterministic step execution (`logic_gate`, `tool_call`, `llm_response`, `interrupt`) | [`backend/agent/issue_graph.py`](../backend/agent/issue_graph.py) (`structured_executor` and related nodes) |
 | HTTP tool endpoints invoked by `tool_call` steps | [`backend/api/routes/tools.py`](../backend/api/routes/tools.py) — full list in [docs/agent.md](../docs/agent.md) |
 
-**RAG in production:** `retrieval` steps use Elasticsearch policy documents via `multi_match` on `title`, `content`, and `tags` ([`backend/rag/policy_retriever.py`](../backend/rag/policy_retriever.py)); there is no Postgres vector store for policy in the current codebase.
+**Policy in production:** runtime loads reviewed policy artifacts from [`backend/policy_constraints/`](../backend/policy_constraints/). Elasticsearch retrieval and LLM extraction run offline via [`scripts/extract_policy_constraints.py`](../scripts/extract_policy_constraints.py).
 
 The sections below remain a **generic** Fin-style reference (naming, patterns, optional reranker pseudocode). Where they conflict with the table above, **this repository’s paths and fallback chain take precedence** for BitBot implementation work.
 

@@ -1,6 +1,7 @@
 id: delivery_period
 category: delivery
 intent: delivery_period
+policy_required: true
 keywords:
   - delivery period
   - when delivered
@@ -25,4 +26,9 @@ steps:
     type: llm_response
     message: >
       Delivery period data was not found. Ask the user to verify order or tracking reference.
+expected_outcomes:
+  - id: delivery_lookup_outcome_present
+    field: delivery_info_found
+    op: exists
+    failure_reason: Missing delivery lookup outcome.
 fallback_response: I can check delivery period once you share your order or tracking reference.

@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from backend.agent.policy_constraints import PolicyConstraints, policy_constraints_dir
+from backend.agent.procedures import load_blueprints
+from backend.llm.providers import chat_completion, extract_json_object
+from backend.rag.policy_retriever import search_policy_docs
+
+logger = logging.getLogger("extract_policy_constraints")
+
+
+def _default_constraints(category: str, intent: str, docs: list[dict[str, Any]], query: str) -> PolicyConstraints:
+    return PolicyConstraints(
+        category=category,
+        intent=intent,
+        policy_doc_names=[str(d.get("title") or d.get("id") or "").strip() for d in docs if d],
+        source_query=query,
+        auto_resolvable=True,
+        requires_evidence=False,
+        default_ineligible_reason="The request does not satisfy policy constraints.",
+        time_limits={},
+        eligibility_rules=[],
+        required_conditions=[],
+        escalation_conditions=[],
+        metadata={"extractor": "offline_policy_pipeline"},
+    )
+
+
+def _llm_extract(category: str, intent: str, docs: list[dict[str, Any]], query: str) -> dict[str, Any]:
+    model_provider = "ollama"
+    model = "llama3.2"
+    policy_text = "\n\n---\n\n".join(str(doc.get("content") or "") for doc in docs[:3])
+    system = (
+        "You extract deterministic policy constraints for a support automation system.\n"
+        "Return strict JSON only.\n"
+        "Schema keys:\n"
+        "schema_version, category, intent, policy_doc_names, source_query, auto_resolvable, "
+        "requires_evidence, default_ineligible_reason, time_limits, eligibility_rules, required_conditions, "
+        "escalation_conditions, response_guidance, metadata.\n"
+        "Rules in eligibility_rules/required_conditions/escalation_conditions must use keys:\n"
+        "id, description, field, op, value(optional), value_from(optional), failure_reason, applies_to.\n"
+    )
+    user = (
+        f"Category: {category}\n"
+        f"Intent: {intent}\n"
+        f"Search query: {query}\n"
+        f"Docs JSON: {json.dumps(docs, ensure_ascii=False)}\n"
+        f"Policy text excerpt:\n{policy_text[:8000]}"
+    )
+    raw = chat_completion(
+        provider=model_provider,
+        model=model,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+    )
+    return extract_json_object(raw)
+
+
+def _write_yaml(path: Path, model: PolicyConstraints, dry_run: bool) -> None:
+    payload = model.model_dump()
+    if dry_run:
+        logger.info("dry-run write: %s", path)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=False), encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Extract policy constraints from Elasticsearch docs into YAML artifacts.")
+    parser.add_argument("--dry-run", action="store_true", help="Do not write files.")
+    parser.add_argument("--intent", default="", help="Optional single intent to extract.")
+    parser.add_argument("--log-level", default="INFO", help="Python log level.")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO))
+    base_dir = policy_constraints_dir()
+    blueprints = sorted(load_blueprints().values(), key=lambda x: (x.category, x.intent))
+    for bp in blueprints:
+        if args.intent and bp.intent != args.intent:
+            continue
+        category = bp.category.strip().lower()
+        intent = bp.intent.strip().lower()
+        query = f"{category} {intent} policy"
+        docs = search_policy_docs(query)
+        logger.info("extract start category=%s intent=%s docs=%s", category, intent, len(docs))
+
+        parsed = _llm_extract(category, intent, docs, query) if docs else {}
+        model: PolicyConstraints
+        try:
+            merged = {**_default_constraints(category, intent, docs, query).model_dump(), **parsed}
+            merged["category"] = category
+            merged["intent"] = intent
+            merged["source_query"] = query
+            if not merged.get("policy_doc_names"):
+                merged["policy_doc_names"] = [str(d.get("title") or d.get("id") or "").strip() for d in docs if d]
+            model = PolicyConstraints.model_validate(merged)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("validation_failed category=%s intent=%s error=%s", category, intent, exc)
+            model = _default_constraints(category, intent, docs, query)
+            model.auto_resolvable = False
+            model.metadata = {**model.metadata, "validation_error": str(exc)}
+
+        output = base_dir / category / f"{intent}.yaml"
+        _write_yaml(output, model, args.dry_run)
+        logger.info(
+            "extract done category=%s intent=%s output=%s rules=%s",
+            category,
+            intent,
+            output,
+            len(model.eligibility_rules),
+        )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

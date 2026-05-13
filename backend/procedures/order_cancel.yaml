@@ -1,6 +1,7 @@
 id: order_cancel
 category: order
 intent: cancel_order
+policy_required: true
 keywords:
   - cancel
   - do not want
@@ -16,31 +17,24 @@ steps:
   - id: branch_order_found
     type: logic_gate
     condition: {op: eq, field: order_found, value: true}
-    on_true: retrieve_cancel_policy
+    on_true: branch_order_not_delivered
     on_false: order_not_found
+  - id: branch_order_not_delivered
+    type: logic_gate
+    condition: {op: neq, field: order_status, value: delivered, failure_reason: Delivered orders cannot be cancelled.}
+    on_true: branch_order_within_cancel_window
+    on_false: cancellation_not_allowed
+  - id: branch_order_within_cancel_window
+    type: logic_gate
+    condition:
+      {op: lte, field: order_age_hours, value_from: policy.time_limits.order_age_hours_max, failure_reason: Cancellation window has expired.}
+    on_true: apply_policy_and_cancel_or_decline
+    on_false: cancellation_not_allowed
   - id: order_not_found
     type: llm_response
     message: >
       The order was not found (order_found is false). Tell the customer we could not find this
       order in our system, and ask them to validate their order ID and try again.
-  - id: retrieve_cancel_policy
-    type: retrieval
-    tool: order_policy_search
-  - id: branch_cancel_policy_found
-    type: logic_gate
-    condition: {op: eq, field: policy_found, value: true}
-    on_true: apply_policy_and_cancel_or_decline
-    on_false: escalate_no_cancel_policy
-  - id: escalate_no_cancel_policy
-    type: interrupt
-    action_type: cancel_escalation
-    message: >
-      No cancellation policy could be retrieved for this request. Escalate to a human agent so
-      they can confirm cancellation rules and assist the customer.
-    on_accept_message: >
-      Thanks for confirming. I have escalated this cancellation case to a human support agent.
-    on_reject_message: >
-      Understood. I will not escalate this cancellation case right now.
   - id: apply_policy_and_cancel_or_decline
     type: tool_call
     tool: cancel_order
@@ -60,4 +54,9 @@ steps:
     message: >
       The cancellation could not be executed (cancel_succeeded is false). Explain clearly why
       using cancel_reason from procedure context and guide the customer on next steps.
+expected_outcomes:
+  - id: cancel_outcome_present
+    field: cancel_succeeded
+    op: exists
+    failure_reason: Missing cancellation outcome in context.
 fallback_response: I can help with cancellation once you share your order number so I can verify it.

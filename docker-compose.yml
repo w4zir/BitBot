@@ -39,6 +39,19 @@ services:
     volumes:
       - ${MODERNBERT_MODELS_HOST_DIR:-./training/models}:${MODERNBERT_MODELS_CONTAINER_DIR:-/training/models}:ro
 
+  # OpenAI-compatible server (NVIDIA GPU + driver required). Set VLLM_MODEL in .env.
+  vllm:
+    image: vllm/vllm-openai:latest
+    gpus: all
+    ports:
+      - "${VLLM_HOST_PORT:-8001}:8000"
+    shm_size: "2g"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    command:
+      - "--model"
+      - "${VLLM_MODEL:?Set VLLM_MODEL in .env to a HuggingFace model id served by vLLM}"
+
   backend:
     build: ./backend
     ports:
@@ -62,12 +75,17 @@ services:
       ES_SCHEME: ${ES_SCHEME:-http}
       ES_POLICY_INDEX: ${ES_POLICY_INDEX:-policy_docs}
       ES_TIMEOUT_SECONDS: ${ES_TIMEOUT_SECONDS:-5}
+      VLLM_API_BASE: ${VLLM_API_BASE:-http://vllm:8000/v1}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      VLLM_TEMPERATURE: ${VLLM_TEMPERATURE:-0.2}
     depends_on:
       postgres:
         condition: service_healthy
       elasticsearch:
         condition: service_started
       modernbert:
+        condition: service_started
+      vllm:
         condition: service_started
     healthcheck:
       test:
@@ -105,6 +123,9 @@ services:
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
       CEREBRAS_API_BASE: ${CEREBRAS_API_BASE:-https://api.cerebras.ai/v1}
       CEREBRAS_TEMPERATURE: ${CEREBRAS_TEMPERATURE:-0.2}
+      VLLM_API_BASE: ${VLLM_API_BASE:-http://vllm:8000/v1}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      VLLM_TEMPERATURE: ${VLLM_TEMPERATURE:-0.2}
     depends_on:
       backend:
         condition: service_healthy

@@ -342,20 +342,7 @@ def test_order_status_not_found_step_reports_status_when_order_found() -> None:
     assert "could not find" not in reply
 
 
-def test_policy_load_does_not_apply_cancellation_heuristics_for_refund(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "backend.agent.issue_graph.search_policy_docs",
-        lambda query: [
-            {
-                "title": "Global Returns & Refund Policy",
-                "content": "Refund window and methods.",
-            },
-            {
-                "title": "Order Cancellation Policy",
-                "content": "Order status not in shipped, delivered or cancelled.",
-            },
-        ],
-    )
+def test_policy_load_reads_yaml_by_intent() -> None:
     state = {
         "text": "I need a refund for order ORD-8194",
         "category": "refund",
@@ -368,28 +355,14 @@ def test_policy_load_does_not_apply_cancellation_heuristics_for_refund(monkeypat
     out = _policy_load_node(state)
     context_data = out.get("context_data") or {}
     constraints = out.get("policy_constraints") or {}
-
-    assert context_data.get("policy_found") is True
-    assert "policy_eligible" not in context_data
-    assert "policy_ineligibility_reason" not in context_data
+    assert context_data.get("policy_constraints_path") == "refund/get_refund.yaml"
+    assert context_data.get("policy_schema_version") == "1.0"
+    assert context_data.get("policy_eligible") is True
     assert constraints.get("eligible") is True
     assert constraints.get("reason") == ""
 
 
-def test_refund_success_branch_not_contaminated_by_cancellation_policy(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "backend.agent.issue_graph.search_policy_docs",
-        lambda query: [
-            {
-                "title": "Global Returns & Refund Policy",
-                "content": "Refund methods and windows.",
-            },
-            {
-                "title": "Order Cancellation Policy",
-                "content": "Order status not in shipped, delivered or cancelled.",
-            },
-        ],
-    )
+def test_refund_logic_gate_records_policy_check_result(monkeypatch) -> None:
     monkeypatch.setattr(
         "backend.agent.issue_graph.create_refund_request",
         lambda order_id, reason, **_kwargs: {
@@ -399,20 +372,11 @@ def test_refund_success_branch_not_contaminated_by_cancellation_policy(monkeypat
             "decision": "pending",
         },
     )
-    captured: dict[str, str] = {}
-
-    def _fake_chat_completion(*, provider, model, messages):
-        captured["prompt"] = str(messages[-1]["content"])
-        return "refund-confirmed"
-
-    monkeypatch.setattr("backend.agent.issue_graph.chat_completion", _fake_chat_completion)
-
     state = {
         "procedure_id": "get_refund",
         "text": "I need to start the refund process for order ORD-8194.",
         "messages": [{"role": "user", "content": "I need to start the refund process for order ORD-8194."}],
         "todo_list": [
-            {"id": "retrieve_refund_policy", "type": "retrieval", "tool": "order_policy_search"},
             {"id": "assess_eligibility_and_refund", "type": "tool_call", "tool": "create_refund_request"},
             {
                 "id": "branch_refund_created",
@@ -421,26 +385,26 @@ def test_refund_success_branch_not_contaminated_by_cancellation_policy(monkeypat
                 "on_true": "confirm_refund_submitted",
                 "on_false": "refund_not_created",
             },
-            {"id": "confirm_refund_submitted", "type": "llm_response", "message": "confirm"},
+            {"id": "confirm_refund_submitted", "type": "llm_response", "message": "confirm refund"},
             {"id": "refund_not_created", "type": "llm_response", "message": "deny"},
         ],
         "current_step_index": 0,
         "context_data": {"order_status": "delivered"},
+        "policy_constraints": {},
+        "policy_check_results": [],
         "assistant_metadata": {},
     }
 
-    out = _structured_executor_node(state)
-    out = _structured_executor_node(out)
-    out = _structured_executor_node(out)
-    out = _structured_executor_node(out)
+    out1 = _structured_executor_node(state)
+    out2 = _structured_executor_node(out1)
+    out3 = _structured_executor_node(out2)
 
-    context_data = out.get("context_data") or {}
-    assert out.get("final_response") == "refund-confirmed"
+    context_data = out3.get("context_data") or {}
     assert context_data.get("refund_request_created") is True
     assert context_data.get("refund_request_id") == 1210
-    assert "policy_eligible" not in context_data
-    assert "policy_ineligibility_reason" not in context_data
-    assert "do not invent policy restrictions" in (captured.get("prompt") or "").lower()
+    checks = out2.get("policy_check_results") or []
+    assert checks
+    assert checks[-1]["source"] == "procedure_gate"
 
 
 def test_product_price_tool_step_updates_context(monkeypatch) -> None:

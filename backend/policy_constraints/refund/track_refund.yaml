@@ -1,0 +1,23 @@
+schema_version: "1.0"
+category: refund
+intent: track_refund
+policy_doc_names:
+  - Refund Tracking Policy
+source_query: refund track_refund policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules:
+  - id: tracking_must_exist
+    description: Refund tracking entry must exist.
+    field: refund_tracking_found
+    op: eq
+    value: true
+    failure_reason: Refund tracking details were not found.
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Share refund decision and reason.
+metadata:
+  artifact: refund/track_refund

@@ -1,6 +1,7 @@
 id: get_refund
 category: refund
 intent: get_refund
+policy_required: true
 keywords:
   - refund
   - damaged
@@ -22,31 +23,19 @@ steps:
   - id: branch_order_found
     type: logic_gate
     condition: {op: eq, field: order_found, value: true}
-    on_true: retrieve_refund_policy
+    on_true: branch_refund_window_open
     on_false: order_not_found
   - id: order_not_found
     type: llm_response
     message: >
       The order was not found (order_found is false). Tell the customer we could not find this
       order in our system, and ask them to validate their order ID and try again.
-  - id: retrieve_refund_policy
-    type: retrieval
-    tool: order_policy_search
-  - id: branch_refund_policy_found
+  - id: branch_refund_window_open
     type: logic_gate
-    condition: {op: eq, field: policy_found, value: true}
+    condition:
+      {op: lte, field: order_age_hours, value_from: policy.time_limits.order_age_hours_max, failure_reason: Refund window has expired.}
     on_true: assess_eligibility_and_refund
-    on_false: escalate_no_refund_policy
-  - id: escalate_no_refund_policy
-    type: interrupt
-    action_type: refund_escalation
-    message: >
-      No refund policy could be retrieved for this request. Escalate to a human agent so they
-      can confirm refund rules and assist the customer.
-    on_accept_message: >
-      Thanks for confirming. I have escalated your refund request to a human support agent.
-    on_reject_message: >
-      Understood. I will not escalate this refund request right now.
+    on_false: refund_not_created
   - id: assess_eligibility_and_refund
     type: tool_call
     tool: create_refund_request
@@ -66,4 +55,9 @@ steps:
     message: >
       The refund request could not be created (refund_request_created is false). Explain clearly
       why using refund_request_reason from procedure context and advise the customer on next steps.
+expected_outcomes:
+  - id: refund_outcome_present
+    field: refund_request_created
+    op: exists
+    failure_reason: Missing refund creation outcome in context.
 fallback_response: I can help with a refund once you share your order number so we can look it up.

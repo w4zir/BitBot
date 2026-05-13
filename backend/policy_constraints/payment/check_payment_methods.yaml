@@ -1,0 +1,17 @@
+schema_version: "1.0"
+category: payment
+intent: check_payment_methods
+policy_doc_names:
+  - Payment Methods Policy
+source_query: payment check_payment_methods policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules: []
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - List currently available methods.
+metadata:
+  artifact: payment/check_payment_methods

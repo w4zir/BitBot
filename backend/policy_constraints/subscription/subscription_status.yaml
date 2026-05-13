@@ -1,0 +1,23 @@
+schema_version: "1.0"
+category: subscription
+intent: subscription_status
+policy_doc_names:
+  - Subscription Management Policy
+source_query: subscription subscription_status policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules:
+  - id: subscription_must_exist
+    description: Subscription record must be present.
+    field: subscription_found
+    op: eq
+    value: true
+    failure_reason: Subscription was not found.
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Share plan, status, and next renewal.
+metadata:
+  artifact: subscription/subscription_status

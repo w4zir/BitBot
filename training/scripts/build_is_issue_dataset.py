@@ -106,8 +106,8 @@ def load_env() -> None:
 
 def resolve_provider(args_provider: str | None) -> str:
     provider = (args_provider or os.getenv("LLM_PROVIDER") or "ollama").strip().lower()
-    if provider not in {"ollama", "cerebras"}:
-        raise ValueError("provider must be one of: ollama, cerebras")
+    if provider not in {"ollama", "cerebras", "vllm"}:
+        raise ValueError("provider must be one of: ollama, cerebras, vllm")
     return provider
 
 
@@ -116,12 +116,21 @@ def resolve_model(provider: str, args_model: str | None) -> str:
         return args_model
     if provider == "cerebras":
         return os.getenv("CEREBRAS_MODEL", "llama3.1-8b")
+    if provider == "vllm":
+        m = os.getenv("VLLM_MODEL", "").strip()
+        if not m:
+            raise ValueError(
+                "VLLM_MODEL env var must be set for provider=vllm (or pass --model with a model id)"
+            )
+        return m
     return os.getenv("OLLAMA_MODEL", "llama3.2")
 
 
 def resolve_base_url(provider: str) -> str:
     if provider == "cerebras":
         return os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1")
+    if provider == "vllm":
+        return os.getenv("VLLM_API_BASE", "http://localhost:8000/v1").rstrip("/")
     return os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1"
 
 
@@ -131,6 +140,10 @@ def build_client(provider: str, base_url: str | None = None) -> tuple[OpenAI, st
         api_key = os.getenv("CEREBRAS_API_KEY")
         if not api_key:
             raise RuntimeError("CEREBRAS_API_KEY is required for provider=cerebras")
+        return OpenAI(base_url=resolved_base_url, api_key=api_key), resolved_base_url
+
+    if provider == "vllm":
+        api_key = os.getenv("VLLM_API_KEY", "").strip() or "EMPTY"
         return OpenAI(base_url=resolved_base_url, api_key=api_key), resolved_base_url
 
     api_key = os.getenv("OLLAMA_API_KEY", "ollama")
@@ -526,7 +539,7 @@ def build_chat_completion_kwargs(
     if provider == "ollama":
         kwargs["response_format"] = {"type": "json_object"}
         kwargs["extra_body"] = {"format": "json"}
-    elif provider == "cerebras":
+    elif provider in {"cerebras", "vllm"}:
         kwargs["response_format"] = {"type": "json_object"}
     return kwargs
 
@@ -560,7 +573,7 @@ def provider_call(
                 response = client.chat.completions.create(**kwargs)
             except Exception as new_exc:
                 raise new_exc from orig_exc
-        elif provider == "cerebras":
+        elif provider in {"cerebras", "vllm"}:
             kwargs.pop("response_format", None)
             try:
                 response = client.chat.completions.create(**kwargs)
@@ -912,7 +925,7 @@ def generate_dataset(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate is_issue dataset with configurable class balance (Ollama/Cerebras).",
+        description="Generate is_issue dataset with configurable class balance (Ollama/Cerebras/vLLM).",
         allow_abbrev=True,
     )
     parser.add_argument("--total-needed", type=int, default=10000, help="Total number of samples to generate.")
@@ -931,7 +944,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="provider",
         type=str,
         default=None,
-        help="Provider override: ollama or cerebras.",
+        help="Provider override: ollama, cerebras, or vllm.",
     )
     parser.add_argument("--model", type=str, default=None, help="Model override.")
     parser.add_argument("--temperature", type=float, default=0.9, help="Generation temperature.")

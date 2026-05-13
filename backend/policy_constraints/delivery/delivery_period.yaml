@@ -1,0 +1,23 @@
+schema_version: "1.0"
+category: delivery
+intent: delivery_period
+policy_doc_names:
+  - Delivery Period Policy
+source_query: delivery delivery_period policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules:
+  - id: delivery_record_exists
+    description: Delivery period can be shared only when delivery record is found.
+    field: delivery_info_found
+    op: eq
+    value: true
+    failure_reason: Delivery period data was not found.
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Share promised and actual delivery timestamps.
+metadata:
+  artifact: delivery/delivery_period

@@ -238,6 +238,9 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             "policy_constraints": graph_out.get("policy_constraints")
             if isinstance(graph_out.get("policy_constraints"), dict)
             else {},
+            "policy_check_results": graph_out.get("policy_check_results")
+            if isinstance(graph_out.get("policy_check_results"), list)
+            else [],
             "eligibility_ok": graph_out.get("eligibility_ok")
             if isinstance(graph_out.get("eligibility_ok"), bool)
             else None,

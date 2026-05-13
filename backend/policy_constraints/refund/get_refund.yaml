@@ -1,0 +1,36 @@
+schema_version: "1.0"
+category: refund
+intent: get_refund
+policy_doc_names:
+  - Refund Eligibility Policy
+source_query: refund get_refund eligibility policy
+auto_resolvable: true
+requires_evidence: true
+default_ineligible_reason: The order is not eligible for refund under current policy.
+time_limits:
+  order_age_hours_max: 720
+eligibility_rules:
+  - id: order_must_exist
+    description: Order must exist before refund workflow.
+    field: order_found
+    op: eq
+    value: true
+    failure_reason: We could not find the order.
+  - id: refund_window_open
+    description: Refund request must be within time window.
+    field: order_age_hours
+    op: lte
+    value_from: policy.time_limits.order_age_hours_max
+    failure_reason: Refund window has expired.
+required_conditions: []
+escalation_conditions:
+  - id: refund_policy_block
+    description: Escalate if not eligible.
+    field: policy_eligible
+    op: eq
+    value: false
+    failure_reason: Escalation needed for manual review.
+response_guidance:
+  - Cite refund request id when created.
+metadata:
+  artifact: refund/get_refund

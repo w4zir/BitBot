@@ -103,6 +103,7 @@ def run_persistent_conversation(
                 "tool_registry_scope": "",
                 "procedure_namespace": "",
                 "policy_constraints": None,
+                "policy_check_results": [],
                 "outcome_status": None,
                 "escalation_bundle": None,
                 "final_response": None,
@@ -138,6 +139,7 @@ def run_persistent_conversation(
         "validation_wait_limit": out.get("validation_wait_limit"),
         "output_validation": dict(out.get("output_validation") or {}),
         "context_summary": dict(out.get("context_summary") or {}),
+        "policy_check_results": list(out.get("policy_check_results") or []),
     }
     return {
         "text": out.get("text", ""),
@@ -152,6 +154,7 @@ def run_persistent_conversation(
         "assistant_metadata": assistant_metadata,
         "context_data": context_data,
         "policy_constraints": policy_constraints,
+        "policy_check_results": list(out.get("policy_check_results") or []),
         "agent_state": agent_state,
         "stage_metadata": stage_metadata,
         "agent_trace": agent_trace,

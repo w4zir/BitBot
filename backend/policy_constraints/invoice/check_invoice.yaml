@@ -1,0 +1,23 @@
+schema_version: "1.0"
+category: invoice
+intent: check_invoice
+policy_doc_names:
+  - Invoice Check Policy
+source_query: invoice check_invoice policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules:
+  - id: invoice_must_exist
+    description: Invoice must exist.
+    field: invoice_found
+    op: eq
+    value: true
+    failure_reason: Invoice was not found.
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Share invoice amount and status.
+metadata:
+  artifact: invoice/check_invoice

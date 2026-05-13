@@ -1,0 +1,29 @@
+schema_version: "1.0"
+category: shipping
+intent: change_shipping_address
+policy_doc_names:
+  - Shipping Address Change Policy
+source_query: shipping change_shipping_address policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: Shipping address can no longer be updated for this order.
+time_limits: {}
+eligibility_rules:
+  - id: order_must_exist
+    description: Order must exist.
+    field: order_found
+    op: eq
+    value: true
+    failure_reason: We could not find the order.
+  - id: order_not_delivered
+    description: Delivered orders cannot be changed.
+    field: order_status
+    op: neq
+    value: delivered
+    failure_reason: Delivered orders cannot be modified.
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Confirm updated address when successful.
+metadata:
+  artifact: shipping/change_shipping_address

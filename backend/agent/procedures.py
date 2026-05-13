@@ -9,13 +9,7 @@ import yaml
 from pydantic import BaseModel, Field
 
 
-StepType = Literal[
-    "retrieval",
-    "tool_call",
-    "logic_gate",
-    "interrupt",
-    "llm_response",
-]
+StepType = Literal["tool_call", "logic_gate", "interrupt", "llm_response"]
 
 
 class RequiredDataField(BaseModel):
@@ -24,12 +18,28 @@ class RequiredDataField(BaseModel):
     validation: str | None = None
 
 
+class ConditionSpec(BaseModel):
+    op: str
+    field: str
+    value: Any | None = None
+    value_from: str | None = None
+
+
+class OutcomeAssertion(BaseModel):
+    id: str
+    field: str
+    op: str
+    value: Any | None = None
+    value_from: str | None = None
+    failure_reason: str = ""
+
+
 class ProcedureStep(BaseModel):
     id: str
     type: StepType
     tool: str | None = None
     required_data: list[str] = Field(default_factory=list)
-    condition: dict[str, Any] | None = None
+    condition: ConditionSpec | None = None
     on_true: str | None = None
     on_false: str | None = None
     message: str | None = None
@@ -46,6 +56,8 @@ class ProcedureBlueprint(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     required_data: list[RequiredDataField] = Field(default_factory=list)
     steps: list[ProcedureStep]
+    policy_required: bool = True
+    expected_outcomes: list[OutcomeAssertion] = Field(default_factory=list)
     fallback_response: str | None = None
 
 
@@ -116,14 +128,20 @@ def validate_blueprints() -> list[str]:
         if len({s.id for s in bp.steps}) != len(bp.steps):
             errors.append(f"{bp.id} has duplicate step ids")
         step_ids = {s.id for s in bp.steps}
+        if bp.policy_required:
+            policy_path = policy_constraints_dir() / bp.category.lower() / f"{bp.intent.lower()}.yaml"
+            if not policy_path.is_file():
+                errors.append(f"{bp.id} missing policy constraints file: {policy_path}")
         for step in bp.steps:
             if step.type == "logic_gate":
-                if not isinstance(step.condition, dict):
+                if not isinstance(step.condition, ConditionSpec):
                     errors.append(f"{bp.id}:{step.id} condition must be an object")
                     continue
-                if "op" not in step.condition or "field" not in step.condition:
+                if not step.condition.op or not step.condition.field:
                     errors.append(f"{bp.id}:{step.id} condition missing op/field")
                     continue
+                if step.condition.value is not None and step.condition.value_from:
+                    errors.append(f"{bp.id}:{step.id} condition cannot set both value and value_from")
                 if not step.on_true or not step.on_false:
                     errors.append(f"{bp.id}:{step.id} missing on_true/on_false")
                     continue
@@ -131,7 +149,18 @@ def validate_blueprints() -> list[str]:
                     errors.append(f"{bp.id}:{step.id} on_true={step.on_true} unknown")
                 if step.on_false not in step_ids:
                     errors.append(f"{bp.id}:{step.id} on_false={step.on_false} unknown")
+        for outcome in bp.expected_outcomes:
+            if bool(outcome.value is not None and outcome.value_from):
+                errors.append(f"{bp.id}:expected_outcome:{outcome.id} cannot set both value and value_from")
     return errors
+
+
+def policy_constraints_dir() -> Path:
+    raw = os.getenv("POLICY_CONSTRAINTS_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    root = Path(__file__).resolve().parents[1]
+    return root / "policy_constraints"
 
 
 def as_dict(obj: BaseModel) -> dict[str, Any]:

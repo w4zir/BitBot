@@ -1,6 +1,7 @@
 id: product_price
 category: product
 intent: product_price
+policy_required: true
 keywords:
   - price
   - cost
@@ -25,4 +26,9 @@ steps:
     type: llm_response
     message: >
       The product was not found. Ask the user to confirm the product name.
+expected_outcomes:
+  - id: product_price_lookup_outcome_present
+    field: product_found
+    op: exists
+    failure_reason: Missing product price lookup outcome.
 fallback_response: Share the product name and I can check the current price.

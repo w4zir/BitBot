@@ -1,0 +1,17 @@
+schema_version: "1.0"
+category: contact
+intent: contact_human_agent
+policy_doc_names:
+  - Human Handoff Policy
+source_query: contact contact_human_agent policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules: []
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Confirm handoff ticket id.
+metadata:
+  artifact: contact/contact_human_agent

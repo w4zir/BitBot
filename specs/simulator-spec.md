@@ -889,7 +889,7 @@ The current implementation is already functional with:
 
 - **API contract**: the simulator exclusively uses `POST /classify` with `full_flow=true`. Do not bypass the HTTP layer — the test must exercise the same path as production traffic.
 - **Session management**: each scenario gets a fresh `session_id` (UUID4). The driver tracks this and sends it on every turn to exercise `issue_locked` semantics.
-- **Persona LLM config**: simulator user-message generation uses dedicated settings (`defaults.user_llm_*` and `SIMULATOR_USER_LLM_*`) and currently supports `ollama` or `cerebras` via `backend.llm.providers.chat_completion`.
+- **Persona LLM config**: simulator user-message generation uses dedicated settings (`defaults.user_llm_*` and `SIMULATOR_USER_LLM_*`) and currently supports `ollama`, `cerebras`, or `vllm` via `backend.llm.providers.chat_completion`.
 - **Judge LLM config**: LLM judge keeps separate provider/model settings (`llm_judge_*`).
 - **Postgres fixture**: `testing/simulator/fixtures/` should contain a minimal anonymised snapshot generated with `pg_dump --data-only --table=orders --table=users --table=subscriptions`. This allows deterministic re-runs in CI without a live DB.
 - **CI integration**: run `testing/simulator/suites/smoke.yaml` on every PR (fast, small scenario set; omit `llm_judge` if you need zero LLM cost). Run `testing/simulator/suites/regression.yaml` nightly (full suite; add `llm_judge` / baseline diff when those are wired and stable).

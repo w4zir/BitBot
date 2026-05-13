@@ -1,6 +1,7 @@
 id: payment_issue
 category: payment
 intent: payment_issue
+policy_required: true
 keywords:
   - payment issue
   - charged incorrectly
@@ -38,4 +39,9 @@ steps:
     type: llm_response
     message: >
       The transaction was not found. Ask the user to verify the transaction id.
+expected_outcomes:
+  - id: payment_issue_outcome_present
+    field: payment_issue_ticket_created
+    op: exists
+    failure_reason: Missing payment issue ticket outcome.
 fallback_response: I can help with payment issues once you share the transaction ID.

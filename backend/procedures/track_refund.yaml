@@ -1,6 +1,7 @@
 id: track_refund
 category: refund
 intent: track_refund
+policy_required: true
 keywords:
   - track refund
   - refund status
@@ -26,4 +27,9 @@ steps:
     message: >
       Refund tracking details were not found for this order. Ask the user to verify the
       order number.
+expected_outcomes:
+  - id: refund_tracking_outcome_present
+    field: refund_tracking_found
+    op: exists
+    failure_reason: Missing refund tracking outcome.
 fallback_response: I can track your refund once you share the order number.

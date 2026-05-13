@@ -1,6 +1,7 @@
 id: unsubscribe
 category: subscription
 intent: unsubscribe
+policy_required: true
 keywords:
   - unsubscribe
   - cancel subscription
@@ -24,4 +25,9 @@ steps:
     type: llm_response
     message: >
       Unsubscribe failed. Explain why using unsubscribe_reason.
+expected_outcomes:
+  - id: unsubscribe_outcome_present
+    field: unsubscribe_succeeded
+    op: exists
+    failure_reason: Missing unsubscribe outcome.
 fallback_response: I can unsubscribe your account once you share the subscription email.

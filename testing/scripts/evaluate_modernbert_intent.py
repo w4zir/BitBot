@@ -455,15 +455,12 @@ def _write_results(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"run_{ts}.json"
-    payload = {
-        "summary": {"type": "summary", **summary_payload},
-        "metadata": {"type": "metadata", **metadata_payload},
-        "records": records,
-    }
+    output_file = output_dir / f"run_{ts}.jsonl"
     with output_file.open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(payload, f, ensure_ascii=False)
-        f.write("\n")
+        f.write(json.dumps({"type": "summary", **summary_payload}, ensure_ascii=False) + "\n")
+        f.write(json.dumps({"type": "metadata", **metadata_payload}, ensure_ascii=False) + "\n")
+        for record in records:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
     return output_file
 
 

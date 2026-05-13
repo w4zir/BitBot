@@ -1,0 +1,17 @@
+schema_version: "1.0"
+category: feedback
+intent: complaint
+policy_doc_names:
+  - Complaints and Handoff Policy
+source_query: feedback complaint policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules: []
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Confirm complaint ticket id.
+metadata:
+  artifact: feedback/complaint

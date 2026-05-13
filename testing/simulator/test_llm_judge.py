@@ -64,3 +64,60 @@ def test_llm_judge_threshold_failure(monkeypatch) -> None:
     assert not result.passed
     assert "groundedness" in " ".join(result.failures)
     assert result.total_tokens == 15
+
+
+def test_vllm_chat_parses_openai_usage(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": '{"tone":{"rationale":"ok","score":5}}'}}],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        },
+    }
+    mock_client = MagicMock()
+    mock_client.__enter__.return_value = mock_client
+    mock_client.__exit__.return_value = False
+    mock_client.post.return_value = mock_resp
+
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm:8000/v1")
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    monkeypatch.setattr(llm_judge.httpx, "Client", MagicMock(return_value=mock_client))
+
+    content, usage, _latency = llm_judge._vllm_chat(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert '{"tone"' in content
+    assert usage["input_tokens"] == 10
+    assert usage["output_tokens"] == 20
+    assert usage["total_tokens"] == 30
+    mock_client.post.assert_called_once()
+    _args, kwargs = mock_client.post.call_args
+    assert str(kwargs["headers"].get("Authorization", "")) == ""
+    assert kwargs["json"]["model"] == "m"
+
+
+def test_vllm_chat_sends_bearer_when_key_set(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"choices": [{"message": {"content": "x"}}], "usage": {}}
+    mock_client = MagicMock()
+    mock_client.__enter__.return_value = mock_client
+    mock_client.__exit__.return_value = False
+    mock_client.post.return_value = mock_resp
+
+    monkeypatch.setenv("VLLM_API_BASE", "http://v:1/v1")
+    monkeypatch.setenv("VLLM_API_KEY", "tok")
+    monkeypatch.setattr(llm_judge.httpx, "Client", MagicMock(return_value=mock_client))
+
+    llm_judge._vllm_chat(model="m", messages=[{"role": "user", "content": "a"}])
+    _args, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer tok"

@@ -1,6 +1,7 @@
 id: complaint
 category: feedback
 intent: complaint
+policy_required: true
 keywords:
   - complaint
   - bad experience
@@ -9,9 +10,6 @@ required_data:
   - name: feedback
     prompt: Please share your complaint details.
 steps:
-  - id: retrieve_complaint_policy
-    type: retrieval
-    tool: complaint_policy_search
   - id: create_complaint
     type: tool_call
     tool: create_complaint_ticket
@@ -28,4 +26,9 @@ steps:
     type: llm_response
     message: >
       Complaint logging failed. Ask the user to retry and apologize.
+expected_outcomes:
+  - id: complaint_outcome_present
+    field: complaint_created
+    op: exists
+    failure_reason: Complaint creation outcome missing.
 fallback_response: I can log your complaint once you share the details.

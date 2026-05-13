@@ -60,7 +60,7 @@ SIMULATOR_AGENT_URL=http://localhost:8000/classify
 # Optional dedicated DB host for simulator process
 POSTGRES_HOST_SIMULATOR=localhost
 
-# User-message generation LLM (required)
+# User-message generation LLM (required). Provider: ollama | cerebras | vllm
 SIMULATOR_USER_LLM_PROVIDER=ollama
 SIMULATOR_USER_LLM_MODEL=llama3.2
 SIMULATOR_USER_LLM_TIMEOUT_SECONDS=120
@@ -70,7 +70,11 @@ SIMULATOR_USER_LLM_TEMPERATURE=0.7
 SIMULATOR_USER_LLM_TOP_P=0.9
 SIMULATOR_USER_LLM_REPEAT_PENALTY=1.1
 
-# LLM judge provider/timeout when llm_judge is enabled
+# vLLM (when SIMULATOR_*_PROVIDER or suite defaults use vllm): OpenAI-compatible base URL + optional API key
+# VLLM_API_BASE=http://localhost:8001/v1
+# VLLM_API_KEY=
+
+# LLM judge provider/timeout when llm_judge is enabled (ollama | cerebras | vllm)
 SIMULATOR_LLM_PROVIDER=ollama
 SIMULATOR_LLM_TIMEOUT_SECONDS=120
 ```
@@ -191,6 +195,7 @@ Use this sequence:
 3. Inspect `trace[]` turn-by-turn for:
    - `outcome_status`, `procedure_id`, `validation_missing`
    - `eligibility_ok`, `policy_constraints`, `context_data`
+   - `policy_check_results` and policy artifact metadata (`policy_constraints_path`, `policy_schema_version`)
    - `agent_state`, `stage_metadata`, `output_validation`, `context_summary`
 4. Validate hydration assumptions (`entity_id` and selected entity fields) against seed `db_filter`.
 

@@ -1,14 +1,12 @@
 id: check_payment_methods
 category: payment
 intent: check_payment_methods
+policy_required: true
 keywords:
   - payment methods
   - how can i pay
   - card or paypal
 steps:
-  - id: retrieve_payment_policy
-    type: retrieval
-    tool: payment_policy_search
   - id: lookup_methods
     type: tool_call
     tool: list_payment_methods
@@ -16,4 +14,9 @@ steps:
     type: llm_response
     message: >
       Share the available methods from payment_methods and keep the answer concise.
+expected_outcomes:
+  - id: methods_payload_present
+    field: payment_methods
+    op: exists
+    failure_reason: Payment methods were not loaded.
 fallback_response: I can list the currently supported payment methods.

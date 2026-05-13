@@ -1,0 +1,29 @@
+schema_version: "1.0"
+category: payment
+intent: payment_issue
+policy_doc_names:
+  - Payment Issue Policy
+source_query: payment payment_issue policy
+auto_resolvable: true
+requires_evidence: true
+default_ineligible_reason: Payment issue could not be auto-resolved.
+time_limits: {}
+eligibility_rules:
+  - id: payment_must_exist
+    description: Payment transaction must be found.
+    field: payment_found
+    op: eq
+    value: true
+    failure_reason: The transaction was not found.
+required_conditions: []
+escalation_conditions:
+  - id: payment_issue_not_created
+    description: Escalate when ticket cannot be created.
+    field: payment_issue_ticket_created
+    op: eq
+    value: false
+    failure_reason: Could not create payment issue ticket.
+response_guidance:
+  - Share issue ticket id when available.
+metadata:
+  artifact: payment/payment_issue

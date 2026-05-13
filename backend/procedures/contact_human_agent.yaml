@@ -1,6 +1,7 @@
 id: contact_human_agent
 category: contact
 intent: contact_human_agent
+policy_required: true
 keywords:
   - human agent
   - talk to agent
@@ -9,9 +10,6 @@ required_data:
   - name: reason
     prompt: Please briefly describe what you need help with.
 steps:
-  - id: retrieve_contact_policy
-    type: retrieval
-    tool: contact_policy_search
   - id: create_handoff
     type: tool_call
     tool: create_contact_handoff
@@ -28,4 +26,9 @@ steps:
     type: llm_response
     message: >
       Handoff ticket creation failed. Ask the user to retry.
+expected_outcomes:
+  - id: handoff_outcome_present
+    field: handoff_created
+    op: exists
+    failure_reason: Handoff creation outcome missing.
 fallback_response: I can connect you to a human agent once you share the reason.

@@ -15,7 +15,7 @@ flowchart LR
   lg --> stagePolicy[Policy_load_and_constraints]
   lg --> stageValidate[Data_plus_eligibility_gates]
   lg --> stageOutcome[Outcome_validator_and_escalation]
-  lg --> llm[Ollama_or_Cerebras]
+  lg --> llm[Ollama_Cerebras_or_vLLM]
   lg --> es[(ElasticsearchPolicyDocs)]
   be --> pg[(Postgres)]
   stageIntent --> pg
@@ -113,6 +113,8 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
    Set `POSTGRES_USER`, `POSTGRES_PASSWORD`, and any overrides.
 
+   **vLLM in Compose:** the default `docker-compose.yml` includes a `vllm` service (prebuilt `vllm/vllm-openai` image) that needs **NVIDIA GPU** support in Docker (`gpus: all`). Add **`VLLM_MODEL=<huggingface-model-id>`** to `.env` before `docker compose up` — the stack uses `${VLLM_MODEL:?…}` so Compose fails fast if it is missing. To use **host Ollama** instead, keep `*_MODEL_PROVIDER=ollama` (defaults); the backend does not need the `vllm` container to be healthy for that path, but the container still starts unless you remove or override the `vllm` service locally.
+
 2. **Train and export** a model to `training/models/modernbert_finetuned/` (see [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md)). The `modernbert` container mounts this path read-only; without valid tokenizer + model files, that service will not start.
 
 3. Start services:
@@ -129,7 +131,7 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\",\"full_flow\":false}"
    ```
 
-6. Full conversation flow (Postgres + LangGraph + local Ollama): set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, `INTENT_MODEL_PROVIDER` / `INTENT_MODEL` (defaults match `docker-compose.yml`), and `OLLAMA_BASE_URL` in `.env` (see `.env.example`). Ensure Postgres is up and Ollama is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). Then:
+6. Full conversation flow (Postgres + LangGraph + LLM): choose **Ollama** (local), **Cerebras** (cloud API key), or **vLLM** (OpenAI-compatible; default Compose wires `VLLM_API_BASE=http://vllm:8000/v1`). Set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `INTENT_MODEL_PROVIDER` / `INTENT_MODEL` in `.env` (see `.env.example`). For **Ollama**, set `OLLAMA_BASE_URL` and ensure the server is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). For **vLLM**, set providers to `vllm` and `*_MODEL` to the same HuggingFace model id as `VLLM_MODEL` on the server. Then:
 
    ```bash
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"

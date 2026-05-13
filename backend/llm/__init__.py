@@ -1,4 +1,4 @@
-"""LLM provider clients (Ollama, Cerebras)."""
+"""LLM provider clients (Ollama, Cerebras, vLLM)."""
 
 from backend.llm.providers import chat_completion
 

@@ -20,6 +20,14 @@ def _cerebras_api_key() -> str:
     return os.getenv("CEREBRAS_API_KEY", "").strip()
 
 
+def _vllm_base() -> str:
+    return os.getenv("VLLM_API_BASE", "http://localhost:8000/v1").rstrip("/")
+
+
+def _vllm_api_key() -> str:
+    return os.getenv("VLLM_API_KEY", "").strip()
+
+
 def chat_completion(
     *,
     provider: str,
@@ -30,7 +38,7 @@ def chat_completion(
     top_p: float | None = None,
     repeat_penalty: float | None = None,
 ) -> str:
-    """Run a chat completion. Provider is `ollama` or `cerebras`."""
+    """Run a chat completion. Provider is ``ollama``, ``cerebras``, or ``vllm`` (OpenAI-compatible)."""
     p = (provider or "").strip().lower()
     if p == "ollama":
         return _ollama_chat(
@@ -43,6 +51,15 @@ def chat_completion(
         )
     if p == "cerebras":
         return _cerebras_chat(
+            model=model,
+            messages=messages,
+            timeout_seconds=timeout_seconds,
+            temperature=temperature,
+            top_p=top_p,
+            repeat_penalty=repeat_penalty,
+        )
+    if p == "vllm":
+        return _vllm_chat(
             model=model,
             messages=messages,
             timeout_seconds=timeout_seconds,
@@ -124,6 +141,42 @@ def _cerebras_chat(
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+    with httpx.Client(timeout=_timeout(timeout_seconds)) as client:
+        r = client.post(url, json=payload, headers=headers)
+        r.raise_for_status()
+        data = r.json() or {}
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    msg = (choices[0] or {}).get("message") or {}
+    return str(msg.get("content") or "").strip()
+
+
+def _vllm_chat(
+    model: str,
+    messages: list[dict[str, str]],
+    timeout_seconds: float | None,
+    temperature: float | None,
+    top_p: float | None,
+    repeat_penalty: float | None,
+) -> str:
+    url = f"{_vllm_base()}/chat/completions"
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": (
+            float(temperature)
+            if temperature is not None
+            else float(os.getenv("VLLM_TEMPERATURE", "0.2"))
+        ),
+    }
+    if top_p is not None:
+        payload["top_p"] = float(top_p)
+    _ = repeat_penalty
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    key = _vllm_api_key()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     with httpx.Client(timeout=_timeout(timeout_seconds)) as client:
         r = client.post(url, json=payload, headers=headers)
         r.raise_for_status()

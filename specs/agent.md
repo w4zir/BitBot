@@ -153,28 +153,27 @@ Each stage defines purpose, input contract, output contract, hard rules, and fai
 **Failure Modes**
 - No valid blueprint found: set terminal error response and route to Stage 9 (Outcome Validator).
 
-### Stage 6 - RAG Policy Load -> `PolicyConstraints`
+### Stage 6 - Policy Artifact Load -> `PolicyConstraints`
 
 **Purpose**
-- Retrieve policy evidence and convert it into a typed constraints object for execution gating.
+- Load the pre-extracted typed policy artifact for the resolved intent.
 
 **Inputs**
 - `category: str`
 - `intent: str`
-- `problem_to_solve: str`
-- `policy_retriever`
+- `policy_constraints_store` (versioned YAML source)
 
 **Outputs**
 - `policy_constraints: PolicyConstraints`
 
 **Rules**
-- Retrieval query must include category, intent, and problem summary.
-- Raw policy chunks are transformed by an extraction step into typed fields.
-- `PolicyConstraints` is mandatory for all policy-governed categories.
-- If no policy evidence is found, default to non-auto-resolvable constraints.
+- Runtime must load by `(category, intent)` only; no retrieval and no runtime extraction.
+- Artifacts are extracted offline and reviewed before runtime use.
+- `PolicyConstraints` is mandatory for policy-governed categories.
+- Missing/invalid artifact must fail closed.
 
 **Failure Modes**
-- Retrieval/extraction failure sets conservative constraints:
+- Artifact load/validation failure sets conservative constraints:
   - `eligible=False`
   - `auto_resolvable=False`
   - escalation required
@@ -228,7 +227,6 @@ Each stage defines purpose, input contract, output contract, hard rules, and fai
   - `logic_gate`
   - `tool_call`
   - `llm_response`
-  - `retrieval`
   - `interrupt`
 - `tool_call` uses category-scoped tool registry only.
 - Unknown tool/step type is a hard execution error.

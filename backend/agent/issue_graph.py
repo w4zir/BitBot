@@ -19,6 +19,11 @@ from backend.agent.procedures import (
     get_blueprint_with_fallback_chain,
     load_blueprints,
 )
+from backend.agent.policy_constraints import (
+    PolicyCheckResult,
+    PolicyConstraints,
+    load_policy_constraints_for_intent,
+)
 from backend.db.intents_repo import get_intent_definitions_for_category
 from backend.db.orders_repo import (
     cancel_order as cancel_order_record,
@@ -45,7 +50,6 @@ from backend.db.subscriptions_repo import (
 )
 from backend.db.support_repo import create_support_ticket
 from backend.llm.providers import chat_completion, extract_json_object
-from backend.rag.policy_retriever import search_policy_docs
 from backend.rag.query_classifier import ClassificationResult, get_query_classifier
 from backend.rag.required_fields import normalize_category_key
 
@@ -72,6 +76,7 @@ class IssueGraphState(TypedDict, total=False):
     tool_registry_scope: str
     procedure_namespace: str
     policy_constraints: dict[str, Any] | None
+    policy_check_results: list[dict[str, Any]]
     outcome_status: str | None
     escalation_bundle: dict[str, Any] | None
     final_response: str | None
@@ -191,15 +196,17 @@ def _compact_context_data(context_data: dict[str, Any]) -> dict[str, Any]:
         "order_found",
         "cancel_succeeded",
         "cancel_reason",
+        "order_age_hours",
         "refund_request_created",
         "refund_request_reason",
         "refund_request_id",
         "shipping_address_updated",
-        "policy_found",
-        "policy_query",
+        "policy_constraints_path",
+        "policy_schema_version",
         "policy_eligible",
         "policy_ineligibility_reason",
         "policy_doc_names",
+        "policy_check_results",
         "tool_call",
         "order_status_before",
         "order_status_after",
@@ -380,6 +387,46 @@ def _validate_arithmetic(*, lhs: Any, rhs: Any, op: str) -> dict[str, Any]:
         "actual_value": left,
         "reason": f"arithmetic_{op}_{right}",
     }
+
+
+def _value_from_path(path: str, *, context_data: dict[str, Any], policy_constraints: dict[str, Any]) -> Any:
+    raw = (path or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("policy."):
+        cursor: Any = policy_constraints
+        parts = raw.split(".")[1:]
+    elif raw.startswith("context."):
+        cursor = context_data
+        parts = raw.split(".")[1:]
+    else:
+        cursor = context_data
+        parts = raw.split(".")
+    for part in parts:
+        if isinstance(cursor, dict):
+            cursor = cursor.get(part)
+        else:
+            return None
+    return cursor
+
+
+def _build_policy_check_result(
+    *,
+    check_id: str,
+    passed: bool,
+    reason: str,
+    actual_value: Any,
+    expected_value: Any,
+    source: str,
+) -> dict[str, Any]:
+    return PolicyCheckResult(
+        check_id=check_id,
+        passed=passed,
+        reason=reason,
+        actual_value=actual_value,
+        expected_value=expected_value,
+        source=source,
+    ).model_dump()
 
 
 def _classify_category_node(state: IssueGraphState) -> IssueGraphState:
@@ -726,82 +773,51 @@ def _specialist_router_node(state: IssueGraphState) -> IssueGraphState:
 
 
 def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
-    text = str(state.get("text") or "").strip()
-    category = str(state.get("category") or "").strip().replace("_", " ")
-    intent = str(state.get("intent") or "").strip().replace("_", " ")
-    problem_to_solve = str(state.get("problem_to_solve") or "").strip()
-    query_candidates: list[str] = []
-    for candidate in (
-        " ".join(x for x in [category, intent, problem_to_solve, text] if x).strip(),
-        " ".join(x for x in [category, problem_to_solve, text] if x).strip(),
-        " ".join(x for x in [category, text] if x).strip(),
-        text.strip(),
-        category.strip(),
-        "policy",
-    ):
-        if candidate and candidate not in query_candidates:
-            query_candidates.append(candidate)
-
-    docs: list[dict[str, Any]] = []
-    query = "policy"
-    attempts = 0
-    for idx, candidate in enumerate(query_candidates):
-        if idx >= MAX_NODE_TURNS:
-            break
-        attempts += 1
-        query = candidate
-        docs = search_policy_docs(query)
-        if docs:
-            break
-    if not docs:
-        logger.warning("Policy load returned no docs for query=%r after %s attempts", query, attempts)
-    policy_doc_names = _policy_doc_names(docs)
+    category = str(state.get("category") or "").strip().lower()
+    intent = str(state.get("intent") or "").strip().lower()
     context = dict(state.get("context_data") or {})
-    # Keep policy load factual and procedure-agnostic; policy eligibility decisions
-    # must come from procedure logic + backend tools, not text heuristics.
-    eligible = True
-    reason = ""
-    variables = {
-        "policy_query": query,
-        "retrieved_policy_docs": policy_doc_names,
-        "retrieved_policy_doc_count": len(policy_doc_names),
-    }
-    validation_results = {
-        "minimum_policy_docs_found": _validate_arithmetic(
-            lhs=len(policy_doc_names),
-            rhs=1,
-            op="gte",
-        ),
-    }
-    constraints = {
-        "eligible": eligible,
-        "reason": reason,
-        "variables": variables,
-        "validation_results": validation_results,
-        "time_limit_hours": None,
-        "requires_evidence": False,
-        "auto_resolvable": True,
-        "policy_doc_names": policy_doc_names,
-    }
+
+    constraints_model: PolicyConstraints = load_policy_constraints_for_intent(category, intent)
+    constraints = constraints_model.model_dump()
+    policy_path = f"{category or 'unknown'}/{intent or 'unknown'}.yaml"
+    load_error = str((constraints.get("metadata") or {}).get("load_error") or "").strip()
+    eligible = not bool(load_error)
+    reason = "" if eligible else str(constraints.get("default_ineligible_reason") or load_error)
+    check = _build_policy_check_result(
+        check_id="policy_constraints_loaded",
+        passed=eligible,
+        reason="" if eligible else load_error,
+        actual_value=policy_path,
+        expected_value="existing constraints artifact",
+        source="policy_loader",
+    )
+    constraints["eligible"] = eligible
+    constraints["reason"] = reason
+
     out: IssueGraphState = {
         **state,
-        "policy_load_attempts": attempts,
+        "policy_load_attempts": 1,
         "policy_constraints": constraints,
+        "policy_check_results": [check],
         "context_data": {
             **context,
-            "policy_found": bool(docs),
-            "policy_query": query,
-            "policy_doc_names": policy_doc_names,
+            "policy_constraints_path": policy_path,
+            "policy_schema_version": constraints.get("schema_version"),
+            "policy_doc_names": list(constraints.get("policy_doc_names") or []),
+            "policy_eligible": eligible,
+            "policy_ineligibility_reason": reason,
+            "policy_check_results": [check],
         },
     }
     return _with_stage_metadata(
         out,
         "policy_load",
         {
-            "policy_found": bool(docs),
-            "eligible": eligible,
-            "policy_query": query,
-            "attempts": attempts,
+            "policy_constraints_path": policy_path,
+            "policy_schema_version": constraints.get("schema_version"),
+            "policy_eligible": eligible,
+            "policy_ineligibility_reason": reason,
+            "policy_checks_count": 1,
         },
     )
 
@@ -819,15 +835,36 @@ def _build_missing_prompts(required_fields: list[dict[str, Any]], missing_names:
     return "\n".join(lines)
 
 
-def _policy_doc_names(docs: list[dict[str, Any]]) -> list[str]:
-    names: list[str] = []
-    for doc in docs:
-        title = str(doc.get("title") or "").strip()
-        doc_id = str(doc.get("id") or "").strip()
-        candidate = title or doc_id
-        if candidate and candidate not in names:
-            names.append(candidate)
-    return names
+def _evaluate_policy_rules(
+    *,
+    policy_constraints: dict[str, Any],
+    context_data: dict[str, Any],
+    phase: str,
+) -> tuple[bool, str, list[dict[str, Any]]]:
+    rules = list(policy_constraints.get("eligibility_rules") or [])
+    results: list[dict[str, Any]] = []
+    if not rules:
+        return True, "", results
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        applies_to = str(rule.get("applies_to") or "runtime").strip().lower()
+        if applies_to not in {phase, "any"}:
+            continue
+        eval_out = _evaluate_condition(rule, context_data=context_data, policy_constraints=policy_constraints)
+        check = _build_policy_check_result(
+            check_id=str(rule.get("id") or "policy_rule"),
+            passed=bool(eval_out.get("passed")),
+            reason=str(eval_out.get("reason") or ""),
+            actual_value=eval_out.get("actual_value"),
+            expected_value=eval_out.get("expected_value"),
+            source="policy_rule",
+        )
+        results.append(check)
+        if not check["passed"]:
+            fallback_reason = str(rule.get("failure_reason") or "").strip()
+            return False, fallback_reason or str(check["reason"]), results
+    return True, "", results
 
 
 def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
@@ -990,13 +1027,37 @@ def _validate_required_data_node(state: IssueGraphState) -> IssueGraphState:
 def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphState:
     validated = _validate_required_data_node(state)
     policy_constraints = dict(validated.get("policy_constraints") or {})
-    eligibility_ok = bool(policy_constraints.get("eligible", True))
+    context_data = dict(validated.get("context_data") or {})
+    loaded_checks = list(validated.get("policy_check_results") or [])
+    rules_ok, rules_reason, rule_checks = _evaluate_policy_rules(
+        policy_constraints=policy_constraints,
+        context_data=context_data,
+        phase="pre_validation",
+    )
+    eligibility_ok = bool(policy_constraints.get("eligible", True)) and rules_ok
+    reason = (
+        rules_reason
+        or str(policy_constraints.get("reason") or "").strip()
+        or str(policy_constraints.get("default_ineligible_reason") or "").strip()
+    )
     wait_limit = int(validated.get("validation_wait_limit") or _validation_wait_limit())
     wait_count = int(validated.get("validation_wait_count") or 0)
     out: IssueGraphState = {
         **validated,
         "eligibility_ok": eligibility_ok,
+        "policy_check_results": [*loaded_checks, *rule_checks],
         "validation_wait_limit": wait_limit,
+        "policy_constraints": {
+            **policy_constraints,
+            "eligible": eligibility_ok,
+            "reason": "" if eligibility_ok else reason,
+        },
+        "context_data": {
+            **context_data,
+            "policy_eligible": eligibility_ok,
+            "policy_ineligibility_reason": "" if eligibility_ok else reason,
+            "policy_check_results": [*loaded_checks, *rule_checks],
+        },
     }
     if validated.get("validation_ok") is False:
         wait_count += 1
@@ -1014,7 +1075,6 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
             meta["validation_interrupt_pending"] = True
         out["assistant_metadata"] = meta
     elif not eligibility_ok:
-        reason = str(policy_constraints.get("reason") or "").strip()
         out["final_response"] = _generate_ineligibility_response(
             reason=reason,
             messages=validated.get("messages") or [],
@@ -1030,6 +1090,8 @@ def _data_and_eligibility_validator_node(state: IssueGraphState) -> IssueGraphSt
         {
             "validation_ok": out.get("validation_ok"),
             "eligibility_ok": eligibility_ok,
+            "policy_checks_count": len(out.get("policy_check_results") or []),
+            "policy_ineligibility_reason": "" if eligibility_ok else reason,
             "validation_wait_count": out.get("validation_wait_count"),
             "validation_wait_limit": wait_limit,
         },
@@ -1244,52 +1306,19 @@ def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[st
     prior_context = dict(state.get("context_data") or {})
     prior_status_before = prior_context.get("order_status_before")
     status_now = row.get("status")
+    order_date = row.get("order_date")
+    order_age_hours: float | None = None
+    parsed_order_date = _parse_iso_datetime(order_date)
+    if parsed_order_date is not None:
+        order_age_hours = (datetime.now(timezone.utc) - parsed_order_date).total_seconds() / 3600.0
     return {
         **base,
         "order_found": True,
         "order_status": status_now,
         "order_status_before": prior_status_before if prior_status_before is not None else status_now,
+        "order_age_hours": order_age_hours,
         "order_total_amount": row.get("total_amount"),
         "order_data": row,
-    }
-
-
-def _retrieve_policy(step: dict[str, Any], state: IssueGraphState) -> dict[str, Any]:
-    tool_name = str(step.get("tool") or "policy_search")
-    text = str(state.get("text") or "").strip()
-    problem_to_solve = str(state.get("problem_to_solve") or "").strip()
-    category = str(state.get("category") or "").strip().replace("_", " ")
-    intent = str(state.get("intent") or "").strip().replace("_", " ")
-
-    query_parts: list[str] = []
-    if problem_to_solve:
-        query_parts.append(problem_to_solve)
-    if text and not _ORDER_ID_ONLY_RE.match(text):
-        query_parts.append(text)
-    if category:
-        query_parts.append(category)
-    if intent and intent.lower() != category.lower():
-        query_parts.append(intent)
-
-    deduped_parts: list[str] = []
-    seen: set[str] = set()
-    for part in query_parts:
-        key = part.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped_parts.append(part)
-
-    query = " ".join(deduped_parts).strip() or text or "policy"
-    docs = search_policy_docs(query)
-    if not docs:
-        logger.warning("Procedure retrieval returned no docs for query=%r", query)
-    policy_doc_names = _policy_doc_names(docs)
-    return {
-        "policy_found": bool(docs),
-        "policy_tool": tool_name,
-        "policy_query": query,
-        "policy_doc_names": policy_doc_names,
     }
 
 
@@ -1619,24 +1648,46 @@ _CONDITION_OPS: dict[str, Callable[[Any, Any], bool]] = {
     "eq": lambda a, b: a == b,
     "neq": lambda a, b: a != b,
     "gt": lambda a, b: a > b,
+    "gte": lambda a, b: a >= b,
     "lt": lambda a, b: a < b,
+    "lte": lambda a, b: a <= b,
     "in": lambda a, b: a in b,
     "exists": lambda a, _: a is not None,
 }
 
 
-def _evaluate_condition(condition: dict[str, Any], context_data: dict[str, Any]) -> bool:
+def _evaluate_condition(
+    condition: dict[str, Any],
+    *,
+    context_data: dict[str, Any],
+    policy_constraints: dict[str, Any],
+) -> dict[str, Any]:
     try:
         op = str(condition["op"])
         field = str(condition["field"])
-        lhs = context_data.get(field)
-        rhs = condition.get("value")
+        lhs = _value_from_path(field, context_data=context_data, policy_constraints=policy_constraints)
+        rhs = (
+            _value_from_path(
+                str(condition.get("value_from") or ""),
+                context_data=context_data,
+                policy_constraints=policy_constraints,
+            )
+            if condition.get("value_from")
+            else condition.get("value")
+        )
         predicate = _CONDITION_OPS.get(op)
         if predicate is None:
-            return False
-        return bool(predicate(lhs, rhs))
-    except Exception:  # noqa: BLE001
-        return False
+            return {"passed": False, "reason": f"unsupported_operator:{op}", "actual_value": lhs, "expected_value": rhs}
+        passed = bool(predicate(lhs, rhs))
+        reason = "ok" if passed else str(condition.get("failure_reason") or f"condition_failed:{field}:{op}")
+        return {"passed": passed, "reason": reason, "actual_value": lhs, "expected_value": rhs}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "passed": False,
+            "reason": f"condition_eval_error:{exc}",
+            "actual_value": None,
+            "expected_value": condition.get("value"),
+        }
 
 
 def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> str:
@@ -1648,11 +1699,13 @@ def _draft_response(state: IssueGraphState, step: dict[str, Any]) -> str:
     ).strip()
     msgs = _messages_for_llm(state.get("messages") or [])
     summary = json.dumps(state.get("context_data") or {}, ensure_ascii=False)
+    validation_summary = json.dumps(state.get("output_validation") or {}, ensure_ascii=False)
     step_msg = str(step.get("message") or "").strip()
     user_prompt = (
-        "Use only the provided procedure context and retrieved policy evidence. "
-        "Do not invent policy restrictions that are not explicitly present.\n\n"
-        f"Procedure context: {summary}"
+        "Use only the resolved deterministic facts in context_data, policy_check_results, and output_validation. "
+        "Do not decide eligibility or invent constraints.\n\n"
+        f"Procedure context: {summary}\n"
+        f"Validation context: {validation_summary}"
     )
     if step_msg:
         user_prompt = f"{step_msg}\n\n{user_prompt}"
@@ -1777,9 +1830,7 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
         "update_shipping_address": _update_shipping_address_tool,
     }
 
-    if step_type == "retrieval":
-        context.update(_retrieve_policy(step, state))
-    elif step_type == "tool_call":
+    if step_type == "tool_call":
         tool_name = str(step.get("tool") or "unknown_tool")
         context["tool_call"] = tool_name
         runner = tool_dispatch.get(tool_name)
@@ -1806,14 +1857,45 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
         context.update(runner(step, state))
     elif step_type == "logic_gate":
         cond = step.get("condition") or {}
-        branch = _evaluate_condition(cond, context)
+        gate_eval = _evaluate_condition(
+            cond,
+            context_data=context,
+            policy_constraints=dict(state.get("policy_constraints") or {}),
+        )
+        branch = bool(gate_eval.get("passed"))
         target = str(step.get("on_true") if branch else step.get("on_false") or "")
+        policy_checks = list(state.get("policy_check_results") or [])
+        policy_checks.append(
+            _build_policy_check_result(
+                check_id=str(step.get("id") or "logic_gate"),
+                passed=branch,
+                reason=str(gate_eval.get("reason") or ""),
+                actual_value=gate_eval.get("actual_value"),
+                expected_value=gate_eval.get("expected_value"),
+                source="procedure_gate",
+            )
+        )
         return _with_stage_metadata(
-            _jump_to_step({**state, "context_data": context, "executor_turn_count": turn_count}, target),
+            _jump_to_step(
+                {
+                    **state,
+                    "context_data": {
+                        **context,
+                        "policy_check_results": policy_checks,
+                    },
+                    "policy_check_results": policy_checks,
+                    "executor_turn_count": turn_count,
+                },
+                target,
+            ),
             "structured_executor",
             {
                 "step_id": step.get("id"),
                 "step_type": step_type,
+                "gate_passed": branch,
+                "gate_reason": gate_eval.get("reason"),
+                "gate_actual_value": gate_eval.get("actual_value"),
+                "gate_expected_value": gate_eval.get("expected_value"),
                 "branch_target": target,
                 "executor_turn_count": turn_count,
             },
@@ -1872,19 +1954,29 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
 def _run_output_validation(state: IssueGraphState) -> dict[str, Any]:
     context = dict(state.get("context_data") or {})
     checks: dict[str, Any] = {}
-    intent = str(state.get("intent") or "")
-    if intent == "cancel_order":
-        order_id = str(context.get("order_id_extracted") or "").strip()
-        if order_id:
-            db_row = get_order_status(order_id)
-            db_status = str((db_row or {}).get("status") or "").strip().lower()
-            expected_status = "cancelled" if bool(context.get("cancel_succeeded")) else db_status
-            checks["order_cancel_db_verification"] = {
-                "valid": bool(expected_status == db_status),
-                "expected_status": expected_status,
-                "actual_status": db_status,
-                "order_id": order_id,
-            }
+    policy_constraints = dict(state.get("policy_constraints") or {})
+    bp = get_blueprint_by_category_intent(state.get("category") or "", state.get("intent") or "")
+    for assertion in list((as_dict(x) for x in (bp.expected_outcomes if bp else []))):
+        check_id = str(assertion.get("id") or "expected_outcome")
+        eval_out = _evaluate_condition(assertion, context_data=context, policy_constraints=policy_constraints)
+        checks[check_id] = {
+            "valid": bool(eval_out.get("passed")),
+            "reason": str(eval_out.get("reason") or ""),
+            "actual_value": eval_out.get("actual_value"),
+            "expected_value": eval_out.get("expected_value"),
+        }
+
+    order_id = str(context.get("order_id_extracted") or "").strip()
+    if order_id and bool(context.get("cancel_succeeded")):
+        db_row = get_order_status(order_id)
+        db_status = str((db_row or {}).get("status") or "").strip().lower()
+        checks["order_cancel_db_verification"] = {
+            "valid": bool(db_status == "cancelled"),
+            "reason": "ok" if db_status == "cancelled" else "order_status_not_cancelled_after_cancel_succeeded",
+            "expected_value": "cancelled",
+            "actual_value": db_status,
+            "order_id": order_id,
+        }
     all_valid = all(bool(item.get("valid")) for item in checks.values()) if checks else True
     return {"checks": checks, "all_valid": all_valid}
 
@@ -1899,6 +1991,7 @@ def _build_context_summary(state: IssueGraphState) -> dict[str, Any]:
         "procedure_id": str(state.get("procedure_id") or ""),
         "outcome_status": str(state.get("outcome_status") or ""),
         "validation_missing": list(state.get("validation_missing") or []),
+        "policy_check_results": list(state.get("policy_check_results") or []),
         "context_data": context,
     }
 
@@ -2162,6 +2255,7 @@ def run_conversation_graph(
             "tool_registry_scope": "",
             "procedure_namespace": "",
             "policy_constraints": None,
+            "policy_check_results": [],
             "outcome_status": None,
             "escalation_bundle": None,
             "final_response": None,
@@ -2195,6 +2289,7 @@ def run_conversation_graph(
         "validation_wait_limit": out.get("validation_wait_limit"),
         "output_validation": dict(out.get("output_validation") or {}),
         "context_summary": dict(out.get("context_summary") or {}),
+        "policy_check_results": list(out.get("policy_check_results") or []),
     }
     return {
         "text": out.get("text", ""),
@@ -2209,6 +2304,7 @@ def run_conversation_graph(
         "assistant_metadata": assistant_metadata,
         "context_data": context_data,
         "policy_constraints": policy_constraints,
+        "policy_check_results": list(out.get("policy_check_results") or []),
         "agent_state": agent_state,
         "stage_metadata": stage_metadata,
         "agent_trace": agent_trace,

@@ -1,6 +1,7 @@
 id: order_status
 category: order
 intent: order_status
+policy_required: true
 keywords:
   - status
   - order status
@@ -28,4 +29,9 @@ steps:
     message: >
       The order was not found (order_found is false). Tell the customer we could not find this
       order in our system, and ask them to verify their order ID and try again.
+expected_outcomes:
+  - id: order_lookup_outcome_present
+    field: order_found
+    op: exists
+    failure_reason: Missing order lookup outcome.
 fallback_response: I can check your order status once you share your order number.

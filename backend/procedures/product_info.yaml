@@ -1,6 +1,7 @@
 id: product_info
 category: product
 intent: product_info
+policy_required: true
 keywords:
   - product info
   - product details
@@ -26,4 +27,9 @@ steps:
     type: llm_response
     message: >
       The product was not found. Ask the user to confirm the product name.
+expected_outcomes:
+  - id: product_info_lookup_outcome_present
+    field: product_found
+    op: exists
+    failure_reason: Missing product lookup outcome.
 fallback_response: Tell me the product name and I will share the details.

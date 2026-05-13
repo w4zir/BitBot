@@ -148,7 +148,7 @@ def test_classify_full_flow_validation_missing(
     assert "- cancel_order: User wants to cancel an order." in system_prompt
 
 
-def test_classify_full_flow_interrupt_sets_pending_action(
+def test_classify_full_flow_refund_path_is_deterministic(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, session_issue_mocks: dict
 ) -> None:
     messages_store: list[dict] = []
@@ -167,7 +167,6 @@ def test_classify_full_flow_interrupt_sets_pending_action(
         "backend.agent.issue_graph.get_refund_context",
         lambda order_id: {"refund_order_status": "shipped", "refund_order_total_amount": 120.0},
     )
-    monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
 
     def append_message(sid: str, role: str, content: str, metadata=None, **_kwargs):
         messages_store.append(
@@ -202,9 +201,8 @@ def test_classify_full_flow_interrupt_sets_pending_action(
     assert r.status_code == 200
     data = r.json()
     assert data["assistant_reply"]
-    assert data["assistant_metadata"].get("pending_human_action") is True
-    assert data["assistant_metadata"].get("action_type") == "refund_escalation"
-    assert data["session_issue"]["is_resolved"] is False
+    assert data["assistant_metadata"].get("pending_human_action") is None
+    assert data["assistant_metadata"].get("outcome_status") in {"resolved", "unresolvable"}
 
 
 def test_classify_intent_stays_locked_second_message(
@@ -450,10 +448,6 @@ def test_classify_exposes_agent_state_and_policy_variable_maps(
         lambda: MagicMock(classify=lambda _text: ClassificationResult(category="order", confidence=0.95)),
     )
     monkeypatch.setattr(
-        "backend.agent.issue_graph.search_policy_docs",
-        lambda _q: [{"id": "doc-1", "title": "Order Cancellation Policy", "content": "policy rule"}],
-    )
-    monkeypatch.setattr(
         "backend.agent.issue_graph.get_order_status",
         lambda order_id: {"order_id": order_id, "status": "processing", "total_amount": 88.0},
     )
@@ -478,9 +472,8 @@ def test_classify_exposes_agent_state_and_policy_variable_maps(
     assert isinstance(md.get("stage_metadata"), dict)
     assert isinstance(md.get("agent_trace"), dict)
     policy_constraints = md.get("policy_constraints") or {}
-    assert isinstance(policy_constraints.get("variables"), dict)
-    assert isinstance(policy_constraints.get("validation_results"), dict)
-    assert policy_constraints.get("policy_doc_names") == ["Order Cancellation Policy"]
+    assert policy_constraints.get("schema_version") == "1.0"
+    assert isinstance(policy_constraints.get("eligibility_rules"), list)
     assert "raw_chunks" not in policy_constraints
 
 
@@ -527,7 +520,6 @@ def test_classify_validation_wait_limit_escalates(
         "backend.agent.issue_graph.get_intent_definitions_for_category",
         lambda _category: [{"intent_name": "order_status", "description": "User asks for order status."}],
     )
-    monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
 
     def chat_completion(**kwargs):
         msgs = kwargs.get("messages") or []
@@ -581,7 +573,6 @@ def test_classify_order_id_loophole_recovers_when_llm_returns_false_without_miss
         "backend.agent.issue_graph.get_order_status",
         lambda order_id: {"order_id": order_id, "status": "processing", "total_amount": 100.0},
     )
-    monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
 
     def chat_completion(**kwargs):
         msgs = kwargs.get("messages") or []
@@ -632,7 +623,6 @@ def test_classify_order_id_requires_ord_prefix(
         "backend.agent.issue_graph.get_intent_definitions_for_category",
         lambda _category: [{"intent_name": "order_status", "description": "User asks for order status."}],
     )
-    monkeypatch.setattr("backend.agent.issue_graph.search_policy_docs", lambda _q: [])
 
     def chat_completion(**kwargs):
         msgs = kwargs.get("messages") or []

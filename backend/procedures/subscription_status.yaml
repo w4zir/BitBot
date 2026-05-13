@@ -1,6 +1,7 @@
 id: subscription_status
 category: subscription
 intent: subscription_status
+policy_required: true
 keywords:
   - subscription status
   - plan status
@@ -24,4 +25,9 @@ steps:
     type: llm_response
     message: >
       Subscription was not found. Ask the user to verify the account email.
+expected_outcomes:
+  - id: subscription_lookup_outcome_present
+    field: subscription_found
+    op: exists
+    failure_reason: Missing subscription lookup outcome.
 fallback_response: I can check subscription status once you share the account email.

@@ -66,13 +66,10 @@ flowchart TD
   3) `(unknown, *_general)`
 
 ### 6. `policy_load`
-- Builds policy query from category/intent/problem/user text.
-- Retrieves docs through [`backend/rag/policy_retriever.py`](../backend/rag/policy_retriever.py).
-- Retries retrieval with broader query candidates up to `AGENT_MAX_NODE_TURNS`.
-- Produces `policy_constraints` as JSON variable maps:
-  - `variables: {variable_name: value}`
-  - `validation_results: {check_name: {valid, reason, actual_value, ...}}`
-- Uses deterministic validation helpers for duration/date checks, set-membership checks, and arithmetic threshold checks.
+- Loads typed YAML artifacts by `(category, intent)` from [`backend/policy_constraints/`](../backend/policy_constraints/).
+- Runtime does no policy retrieval and no policy LLM extraction.
+- Writes fail-closed constraints when artifact is missing or invalid.
+- Emits structured `policy_check_results` and policy artifact metadata (`policy_constraints_path`, `policy_schema_version`).
 
 ### 7. `validate_required`
 - Runs required-data validation (`validation_ok`, `validation_missing`).
@@ -84,12 +81,13 @@ flowchart TD
 
 ### 8. `structured_executor`
 - Deterministic procedure execution loop across step types:
-  - `retrieval`
   - `tool_call`
   - `logic_gate`
   - `interrupt`
   - `llm_response`
 - Updates `context_data`, `current_step_index`, and optionally `final_response`.
+- Evaluates logic gates against both procedure context and loaded policy fields (`value_from` references).
+- Records pass/fail reasons for each gate in `policy_check_results` and stage metadata.
 - Applies `executor_turn_count` safety cap (`AGENT_MAX_NODE_TURNS`) on self-loop progression.
 
 ### 9. `outcome_validator`
@@ -114,7 +112,7 @@ flowchart TD
 
 ## Procedure compatibility
 
-Procedure schema remains in [`backend/agent/procedures.py`](../backend/agent/procedures.py) and keeps existing YAML assets compatible. Validation now additionally enforces duplicate step-id detection and deterministic fallback-chain resolution helpers.
+Procedure schema remains in [`backend/agent/procedures.py`](../backend/agent/procedures.py). Validation enforces duplicate step-id detection, deterministic fallback-chain resolution, policy artifact presence, and expected-outcome assertion schema.
 
 Current procedure-backed intents in `backend/procedures/`:
 
@@ -138,7 +136,7 @@ Current procedure-backed intents in `backend/procedures/`:
 ## Node retry behavior
 
 - `classify_intent`: retries LLM parse/extract loop up to `AGENT_MAX_NODE_TURNS` before conservative fallback.
-- `policy_load`: retries retrieval with progressively broader query candidates up to `AGENT_MAX_NODE_TURNS`.
+- `policy_load`: single artifact load attempt per run with fail-closed fallback.
 - `validate_required`: retries validation-model exceptions up to `AGENT_MAX_NODE_TURNS`.
 - `validate_required` (persistent mode): pauses at `await_user_input` and resumes in-node on next user turn until wait limit is reached.
 - `structured_executor`: self-loop exits when `executor_turn_count >= AGENT_MAX_NODE_TURNS` even if blueprint index has not advanced.
@@ -149,6 +147,7 @@ Current procedure-backed intents in `backend/procedures/`:
 - `AGENT_VALIDATION_MAX_USER_WAITS`: max user wait turns before escalation (defaults to `AGENT_MAX_NODE_TURNS`).
 - `AGENT_CHECKPOINT_DB`: sqlite path for LangGraph checkpoint persistence (default `agent_checkpoints.db`).
 - `AGENT_PERSISTENT_MODE`: `1/true` enables persistent runner for `/classify full_flow`; `0/false` uses non-persistent graph.
+- `POLICY_CONSTRAINTS_DIR`: optional override for policy constraints artifact directory.
 
 ## Related routes
 

@@ -1,0 +1,23 @@
+schema_version: "1.0"
+category: order
+intent: order_status
+policy_doc_names:
+  - Order Status Policy
+source_query: order order_status policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules:
+  - id: order_must_exist
+    description: Order must exist to provide status.
+    field: order_found
+    op: eq
+    value: true
+    failure_reason: We could not find the order.
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Share concise order status.
+metadata:
+  artifact: order/order_status

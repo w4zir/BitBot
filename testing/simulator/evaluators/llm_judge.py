@@ -181,6 +181,8 @@ def _chat_completion_with_usage(
         return _ollama_chat(model=model, messages=messages)
     if p == "cerebras":
         return _cerebras_chat(model=model, messages=messages)
+    if p == "vllm":
+        return _vllm_chat(model=model, messages=messages)
     raise ValueError(f"Unsupported LLM provider for simulator judge: {provider!r}")
 
 
@@ -222,6 +224,35 @@ def _cerebras_chat(*, model: str, messages: list[dict[str, str]]) -> tuple[str, 
         "temperature": float(os.getenv("CEREBRAS_TEMPERATURE", "0.2")),
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    started = time.perf_counter()
+    with httpx.Client(timeout=_timeout_seconds()) as client:
+        response = client.post(f"{base}/chat/completions", json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json() or {}
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    choices = data.get("choices") or []
+    msg = (choices[0] if choices else {}).get("message") or {}
+    usage_data = data.get("usage") or {}
+    usage = {
+        "input_tokens": _int_or_none(usage_data.get("prompt_tokens")),
+        "output_tokens": _int_or_none(usage_data.get("completion_tokens")),
+        "cache_tokens": _int_or_none(usage_data.get("cache_tokens")),
+        "total_tokens": _int_or_none(usage_data.get("total_tokens")),
+    }
+    return str(msg.get("content") or "").strip(), usage, latency_ms
+
+
+def _vllm_chat(*, model: str, messages: list[dict[str, str]]) -> tuple[str, dict[str, int | None], float]:
+    base = os.getenv("VLLM_API_BASE", "http://localhost:8000/v1").rstrip("/")
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": float(os.getenv("VLLM_TEMPERATURE", "0.2")),
+    }
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    api_key = os.getenv("VLLM_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     started = time.perf_counter()
     with httpx.Client(timeout=_timeout_seconds()) as client:
         response = client.post(f"{base}/chat/completions", json=payload, headers=headers)

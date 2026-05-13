@@ -1,0 +1,23 @@
+schema_version: "1.0"
+category: product
+intent: product_availability
+policy_doc_names:
+  - Product Availability Policy
+source_query: product product_availability policy
+auto_resolvable: true
+requires_evidence: false
+default_ineligible_reason: ""
+time_limits: {}
+eligibility_rules:
+  - id: product_must_exist
+    description: Product record must exist.
+    field: product_found
+    op: eq
+    value: true
+    failure_reason: Product was not found.
+required_conditions: []
+escalation_conditions: []
+response_guidance:
+  - Answer if product is available.
+metadata:
+  artifact: product/product_availability

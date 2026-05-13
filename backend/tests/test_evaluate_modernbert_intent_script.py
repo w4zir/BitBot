@@ -215,3 +215,9 @@ def test_warn_if_ollama_unreachable_skips_non_ollama_provider(capsys) -> None:
     script._warn_if_ollama_unreachable(provider="cerebras", model="llama3.2")
     captured = capsys.readouterr()
     assert captured.err == ""
+
+
+def test_warn_if_ollama_unreachable_skips_vllm_provider(capsys) -> None:
+    script._warn_if_ollama_unreachable(provider="vllm", model="dummy")
+    captured = capsys.readouterr()
+    assert captured.err == ""

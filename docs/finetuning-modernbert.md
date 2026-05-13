@@ -75,7 +75,7 @@ This generates synthetic rows in the format:
 {"user_message": "...", "is_issue": true|false, "non_issue_category": "...|null", "notes": "..."}
 ```
 
-It supports `ollama` and `cerebras`, and can resume/checkpoint during long runs.
+It supports `ollama`, `cerebras`, and `vllm` (OpenAI-compatible), and can resume/checkpoint during long runs.
 
 Example:
 

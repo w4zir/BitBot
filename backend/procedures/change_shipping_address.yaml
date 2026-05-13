@@ -1,6 +1,7 @@
 id: change_shipping_address
 category: shipping
 intent: change_shipping_address
+policy_required: true
 keywords:
   - change address
   - shipping address
@@ -51,4 +52,9 @@ steps:
     type: llm_response
     message: >
       The order is already delivered, so the shipping address cannot be changed.
+expected_outcomes:
+  - id: shipping_update_outcome_present
+    field: shipping_address_updated
+    op: exists
+    failure_reason: Missing shipping update outcome.
 fallback_response: I can update shipping address once you share your order number and full new address.

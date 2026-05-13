@@ -1,6 +1,7 @@
 id: product_availability
 category: product
 intent: product_availability
+policy_required: true
 keywords:
   - availability
   - in stock
@@ -26,4 +27,9 @@ steps:
     type: llm_response
     message: >
       The product was not found. Ask the user to confirm the product name.
+expected_outcomes:
+  - id: product_availability_lookup_outcome_present
+    field: product_found
+    op: exists
+    failure_reason: Missing product availability lookup outcome.
 fallback_response: Share the product name and I can check if it is available.
