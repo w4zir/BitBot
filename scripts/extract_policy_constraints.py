@@ -19,6 +19,14 @@ Environment variables are loaded from the repository ``.env`` then optional
 already set in the process environment are preserved for ``.env``; ``.env.local``
 overrides those defaults.
 
+LLM provider and model for extraction (after the above load order):
+
+- ``POLICY_CONSTRAINTS_MODEL_PROVIDER`` (optional), else ``LLM_PROVIDER``, else
+  ``ollama``.
+- ``POLICY_CONSTRAINTS_MODEL`` (optional); if unset, ``VLLM_MODEL`` when
+  provider is ``vllm``, ``CEREBRAS_MODEL`` when ``cerebras``, else ``OLLAMA_MODEL``,
+  else ``llama3.2``.
+
 If the configured LLM endpoint is unreachable (for example Ollama not running),
 the script still exits successfully and writes default constraints, with
 ``metadata.llm_error`` recording the failure.
@@ -28,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -51,6 +60,31 @@ from backend.rag.policy_retriever import ping_elasticsearch, search_policy_docs
 logger = logging.getLogger("extract_policy_constraints")
 
 
+def _env_nonempty(key: str) -> str | None:
+    raw = os.getenv(key)
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s or None
+
+
+def _policy_extractor_llm() -> tuple[str, str]:
+    """Provider and model from env (.env then .env.local via ``load_repo_dotenv``)."""
+    provider = (
+        (_env_nonempty("POLICY_CONSTRAINTS_MODEL_PROVIDER") or "").lower()
+        or (_env_nonempty("LLM_PROVIDER") or "").lower()
+        or "ollama"
+    )
+    model = _env_nonempty("POLICY_CONSTRAINTS_MODEL")
+    if model:
+        return provider, model
+    if provider == "vllm":
+        return provider, _env_nonempty("VLLM_MODEL") or "llama3.2"
+    if provider == "cerebras":
+        return provider, _env_nonempty("CEREBRAS_MODEL") or "llama3.2"
+    return provider, _env_nonempty("OLLAMA_MODEL") or "llama3.2"
+
+
 def _default_constraints(category: str, intent: str, docs: list[dict[str, Any]], query: str) -> PolicyConstraints:
     return PolicyConstraints(
         category=category,
@@ -69,8 +103,7 @@ def _default_constraints(category: str, intent: str, docs: list[dict[str, Any]],
 
 
 def _llm_extract(category: str, intent: str, docs: list[dict[str, Any]], query: str) -> dict[str, Any]:
-    model_provider = "ollama"
-    model = "llama3.2"
+    model_provider, model = _policy_extractor_llm()
     policy_text = "\n\n---\n\n".join(str(doc.get("content") or "") for doc in docs[:3])
     system = (
         "You extract deterministic policy constraints for a support automation system.\n"
@@ -81,6 +114,8 @@ def _llm_extract(category: str, intent: str, docs: list[dict[str, Any]], query: 
         "escalation_conditions, response_guidance, metadata.\n"
         "Rules in eligibility_rules/required_conditions/escalation_conditions must use keys:\n"
         "id, description, field, op, value(optional), value_from(optional), failure_reason, applies_to.\n"
+        "Use only these op strings (lowercase): eq, neq, gt, gte, lt, lte, in, nin, exists, contains.\n"
+        "time_limits must be an object (use {} if none). response_guidance must be a list of strings.\n"
     )
     user = (
         f"Category: {category}\n"

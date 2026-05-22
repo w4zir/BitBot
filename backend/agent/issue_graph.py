@@ -1788,6 +1788,8 @@ _CONDITION_OPS: dict[str, Callable[[Any, Any], bool]] = {
     "lt": lambda a, b: a < b,
     "lte": lambda a, b: a <= b,
     "in": lambda a, b: a in b,
+    "nin": lambda a, b: a not in b,
+    "contains": lambda a, b: str(b) in str(a) if a is not None else False,
     "exists": lambda a, _: a is not None,
 }
 

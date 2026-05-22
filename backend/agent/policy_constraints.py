@@ -6,10 +6,36 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
-ComparisonOp = Literal["eq", "neq", "gt", "gte", "lt", "lte", "in", "exists"]
+ComparisonOp = Literal["eq", "neq", "gt", "gte", "lt", "lte", "in", "exists", "nin", "contains"]
+
+_CANON_OPS: frozenset[str] = frozenset(
+    {"eq", "neq", "gt", "gte", "lt", "lte", "in", "exists", "nin", "contains"}
+)
+
+_OP_ALIASES: dict[str, str] = {
+    "equals": "eq",
+    "equal": "eq",
+    "==": "eq",
+    "not_equals": "neq",
+    "not_equal": "neq",
+    "!=": "neq",
+    "greater_than": "gt",
+    "less_than": "lt",
+    "greater_or_equal": "gte",
+    "less_or_equal": "lte",
+    "not_in": "nin",
+    "notin": "nin",
+    "one_of": "in",
+    "member_of": "in",
+    "substring": "contains",
+    "includes": "contains",
+    "like": "contains",
+    "present": "exists",
+    "is_set": "exists",
+}
 
 
 class PolicyRule(BaseModel):
@@ -21,6 +47,19 @@ class PolicyRule(BaseModel):
     value_from: str | None = None
     failure_reason: str = ""
     applies_to: str = "runtime"
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _normalize_op(cls, v: Any) -> str:
+        if v is None:
+            return "eq"
+        key = str(v).strip().lower().replace(" ", "_")
+        if key in _CANON_OPS:
+            return key
+        mapped = _OP_ALIASES.get(key)
+        if mapped is not None:
+            return mapped
+        raise ValueError(f"unsupported policy rule op: {v!r}")
 
 
 class PolicyCheckResult(BaseModel):
@@ -48,6 +87,24 @@ class PolicyConstraints(BaseModel):
     escalation_conditions: list[PolicyRule] = Field(default_factory=list)
     response_guidance: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("time_limits", mode="before")
+    @classmethod
+    def _coerce_time_limits(cls, v: Any) -> dict[str, Any]:
+        if v is None or not isinstance(v, dict):
+            return {}
+        return v
+
+    @field_validator("response_guidance", mode="before")
+    @classmethod
+    def _coerce_response_guidance(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, dict):
+            return [f"{k}: {val}" for k, val in v.items()]
+        if isinstance(v, list):
+            return [str(x) for x in v]
+        return [str(v)]
 
 
 def policy_constraints_dir() -> Path:

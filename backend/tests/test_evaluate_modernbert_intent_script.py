@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from testing.scripts import evaluate_modernbert_intent as script
+from testing.scripts import evaluate_category_n_intent as script
 
 
 class _FakeClassifier:
@@ -52,9 +52,19 @@ def test_run_evaluation_uses_intent_only_when_category_correct(monkeypatch) -> N
         _ = state
         return {"intent": "get_refund", "assistant_metadata": {"intent_classifier": "llm"}}
 
-    monkeypatch.setattr(script, "_classify_intent_node", _fake_intent_node)
-    monkeypatch.setattr(script, "get_intents_for_category", lambda _category: ["get_refund"])
-    records, summary = script._run_evaluation(rows=rows, classifier=classifier)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        "backend.agent.issue_graph._classify_intent_node",
+        _fake_intent_node,
+    )
+    monkeypatch.setattr(
+        "backend.db.intents_repo.get_intents_for_category",
+        lambda _category: ["get_refund"],
+    )
+    records, summary = script._run_evaluation(
+        rows=rows,
+        classifier=classifier,  # type: ignore[arg-type]
+        category_only=False,
+    )
 
     assert len(records) == 2
     assert records[0]["intent_classifier"]["evaluated"] is True
@@ -76,9 +86,16 @@ def test_run_evaluation_skips_intent_when_allowed_intents_missing(monkeypatch) -
     ]
     classifier = _FakeClassifier(outputs=[("refund", 0.93)])
 
-    monkeypatch.setattr(script, "get_intents_for_category", lambda _category: [])
+    monkeypatch.setattr(
+        "backend.db.intents_repo.get_intents_for_category",
+        lambda _category: [],
+    )
 
-    records, summary = script._run_evaluation(rows=rows, classifier=classifier)  # type: ignore[arg-type]
+    records, summary = script._run_evaluation(
+        rows=rows,
+        classifier=classifier,  # type: ignore[arg-type]
+        category_only=False,
+    )
 
     assert records[0]["intent_classifier"]["evaluated"] is False
     assert "No DB allowed intents configured" in records[0]["intent_classifier"]["error"]
@@ -99,14 +116,23 @@ def test_run_evaluation_rejects_intent_outside_allowed_list(monkeypatch) -> None
     ]
     classifier = _FakeClassifier(outputs=[("refund", 0.97)])
 
-    monkeypatch.setattr(script, "get_intents_for_category", lambda _category: ["get_refund"])
     monkeypatch.setattr(
-        script,
-        "_classify_intent_node",
-        lambda _state: {"intent": "refund_general", "assistant_metadata": {"intent_classifier": "llm"}},
+        "backend.db.intents_repo.get_intents_for_category",
+        lambda _category: ["get_refund"],
+    )
+    monkeypatch.setattr(
+        "backend.agent.issue_graph._classify_intent_node",
+        lambda _state: {
+            "intent": "refund_general",
+            "assistant_metadata": {"intent_classifier": "llm"},
+        },
     )
 
-    records, summary = script._run_evaluation(rows=rows, classifier=classifier)  # type: ignore[arg-type]
+    records, summary = script._run_evaluation(
+        rows=rows,
+        classifier=classifier,  # type: ignore[arg-type]
+        category_only=False,
+    )
 
     assert records[0]["intent_classifier"]["evaluated"] is True
     assert records[0]["intent_classifier"]["intent"] == ""
@@ -114,6 +140,30 @@ def test_run_evaluation_rejects_intent_outside_allowed_list(monkeypatch) -> None
     assert records[0]["intent_classifier"]["is_intent_correct"] is False
     assert summary["counts"]["intent_evaluated_examples"] == 1
     assert summary["metrics"]["intent_on_category_correct"]["count"] == 1
+
+
+def test_run_evaluation_category_only_skips_intent() -> None:
+    rows = [
+        script.DatasetRow(
+            index=0,
+            line_number=1,
+            text="refund question",
+            gold_category="refund",
+            gold_intent="get_refund",
+        ),
+    ]
+    classifier = _FakeClassifier(outputs=[("refund", 0.91)])
+
+    records, summary = script._run_evaluation(
+        rows=rows,
+        classifier=classifier,  # type: ignore[arg-type]
+        category_only=True,
+    )
+
+    assert "intent_classifier" not in records[0]
+    assert "intent_on_category_correct" not in summary["metrics"]
+    assert summary["counts"]["category_correct_examples"] == 1
+    assert "intent_evaluated_examples" not in summary["counts"]
 
 
 def test_write_results_orders_summary_metadata_examples(tmp_path) -> None:
@@ -143,9 +193,74 @@ def test_load_rows_skip_invalid(tmp_path) -> None:
         f.write("\n")
         f.write(json.dumps({"text": "", "category": "refund", "intent": "get_refund"}) + "\n")
 
-    rows, skipped = script._load_rows(data_file, skip_invalid=True)
+    rows, skipped, input_format, label2id_file = script._load_rows(
+        data_file,
+        skip_invalid=True,
+        label2id_path=None,
+        category_only=True,
+    )
     assert len(rows) == 1
     assert skipped == 2
+    assert input_format == "category_intent"
+    assert label2id_file is None
+
+
+def test_load_rows_category_only_allows_missing_intent(tmp_path) -> None:
+    data_file = tmp_path / "dataset.jsonl"
+    with data_file.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps({"text": "hello", "category": "refund"}) + "\n")
+
+    rows, skipped, input_format, _ = script._load_rows(
+        data_file,
+        skip_invalid=False,
+        label2id_path=None,
+        category_only=True,
+    )
+    assert len(rows) == 1
+    assert rows[0].gold_intent == ""
+    assert skipped == 0
+    assert input_format == "category_intent"
+
+
+def test_load_rows_training_format_with_label2id(tmp_path) -> None:
+    label2id_path = tmp_path / "label2id.json"
+    label2id_path.write_text(
+        json.dumps({"CONTACT": 0, "REFUND": 1}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    data_file = tmp_path / "test.jsonl"
+    with data_file.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps({"text": "refund please", "label": 1}) + "\n")
+
+    rows, skipped, input_format, resolved = script._load_rows(
+        data_file,
+        skip_invalid=False,
+        label2id_path=label2id_path,
+        category_only=True,
+    )
+    assert len(rows) == 1
+    assert rows[0].gold_category == "refund"
+    assert rows[0].gold_label_id == 1
+    assert skipped == 0
+    assert input_format == "training"
+    assert resolved == str(label2id_path.resolve())
+
+
+def test_load_rows_training_only_rejects_intent_mode(tmp_path) -> None:
+    label2id_path = tmp_path / "label2id.json"
+    label2id_path.write_text(json.dumps({"REFUND": 0}) + "\n", encoding="utf-8")
+    data_file = tmp_path / "test.jsonl"
+    data_file.write_text(
+        json.dumps({"text": "refund please", "label": 0}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Intent evaluation requires"):
+        script._load_rows(
+            data_file,
+            skip_invalid=False,
+            label2id_path=label2id_path,
+            category_only=False,
+        )
 
 
 def test_build_parser_validates_max_limit() -> None:
@@ -154,6 +269,13 @@ def test_build_parser_validates_max_limit() -> None:
     assert args.max_limit == 2
     with pytest.raises(SystemExit):
         parser.parse_args(["--max-limit", "0"])
+
+
+def test_build_parser_accepts_category_only_and_verbose_debug() -> None:
+    parser = script._build_parser()
+    args = parser.parse_args(["--category-only", "--verbose-debug"])
+    assert args.category_only is True
+    assert args.verbose_debug is True
 
 
 def test_build_parser_accepts_ollama_url() -> None:

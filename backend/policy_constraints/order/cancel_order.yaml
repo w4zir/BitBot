@@ -2,20 +2,42 @@ schema_version: '1.0'
 category: order
 intent: cancel_order
 policy_doc_names:
-- Order Cancellation Policy
-- Fraud Prevention & Order Verification
-- Delivery Period Policy
+- 07_order_cancellation_policy
 source_query: order cancel_order policy
-auto_resolvable: false
-requires_evidence: false
-default_ineligible_reason: The request does not satisfy policy constraints.
+auto_resolvable: true
+requires_evidence: true
+default_ineligible_reason: The order status is currently shipped, delivered, or already
+  cancelled.
 time_limits: {}
-eligibility_rules: []
-required_conditions: []
+eligibility_rules:
+- id: CXL_001
+  description: The order must be in a status allowing cancellation, meaning it cannot
+    be shipped, delivered, or already cancelled.
+  field: order_status
+  op: nin
+  value:
+  - shipped
+  - delivered
+  - cancelled
+  value_from: null
+  failure_reason: Order is in a terminal status and cannot be cancelled.
+  applies_to: order
+required_conditions:
+- id: CXL_002
+  description: Check if payment was successfully captured or already processed to
+    determine if a refund needs to be generated upon cancellation.
+  field: payment_status
+  op: exists
+  value: null
+  value_from: null
+  failure_reason: ''
+  applies_to: order_details
 escalation_conditions: []
-response_guidance: []
+response_guidance:
+- If the order meets all eligibility criteria, initiate the cancellation request.
+- After cancellation, check the 'payment_status'. If payment was already made, immediately
+  trigger the refund process.
+- If the order fails eligibility rules, inform the customer clearly stating why the
+  cancellation cannot be processed.
 metadata:
-  extractor: offline_policy_pipeline
-  llm_error: 'Client error ''404 Not Found'' for url ''http://localhost:11434/api/chat''
-
-    For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404'
+  policy_focus: Order Status & Refund Handling

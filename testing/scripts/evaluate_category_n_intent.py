@@ -1,5 +1,44 @@
 from __future__ import annotations
 
+"""Evaluate ModernBERT category predictions and optional production intent classifier.
+
+Supports two labeled JSONL formats:
+
+- **category_intent**: ``{"text", "category", "intent"}`` (e.g. ``data/raw/simulated/category_intent.jsonl``)
+- **training**: ``{"text", "label": <int>}`` with ``label2id.json`` (e.g. ``training/data/simulated/test.jsonl``)
+
+Calls the BentoML ModernBERT classifier for category labels. When not using ``--category-only``,
+runs the production intent classifier only when the predicted category matches gold.
+
+Writes metrics and per-sample records to ``testing/results/category_n_intent/run_YYYYMMDD_HHMMSS.jsonl``.
+
+Prerequisites (from repo ``.env`` or environment):
+
+- ``CLASSIFIER_BENTOML_URL`` — ModernBERT BentoML classify endpoint (required)
+- ``CLASSIFIER_BENTOML_TIMEOUT_SECONDS`` — HTTP timeout (default 5)
+
+Full intent evaluation additionally requires:
+
+- ``INTENT_MODEL_PROVIDER`` / ``INTENT_MODEL`` — intent LLM (default ollama / llama3.2)
+- ``OLLAMA_BASE_URL`` — when using Ollama for intent classification
+- ``POSTGRES_HOST`` (and related DB vars) — intent lookup via ``get_intents_for_category``
+
+Usage (from repository root)::
+
+    python testing/scripts/evaluate_category_n_intent.py --category-only
+
+    python testing/scripts/evaluate_category_n_intent.py \\
+        --input-file training/data/simulated/test.jsonl \\
+        --category-only
+
+    python testing/scripts/evaluate_category_n_intent.py \\
+        --input-file data/raw/simulated/category_intent.jsonl \\
+        --max-limit 100 \\
+        --verbose-debug
+
+    python testing/scripts/evaluate_category_n_intent.py --help
+"""
+
 import argparse
 import json
 import os
@@ -16,14 +55,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from backend.agent.issue_graph import _classify_intent_node
-from backend.db.intents_repo import get_intents_for_category
 from backend.repo_dotenv import load_repo_dotenv
 from backend.rag.query_classifier import QueryClassifier
 
 
 DEFAULT_INPUT_FILE = REPO_ROOT / "data" / "raw" / "simulated" / "category_intent.jsonl"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "testing" / "results" / "modernbert_n_intent"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "testing" / "results" / "category_n_intent"
 
 
 @dataclass(frozen=True)
@@ -33,6 +70,7 @@ class DatasetRow:
     text: str
     gold_category: str
     gold_intent: str
+    gold_label_id: int | None = None
 
 
 def _normalize_category(label: str) -> str:
@@ -43,14 +81,96 @@ def _normalize_intent(label: str) -> str:
     return str(label or "").strip()
 
 
-def _load_rows(input_file: Path, skip_invalid: bool) -> tuple[list[DatasetRow], int]:
+def _load_id2label(path: Path) -> dict[int, str]:
+    if not path.is_file():
+        raise ValueError(f"label2id file does not exist: {path}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"{path}: expected non-empty JSON object (string -> int)")
+    label2id: dict[str, int] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            raise ValueError(f"{path}: label keys must be strings, got {type(key)}")
+        label2id[key] = int(value)
+    ids = sorted(label2id.values())
+    expected = list(range(len(label2id)))
+    if ids != expected:
+        raise ValueError(
+            f"{path}: label ids must be contiguous 0..{len(label2id) - 1}, got {ids[:8]}..."
+        )
+    return {int(value): key for key, value in label2id.items()}
+
+
+def _resolve_label2id_path(*, input_file: Path, explicit: str) -> Path | None:
+    if explicit.strip():
+        return Path(explicit).expanduser().resolve()
+    sibling = input_file.parent / "label2id.json"
+    if sibling.is_file():
+        return sibling.resolve()
+    return None
+
+
+def _parse_row_labels(
+    payload: dict[str, Any],
+    *,
+    line_number: int,
+    id2label: dict[int, str] | None,
+    category_only: bool,
+) -> tuple[str, str, int | None] | None:
+    """Return (gold_category, gold_intent, gold_label_id) or None if row is invalid."""
+    raw_category = str(payload.get("category") or "").strip()
+    if raw_category:
+        gold_category = _normalize_category(raw_category)
+        gold_intent = _normalize_intent(str(payload.get("intent") or ""))
+        if not category_only and not gold_intent:
+            raise ValueError(
+                f"Line {line_number}: category_intent rows require non-empty intent "
+                "when not using --category-only"
+            )
+        return gold_category, gold_intent, None
+
+    if "label" in payload:
+        if id2label is None:
+            raise ValueError(
+                f"Line {line_number}: row uses integer 'label' but no label2id mapping was loaded; "
+                "pass --label2id-file or place label2id.json next to the input file"
+            )
+        try:
+            label_id = int(payload["label"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Line {line_number}: 'label' must be an integer") from exc
+        if label_id not in id2label:
+            raise ValueError(
+                f"Line {line_number}: label id {label_id} is not in label2id mapping"
+            )
+        gold_category = _normalize_category(id2label[label_id])
+        return gold_category, "", label_id
+
+    return None
+
+
+def _load_rows(
+    input_file: Path,
+    *,
+    skip_invalid: bool,
+    label2id_path: Path | None,
+    category_only: bool,
+) -> tuple[list[DatasetRow], int, str, str | None]:
     if not input_file.exists() or not input_file.is_file():
         raise ValueError(f"Input file does not exist or is not a file: {input_file}")
     if input_file.suffix.lower() != ".jsonl":
         raise ValueError(f"Input file must be .jsonl: {input_file}")
 
+    id2label: dict[int, str] | None = None
+    effective_label2id: str | None = None
+    if label2id_path is not None:
+        id2label = _load_id2label(label2id_path)
+        effective_label2id = str(label2id_path)
+
     rows: list[DatasetRow] = []
     skipped = 0
+    saw_label_rows = False
+    saw_category_rows = False
     with input_file.open("r", encoding="utf-8") as f:
         for line_number, line in enumerate(f, start=1):
             raw = line.strip()
@@ -73,15 +193,51 @@ def _load_rows(input_file: Path, skip_invalid: bool) -> tuple[list[DatasetRow], 
                 raise ValueError(f"Line {line_number} must be a JSON object")
 
             text = str(payload.get("text") or "").strip()
-            gold_category = _normalize_category(str(payload.get("category") or ""))
-            gold_intent = _normalize_intent(str(payload.get("intent") or ""))
-            if not text or not gold_category or not gold_intent:
+            if not text:
+                if skip_invalid:
+                    skipped += 1
+                    continue
+                raise ValueError(f"Line {line_number} must include non-empty text")
+
+            if "label" in payload and id2label is None:
+                resolved = _resolve_label2id_path(input_file=input_file, explicit="")
+                if resolved is None:
+                    if skip_invalid:
+                        skipped += 1
+                        continue
+                    raise ValueError(
+                        "Dataset contains integer 'label' rows but no label2id.json was found; "
+                        "pass --label2id-file or place label2id.json next to the input file"
+                    )
+                id2label = _load_id2label(resolved)
+                effective_label2id = str(resolved)
+
+            try:
+                parsed = _parse_row_labels(
+                    payload,
+                    line_number=line_number,
+                    id2label=id2label,
+                    category_only=category_only,
+                )
+            except ValueError:
+                if skip_invalid:
+                    skipped += 1
+                    continue
+                raise
+
+            if parsed is None:
                 if skip_invalid:
                     skipped += 1
                     continue
                 raise ValueError(
-                    f"Line {line_number} must include non-empty text/category/intent fields"
+                    f"Line {line_number} must include 'category' or integer 'label' field"
                 )
+
+            gold_category, gold_intent, gold_label_id = parsed
+            if gold_label_id is not None:
+                saw_label_rows = True
+            else:
+                saw_category_rows = True
 
             rows.append(
                 DatasetRow(
@@ -90,11 +246,27 @@ def _load_rows(input_file: Path, skip_invalid: bool) -> tuple[list[DatasetRow], 
                     text=text,
                     gold_category=gold_category,
                     gold_intent=gold_intent,
+                    gold_label_id=gold_label_id,
                 )
             )
+
     if not rows:
         raise ValueError("No valid rows found in dataset")
-    return rows, skipped
+
+    if saw_label_rows and not category_only and not saw_category_rows:
+        raise ValueError(
+            "Intent evaluation requires category_intent JSONL with 'intent' labels; "
+            "training-format rows (integer 'label') support --category-only only"
+        )
+
+    if saw_label_rows and saw_category_rows:
+        input_format = "mixed"
+    elif saw_label_rows:
+        input_format = "training"
+    else:
+        input_format = "category_intent"
+
+    return rows, skipped, input_format, effective_label2id
 
 
 def _positive_int(value: str) -> int:
@@ -237,17 +409,33 @@ def _compute_multiclass_metrics(gold: list[str], pred: list[str]) -> dict[str, A
     }
 
 
-def _print_sample_progress(*, record: dict[str, Any], processed: int, total: int) -> None:
+def _print_progress(*, processed: int, total: int) -> None:
+    print(f"Evaluated {processed}/{total}", end="\r", flush=True)
+
+
+def _print_sample_debug(
+    *,
+    record: dict[str, Any],
+    processed: int,
+    total: int,
+    category_only: bool,
+) -> None:
     gold = dict(record.get("gold") or {})
     modernbert = dict(record.get("modernbert") or {})
     intent_classifier = dict(record.get("intent_classifier") or {})
     text = str(record.get("text") or "")
     line_number = record.get("line_number")
+    gold_label_id = record.get("gold_label_id")
 
     print("=" * 80)
     print(f"Sample {processed}/{total} (line {line_number})")
     print(f"Text: {text}")
-    print(f"Actual labels: category={gold.get('category', '')}, intent={gold.get('intent', '')}")
+    gold_parts = [f"category={gold.get('category', '')}"]
+    if gold_label_id is not None:
+        gold_parts.append(f"label_id={gold_label_id}")
+    if not category_only:
+        gold_parts.append(f"intent={gold.get('intent', '')}")
+    print(f"Gold: {', '.join(gold_parts)}")
     print(
         "ModernBERT: "
         f"category={modernbert.get('category', '')}, "
@@ -258,18 +446,19 @@ def _print_sample_progress(*, record: dict[str, Any], processed: int, total: int
     if modernbert_error:
         print(f"ModernBERT error: {modernbert_error}")
 
-    intent_evaluated = bool(intent_classifier.get("evaluated"))
-    intent_label = str(intent_classifier.get("intent") or "")
-    intent_correct = intent_classifier.get("is_intent_correct")
-    print(
-        "Intent classifier: "
-        f"evaluated={intent_evaluated}, "
-        f"intent={intent_label if intent_label else '(empty)'}, "
-        f"correct={intent_correct if intent_correct is not None else 'n/a'}"
-    )
-    intent_error = str(intent_classifier.get("error") or "")
-    if intent_error:
-        print(f"Intent classifier error: {intent_error}")
+    if not category_only:
+        intent_evaluated = bool(intent_classifier.get("evaluated"))
+        intent_label = str(intent_classifier.get("intent") or "")
+        intent_correct = intent_classifier.get("is_intent_correct")
+        print(
+            "Intent classifier: "
+            f"evaluated={intent_evaluated}, "
+            f"intent={intent_label if intent_label else '(empty)'}, "
+            f"correct={intent_correct if intent_correct is not None else 'n/a'}"
+        )
+        intent_error = str(intent_classifier.get("error") or "")
+        if intent_error:
+            print(f"Intent classifier error: {intent_error}")
     print("=" * 80)
 
 
@@ -278,6 +467,7 @@ def _print_terminal_summary(
     summary_payload: dict[str, Any],
     metadata_payload: dict[str, Any],
     output_file: Path,
+    category_only: bool,
 ) -> None:
     counts = dict(summary_payload.get("counts") or {})
     metrics = dict(summary_payload.get("metrics") or {})
@@ -292,34 +482,102 @@ def _print_terminal_summary(
     print("\n" + "#" * 80)
     print("Evaluation summary")
     print("#" * 80)
-    print(
-        "Counts: "
-        f"total_examples={counts.get('total_examples', 0)}, "
-        f"category_correct_examples={counts.get('category_correct_examples', 0)}, "
-        f"intent_evaluated_examples={counts.get('intent_evaluated_examples', 0)}, "
-        f"skipped_invalid_rows={config.get('skipped_invalid_rows', 0)}"
-    )
+    count_parts = [
+        f"total_examples={counts.get('total_examples', 0)}",
+        f"category_correct_examples={counts.get('category_correct_examples', 0)}",
+        f"skipped_invalid_rows={config.get('skipped_invalid_rows', 0)}",
+    ]
+    if not category_only:
+        count_parts.insert(
+            2, f"intent_evaluated_examples={counts.get('intent_evaluated_examples', 0)}"
+        )
+    print("Counts: " + ", ".join(count_parts))
     print(
         "Category metrics: "
         f"accuracy={float(category_metrics.get('accuracy') or 0.0):.4f}, "
         f"macro_f1={float(category_macro.get('f1') or 0.0):.4f}, "
         f"weighted_f1={float(category_weighted.get('f1') or 0.0):.4f}"
     )
-    print(
-        "Intent metrics (on category-correct examples): "
-        f"accuracy={float(intent_metrics.get('accuracy') or 0.0):.4f}, "
-        f"macro_f1={float(intent_macro.get('f1') or 0.0):.4f}, "
-        f"weighted_f1={float(intent_weighted.get('f1') or 0.0):.4f}"
-    )
+    if not category_only:
+        print(
+            "Intent metrics (on category-correct examples): "
+            f"accuracy={float(intent_metrics.get('accuracy') or 0.0):.4f}, "
+            f"macro_f1={float(intent_macro.get('f1') or 0.0):.4f}, "
+            f"weighted_f1={float(intent_weighted.get('f1') or 0.0):.4f}"
+        )
     print(f"Output file: {output_file}")
     print("#" * 80)
+
+
+def _evaluate_intent_for_row(
+    *,
+    row: DatasetRow,
+    predicted_category: str,
+    category_confidence: float,
+    allowed_intents_cache: dict[str, list[str]],
+) -> tuple[str, str, bool, bool | None, dict[str, Any]]:
+    from backend.agent.issue_graph import _classify_intent_node
+    from backend.db.intents_repo import get_intents_for_category
+
+    predicted_intent = ""
+    intent_error = ""
+    intent_metadata: dict[str, Any] = {}
+    is_intent_correct: bool | None = None
+    intent_evaluated = False
+
+    if predicted_category not in allowed_intents_cache:
+        try:
+            cached_allowed = get_intents_for_category(predicted_category)
+        except Exception:  # noqa: BLE001
+            cached_allowed = []
+        allowed_intents_cache[predicted_category] = [
+            _normalize_intent(item) for item in cached_allowed if _normalize_intent(item)
+        ]
+    allowed_intents = allowed_intents_cache.get(predicted_category, [])
+    intent_metadata["allowed_intents"] = allowed_intents
+    if not allowed_intents:
+        intent_error = (
+            f"No DB allowed intents configured for category '{predicted_category}'; "
+            "skipping intent evaluation."
+        )
+    else:
+        intent_evaluated = True
+        try:
+            state: dict[str, Any] = {
+                "text": row.text,
+                "category": predicted_category,
+                "confidence": category_confidence,
+                "messages": [
+                    {"role": "user", "content": row.text, "metadata": {"source": "eval"}}
+                ],
+                "assistant_metadata": {},
+                "issue_locked": False,
+            }
+            intent_out = _classify_intent_node(state)
+            predicted_intent = _normalize_intent(str(intent_out.get("intent") or ""))
+            intent_metadata.update(dict(intent_out.get("assistant_metadata") or {}))
+        except Exception as exc:  # noqa: BLE001
+            intent_error = str(exc)
+            predicted_intent = ""
+
+        if predicted_intent and predicted_intent not in allowed_intents:
+            intent_error = (
+                f"Predicted intent '{predicted_intent}' is outside allowed DB intents "
+                f"for category '{predicted_category}'."
+            )
+            predicted_intent = ""
+
+        is_intent_correct = predicted_intent == row.gold_intent
+
+    return predicted_intent, intent_error, intent_evaluated, is_intent_correct, intent_metadata
 
 
 def _run_evaluation(
     *,
     rows: list[DatasetRow],
     classifier: QueryClassifier,
-    verbose_progress: bool = False,
+    category_only: bool = False,
+    verbose_debug: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     records: list[dict[str, Any]] = []
     category_gold: list[str] = []
@@ -355,53 +613,21 @@ def _run_evaluation(
         intent_metadata: dict[str, Any] = {}
         is_intent_correct = None
         intent_evaluated = False
-        if is_category_correct:
-            if predicted_category not in allowed_intents_cache:
-                try:
-                    cached_allowed = get_intents_for_category(predicted_category)
-                except Exception:  # noqa: BLE001
-                    cached_allowed = []
-                allowed_intents_cache[predicted_category] = [
-                    _normalize_intent(item) for item in cached_allowed if _normalize_intent(item)
-                ]
-            allowed_intents = allowed_intents_cache.get(predicted_category, [])
-            intent_metadata["allowed_intents"] = allowed_intents
-            if not allowed_intents:
-                intent_error = (
-                    f"No DB allowed intents configured for category '{predicted_category}'; "
-                    "skipping intent evaluation."
+        if not category_only and is_category_correct:
+            predicted_intent, intent_error, intent_evaluated, is_intent_correct, intent_metadata = (
+                _evaluate_intent_for_row(
+                    row=row,
+                    predicted_category=predicted_category,
+                    category_confidence=category_confidence,
+                    allowed_intents_cache=allowed_intents_cache,
                 )
-            else:
-                intent_evaluated = True
+            )
+            if intent_evaluated:
                 intent_eval_total += 1
-                try:
-                    state: dict[str, Any] = {
-                        "text": row.text,
-                        "category": predicted_category,
-                        "confidence": category_confidence,
-                        "messages": [{"role": "user", "content": row.text, "metadata": {"source": "eval"}}],
-                        "assistant_metadata": {},
-                        "issue_locked": False,
-                    }
-                    intent_out = _classify_intent_node(state)
-                    predicted_intent = _normalize_intent(str(intent_out.get("intent") or ""))
-                    intent_metadata.update(dict(intent_out.get("assistant_metadata") or {}))
-                except Exception as exc:  # noqa: BLE001
-                    intent_error = str(exc)
-                    predicted_intent = ""
-
-                if predicted_intent and predicted_intent not in allowed_intents:
-                    intent_error = (
-                        f"Predicted intent '{predicted_intent}' is outside allowed DB intents "
-                        f"for category '{predicted_category}'."
-                    )
-                    predicted_intent = ""
-
-                is_intent_correct = predicted_intent == row.gold_intent
                 intent_gold.append(row.gold_intent)
                 intent_pred.append(predicted_intent)
 
-        record = {
+        record: dict[str, Any] = {
             "type": "example",
             "index": row.index,
             "line_number": row.line_number,
@@ -416,29 +642,44 @@ def _run_evaluation(
                 "is_category_correct": is_category_correct,
                 "error": category_error,
             },
-            "intent_classifier": {
+        }
+        if row.gold_label_id is not None:
+            record["gold_label_id"] = row.gold_label_id
+        if not category_only:
+            record["intent_classifier"] = {
                 "evaluated": intent_evaluated,
                 "intent": predicted_intent,
                 "is_intent_correct": is_intent_correct,
                 "error": intent_error,
                 "metadata": intent_metadata,
-            },
-        }
+            }
         records.append(record)
-        if verbose_progress:
-            _print_sample_progress(record=record, processed=processed, total=total)
+        _print_progress(processed=processed, total=total)
+        if verbose_debug:
+            _print_sample_debug(
+                record=record,
+                processed=processed,
+                total=total,
+                category_only=category_only,
+            )
 
-    summary = {
+    if total > 0:
+        print()
+
+    summary: dict[str, Any] = {
         "counts": {
             "total_examples": len(rows),
             "category_correct_examples": category_correct_total,
-            "intent_evaluated_examples": intent_eval_total,
         },
         "metrics": {
             "category": _compute_multiclass_metrics(category_gold, category_pred),
-            "intent_on_category_correct": _compute_multiclass_metrics(intent_gold, intent_pred),
         },
     }
+    if not category_only:
+        summary["counts"]["intent_evaluated_examples"] = intent_eval_total
+        summary["metrics"]["intent_on_category_correct"] = _compute_multiclass_metrics(
+            intent_gold, intent_pred
+        )
     return records, summary
 
 
@@ -463,8 +704,8 @@ def _write_results(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate ModernBERT category predictions and production intent classifier output "
-            "against a labeled JSONL dataset."
+            "Evaluate ModernBERT category predictions (BentoML) and optionally "
+            "production intent classifier output against a labeled JSONL dataset."
         )
     )
     parser.add_argument(
@@ -475,7 +716,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),
-        help=f"Directory for run_YYYYMMDD_HHMMSS.json output (default: {DEFAULT_OUTPUT_DIR}).",
+        help=f"Directory for run_YYYYMMDD_HHMMSS.jsonl output (default: {DEFAULT_OUTPUT_DIR}).",
+    )
+    parser.add_argument(
+        "--label2id-file",
+        default="",
+        help="Path to label2id.json for training-format rows (default: sibling of input file).",
+    )
+    parser.add_argument(
+        "--category-only",
+        action="store_true",
+        help="Evaluate category classification only (skip intent LLM and DB lookup).",
     )
     parser.add_argument(
         "--bentoml-url",
@@ -494,9 +745,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip invalid/empty rows instead of failing fast.",
     )
     parser.add_argument(
-        "--verbose-progress",
+        "--verbose-debug",
         action="store_true",
-        help="Print per-sample progress details during evaluation.",
+        help="Print detailed per-sample evaluation output during the run.",
     )
     parser.add_argument(
         "--max-limit",
@@ -524,29 +775,55 @@ def main() -> int:
 
     input_file = Path(args.input_file).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
+    category_only = bool(args.category_only)
     bentoml_url = str(args.bentoml_url or "").strip()
     timeout_seconds = args.timeout_seconds
     effective_bentoml_url = bentoml_url or os.getenv("CLASSIFIER_BENTOML_URL", "").strip()
-    intent_model_provider = os.getenv("INTENT_MODEL_PROVIDER", "ollama").strip().lower()
-    intent_model = os.getenv("INTENT_MODEL", "llama3.2").strip()
-    ollama_url_cli = str(args.ollama_url or "").strip()
-    postgres_host_cli = str(args.postgres_host or "").strip()
-    if ollama_url_cli:
-        os.environ["OLLAMA_BASE_URL"] = ollama_url_cli.rstrip("/")
-    if postgres_host_cli:
-        os.environ["POSTGRES_HOST"] = postgres_host_cli
-    effective_ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    effective_postgres_host = os.getenv("POSTGRES_HOST", "").strip()
+
+    label2id_explicit = str(args.label2id_file or "").strip()
+    label2id_resolved = _resolve_label2id_path(input_file=input_file, explicit=label2id_explicit)
+
+    intent_model_provider = ""
+    intent_model = ""
+    effective_ollama_base_url = ""
+    effective_postgres_host = ""
+    if not category_only:
+        intent_model_provider = os.getenv("INTENT_MODEL_PROVIDER", "ollama").strip().lower()
+        intent_model = os.getenv("INTENT_MODEL", "llama3.2").strip()
+        ollama_url_cli = str(args.ollama_url or "").strip()
+        postgres_host_cli = str(args.postgres_host or "").strip()
+        if ollama_url_cli:
+            os.environ["OLLAMA_BASE_URL"] = ollama_url_cli.rstrip("/")
+        if postgres_host_cli:
+            os.environ["POSTGRES_HOST"] = postgres_host_cli
+        effective_ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        effective_postgres_host = os.getenv("POSTGRES_HOST", "").strip()
+
     if timeout_seconds is None:
         timeout_seconds = float(os.getenv("CLASSIFIER_BENTOML_TIMEOUT_SECONDS", "5"))
 
     try:
-        rows, skipped_invalid_rows = _load_rows(input_file=input_file, skip_invalid=bool(args.skip_invalid))
+        rows, skipped_invalid_rows, input_format, effective_label2id = _load_rows(
+            input_file=input_file,
+            skip_invalid=bool(args.skip_invalid),
+            label2id_path=label2id_resolved,
+            category_only=category_only,
+        )
         pre_limit_total_rows = len(rows)
         max_limit = args.max_limit
         if max_limit is not None:
             rows = rows[:max_limit]
-        _warn_if_ollama_unreachable(provider=intent_model_provider, model=intent_model)
+
+        total_to_evaluate = len(rows)
+        print(
+            f"Total samples to evaluate: {total_to_evaluate} "
+            f"(loaded={pre_limit_total_rows}, skipped_invalid={skipped_invalid_rows}, "
+            f"input_format={input_format}, category_only={category_only})"
+        )
+
+        if not category_only:
+            _warn_if_ollama_unreachable(provider=intent_model_provider, model=intent_model)
+
         classifier = QueryClassifier(
             endpoint=effective_bentoml_url or None,
             timeout_seconds=timeout_seconds,
@@ -554,7 +831,8 @@ def main() -> int:
         records, raw_summary = _run_evaluation(
             rows=rows,
             classifier=classifier,
-            verbose_progress=bool(args.verbose_progress),
+            category_only=category_only,
+            verbose_debug=bool(args.verbose_debug),
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
@@ -567,10 +845,13 @@ def main() -> int:
         "config": {
             "input_file": str(input_file),
             "output_dir": str(output_dir),
+            "input_format": input_format,
+            "label2id_file": effective_label2id,
+            "category_only": category_only,
             "bentoml_url": effective_bentoml_url,
             "timeout_seconds": timeout_seconds,
             "skip_invalid": bool(args.skip_invalid),
-            "verbose_progress": bool(args.verbose_progress),
+            "verbose_debug": bool(args.verbose_debug),
             "max_limit": args.max_limit,
             "input_rows_before_limit": pre_limit_total_rows,
             "skipped_invalid_rows": skipped_invalid_rows,
@@ -591,6 +872,7 @@ def main() -> int:
         summary_payload=summary_payload,
         metadata_payload=metadata_payload,
         output_file=output_file,
+        category_only=category_only,
     )
     return 0
 
