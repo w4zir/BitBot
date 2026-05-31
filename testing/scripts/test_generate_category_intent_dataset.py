@@ -22,6 +22,8 @@ from testing.scripts.generate_category_intent_dataset import (
 
     _build_parser,
 
+    _count_jsonl_rows,
+
     _default_output_path,
 
     build_fake_scenario_instance,
@@ -741,5 +743,215 @@ scenarios:
     assert len(captured) == 1
 
     assert captured[0] == pytest.approx(1.25)
+
+
+
+
+
+def test_count_jsonl_rows_skips_blank_lines(tmp_path: Path) -> None:
+
+    path = tmp_path / "data.jsonl"
+
+    path.write_text(
+
+        '{"text": "a", "category": "order", "intent": "x", "seed_id": "s1", "persona": "p"}\n\n'
+
+        '{"text": "b", "category": "refund", "intent": "y", "seed_id": "s2", "persona": "p"}\n',
+
+        encoding="utf-8",
+
+    )
+
+    assert _count_jsonl_rows(path) == 2
+
+
+
+
+
+def test_run_generation_resume_appends_to_existing_file(
+
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+
+) -> None:
+
+    sim_root = tmp_path / "simulator"
+
+    suite_path = _write_minimal_simulator_tree(
+
+        sim_root,
+
+        suite_yaml="""
+
+run_id: mini
+
+scenarios:
+
+  - seed_id: s1
+
+    persona_id: polite_first_timer
+
+  - seed_id: s2
+
+    persona_id: policy_prober
+
+""",
+
+        seed_yaml=MINI_SEEDS,
+
+        persona_yaml=MINI_PERSONAS,
+
+    )
+
+
+
+    from testing.simulator import persona as persona_mod
+
+
+
+    counter = {"n": 0}
+
+
+
+    def fake_opening(self: persona_mod.PersonaEngine) -> str:
+
+        counter["n"] += 1
+
+        return f"Resume msg {counter['n']} {self.scenario.entity.get('order_id')}"
+
+
+
+    monkeypatch.setattr(persona_mod.PersonaEngine, "generate_opening", fake_opening)
+
+
+
+    out = tmp_path / "out.jsonl"
+
+    out.write_text(
+
+        json.dumps(
+
+            {
+
+                "text": "existing",
+
+                "category": "order",
+
+                "intent": "cancel_order",
+
+                "seed_id": "s1",
+
+                "persona": "polite_first_timer",
+
+            }
+
+        )
+
+        + "\n",
+
+        encoding="utf-8",
+
+    )
+
+
+
+    result = run_generation(
+
+        output_path=out,
+
+        max_limit=3,
+
+        suite_path=suite_path,
+
+        seed_override=None,
+
+        persona_filters=[],
+
+        randomize=False,
+
+        existing_rows=1,
+
+        stderr_print=lambda _m: None,
+
+    )
+
+
+
+    assert result.existing_rows == 1
+
+    assert result.rows_written == 2
+
+    assert result.total_rows == 3
+
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    assert len(lines) == 3
+
+    assert lines[0]["text"] == "existing"
+
+    assert all("Resume msg" in row["text"] for row in lines[1:])
+
+
+
+
+
+def test_run_generation_resume_noop_when_already_at_limit(tmp_path: Path) -> None:
+
+    out = tmp_path / "out.jsonl"
+
+    out.write_text(
+
+        json.dumps(
+
+            {
+
+                "text": "existing",
+
+                "category": "order",
+
+                "intent": "cancel_order",
+
+                "seed_id": "s1",
+
+                "persona": "polite_first_timer",
+
+            }
+
+        )
+
+        + "\n",
+
+        encoding="utf-8",
+
+    )
+
+
+
+    result = run_generation(
+
+        output_path=out,
+
+        max_limit=1,
+
+        suite_path=tmp_path / "missing.yaml",
+
+        seed_override=None,
+
+        persona_filters=[],
+
+        randomize=False,
+
+        existing_rows=1,
+
+        stderr_print=lambda _m: None,
+
+    )
+
+
+
+    assert result.rows_written == 0
+
+    assert result.total_rows == 1
+
+    assert len(out.read_text(encoding="utf-8").splitlines()) == 1
 
 
