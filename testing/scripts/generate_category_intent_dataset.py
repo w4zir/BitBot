@@ -1,5 +1,63 @@
 from __future__ import annotations
 
+"""Generate JSONL of opening customer messages with gold category/intent labels.
+
+Uses simulator seeds, a suite YAML, and the persona LLM to synthesize realistic
+first-turn user queries. Each output row has ``text``, ``category``, ``intent``,
+``seed_id``, and ``persona``.
+
+Writes timestamped files to ``data/raw/simulated/category_intent_YYYYMMDD_HHMMSS.jsonl``
+(by default under the repository root).
+
+Prerequisites (from repo ``.env`` or environment):
+
+- ``OLLAMA_BASE_URL`` — Ollama API base (when ``SIMULATOR_USER_LLM_PROVIDER=ollama``)
+- ``SIMULATOR_USER_LLM_PROVIDER`` / ``SIMULATOR_USER_LLM_MODEL`` — persona LLM backend
+- ``SIMULATOR_USER_LLM_TIMEOUT_SECONDS``, ``SIMULATOR_USER_LLM_TEMPERATURE``, etc. — optional tuning
+
+CLI options:
+
+- ``--max-limit N`` — number of examples to generate (required)
+- ``--output-dir PATH`` — output directory (default: ``data/raw/simulated``)
+- ``--suite PATH`` — suite YAML under ``testing/simulator`` (default: ``suites/regression.yaml``)
+- ``--seed SEED_ID`` — restrict to one seed
+- ``--persona ID [ID ...]`` — restrict persona selection
+- ``--randomize`` — pick a random scenario each attempt instead of cycling
+- ``--ollama-url URL`` — override ``OLLAMA_BASE_URL`` for this run
+- ``--temperature T`` — LLM sampling temperature (0.0–2.0) for this run
+- ``--save-every N`` — checkpoint append every N rows (resume-friendly)
+- ``--output-file PATH`` — write/append to a specific JSONL file; existing rows count
+  toward ``--max-limit`` so you can resume an interrupted run
+
+Usage (from repository root)::
+
+    python testing/scripts/generate_category_intent_dataset.py --max-limit 50
+
+    python testing/scripts/generate_category_intent_dataset.py \\
+        --max-limit 100 \\
+        --randomize \\
+        --save-every 10
+
+    python testing/scripts/generate_category_intent_dataset.py \\
+        --max-limit 20 \\
+        --seed order_status_cooperative \\
+        --persona polite_first_timer impatient_escalator
+
+    python testing/scripts/generate_category_intent_dataset.py \\
+        --max-limit 30 \\
+        --suite suites/regression.yaml \\
+        --output-dir data/raw/simulated \\
+        --ollama-url http://127.0.0.1:11434 \\
+        --temperature 0.7
+
+    python testing/scripts/generate_category_intent_dataset.py \\
+        --max-limit 500 \\
+        --output-file data/raw/simulated/category_intent_20260531_075702.jsonl \\
+        --save-every 10
+
+    python testing/scripts/generate_category_intent_dataset.py --help
+"""
+
 import argparse
 import hashlib
 import json
@@ -145,6 +203,31 @@ def _llm_temperature(value: str) -> float:
     return parsed
 
 
+def _resolve_output_path(raw: Path) -> Path:
+    expanded = Path(raw).expanduser()
+    if expanded.is_absolute():
+        return expanded.resolve()
+    return (REPO_ROOT / expanded).resolve()
+
+
+def _count_jsonl_rows(output_path: Path) -> int:
+    """Count non-empty, valid JSON lines in an existing JSONL file."""
+    count = 0
+    with output_path.open(encoding="utf-8") as in_f:
+        for line_no, line in enumerate(in_f, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSON on line {line_no} of {output_path}: {exc.msg}"
+                ) from exc
+            count += 1
+    return count
+
+
 def _append_rows_jsonl(output_path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -202,6 +285,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=REPO_ROOT / DEFAULT_OUTPUT_SUBDIR,
         help=f"Directory for output file (default: {DEFAULT_OUTPUT_SUBDIR} under repo root).",
+    )
+    parser.add_argument(
+        "--output-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write to this JSONL path instead of a new timestamped file. "
+            "When the file already exists, its rows count toward --max-limit and "
+            "new rows are appended (resume)."
+        ),
     )
     parser.add_argument(
         "--max-limit",
@@ -268,6 +362,11 @@ class GenerationResult:
     rows_written: int
     attempts: int
     skipped: int
+    existing_rows: int = 0
+
+    @property
+    def total_rows(self) -> int:
+        return self.existing_rows + self.rows_written
 
 
 def run_generation(
@@ -280,11 +379,25 @@ def run_generation(
     randomize: bool,
     temperature_override: float | None = None,
     save_every: int | None = None,
+    existing_rows: int = 0,
     stderr_print: Callable[[str], None] | None = None,
     max_attempt_multiplier: int = 50,
 ) -> GenerationResult:
-    """Generate up to max_limit JSONL rows; may write fewer if attempts cap is hit."""
+    """Generate JSONL rows until the file reaches max_limit total rows."""
     err = stderr_print or (lambda m: print(m, file=sys.stderr))
+
+    if existing_rows < 0:
+        raise ValueError("existing_rows must be non-negative.")
+    if existing_rows >= max_limit:
+        return GenerationResult(
+            output_path=output_path,
+            rows_written=0,
+            attempts=0,
+            skipped=0,
+            existing_rows=existing_rows,
+        )
+
+    remaining = max_limit - existing_rows
 
     suite = _load_suite(suite_path)
     _apply_user_llm_env_overrides(suite)
@@ -325,27 +438,40 @@ def run_generation(
     successful_rows: list[dict[str, Any]] = []
     attempts = 0
     skipped = 0
-    max_attempts = max_limit * max_attempt_multiplier
+    max_attempts = remaining * max_attempt_multiplier
+    append_mode = existing_rows > 0 or save_every is not None
 
-    if save_every is None:
+    if existing_rows > 0:
+        print(
+            f"Resuming {output_path}: {existing_rows}/{max_limit} row(s) already present; "
+            f"generating up to {remaining} more",
+            flush=True,
+        )
+    if save_every is None and not append_mode:
         print(
             f"Generating up to {max_limit} sample(s) → {output_path} (writes after all succeed)",
             flush=True,
         )
-    else:
+    elif save_every is not None:
         print(
-            f"Generating up to {max_limit} sample(s) → {output_path} "
-            f"(checkpoint append every {save_every} row(s))",
+            f"Generating up to {max_limit} total sample(s) → {output_path} "
+            f"(checkpoint append every {save_every} new row(s))",
+            flush=True,
+        )
+    elif append_mode:
+        print(
+            f"Generating up to {max_limit} total sample(s) → {output_path} "
+            f"(append {remaining} new row(s) when complete)",
             flush=True,
         )
     persisted_rows = 0
-    while len(successful_rows) < max_limit and attempts < max_attempts:
+    while len(successful_rows) < remaining and attempts < max_attempts:
         attempts += 1
         try:
             run_cfg, seed = pick_scenario()
 
             try:
-                scenario = build_fake_scenario_instance(seed, attempts)
+                scenario = build_fake_scenario_instance(seed, existing_rows + attempts)
             except ValueError as exc:
                 err(f"Fake scenario failed for seed {seed.seed_id!r}: {exc}")
                 skipped += 1
@@ -401,12 +527,13 @@ def run_generation(
             skipped += 1
             continue
 
-        rows_written = len(successful_rows)
-        if rows_written > 1:
+        new_rows = len(successful_rows)
+        total_rows = existing_rows + new_rows
+        if new_rows > 1:
             print(_SAMPLE_SEPARATOR, flush=True)
         print(
-            f"Progress: {rows_written}/{max_limit} rows "
-            f"(attempt {attempts}, skipped so far: {skipped})",
+            f"Progress: {total_rows}/{max_limit} rows "
+            f"({new_rows} new this run, attempt {attempts}, skipped so far: {skipped})",
             flush=True,
         )
         print(f"Query:\n{text}", flush=True)
@@ -414,38 +541,46 @@ def run_generation(
         print(f"Intent: {seed.intent}", flush=True)
         print(f"Seed ID: {seed.seed_id}", flush=True)
         print(f"Persona: {persona_cfg.persona_id}", flush=True)
-        if save_every is not None and rows_written % save_every == 0:
-            _append_rows_jsonl(output_path, successful_rows[persisted_rows:rows_written])
-            persisted_rows = rows_written
-            print(f"Checkpoint persisted: {persisted_rows} row(s)", flush=True)
+        if save_every is not None and new_rows % save_every == 0:
+            _append_rows_jsonl(output_path, successful_rows[persisted_rows:new_rows])
+            persisted_rows = new_rows
+            print(
+                f"Checkpoint persisted: {existing_rows + persisted_rows}/{max_limit} total row(s)",
+                flush=True,
+            )
 
-    rows_written = len(successful_rows)
+    new_rows = len(successful_rows)
+    total_rows = existing_rows + new_rows
 
-    if rows_written < max_limit and attempts >= max_attempts:
+    if new_rows < remaining and attempts >= max_attempts:
         err(
             f"Stopped after {attempts} attempts ({skipped} skipped); "
-            f"collected {rows_written} of {max_limit} requested."
+            f"collected {new_rows} new row(s) ({total_rows}/{max_limit} total)."
         )
 
-    if rows_written == 0:
+    if new_rows == 0 and existing_rows == 0:
         raise RuntimeError("No rows were written; generation failed.")
 
-    if save_every is None:
+    if not append_mode:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w", encoding="utf-8", newline="\n") as out_f:
             for row in successful_rows:
                 out_f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    else:
-        if persisted_rows < rows_written:
-            _append_rows_jsonl(output_path, successful_rows[persisted_rows:rows_written])
-            persisted_rows = rows_written
-            print(f"Final checkpoint persisted: {persisted_rows}/{rows_written} row(s)", flush=True)
+    elif persisted_rows < new_rows:
+        _append_rows_jsonl(output_path, successful_rows[persisted_rows:new_rows])
+        persisted_rows = new_rows
+        if save_every is not None:
+            print(
+                f"Final checkpoint persisted: {existing_rows + persisted_rows}/{max_limit} total row(s)",
+                flush=True,
+            )
 
     return GenerationResult(
         output_path=output_path,
-        rows_written=rows_written,
+        rows_written=new_rows,
         attempts=attempts,
         skipped=skipped,
+        existing_rows=existing_rows,
     )
 
 
@@ -460,8 +595,25 @@ def main(argv: list[str] | None = None) -> int:
 
     simulator_root = REPO_ROOT / "testing" / "simulator"
     suite_path = _resolve_path(simulator_root, args.suite)
-    output_dir = _resolve_output_dir(args.output_dir)
-    output_path = _default_output_path(output_dir)
+
+    existing_rows = 0
+    if args.output_file is not None:
+        output_path = _resolve_output_path(args.output_file)
+        if output_path.exists():
+            try:
+                existing_rows = _count_jsonl_rows(output_path)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            if existing_rows >= args.max_limit:
+                print(
+                    f"{output_path} already has {existing_rows} row(s) "
+                    f"(target {args.max_limit}); nothing to do."
+                )
+                return 0
+    else:
+        output_dir = _resolve_output_dir(args.output_dir)
+        output_path = _default_output_path(output_dir)
 
     try:
         result = run_generation(
@@ -473,6 +625,7 @@ def main(argv: list[str] | None = None) -> int:
             randomize=bool(args.randomize),
             temperature_override=args.temperature,
             save_every=args.save_every,
+            existing_rows=existing_rows,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
@@ -481,10 +634,16 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    print(
-        f"Wrote {result.rows_written} row(s) to {result.output_path} "
-        f"(attempts={result.attempts}, skipped={result.skipped})"
-    )
+    if result.rows_written == 0 and result.existing_rows >= args.max_limit:
+        print(
+            f"{result.output_path} already at target "
+            f"({result.existing_rows}/{args.max_limit} row(s))."
+        )
+    else:
+        print(
+            f"Wrote {result.rows_written} new row(s) to {result.output_path} "
+            f"(total={result.total_rows}, attempts={result.attempts}, skipped={result.skipped})"
+        )
     return 0
 
 
