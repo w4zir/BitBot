@@ -2,6 +2,13 @@
   "mode": "category",
   "hf_dataset": "bitext/Bitext-customer-support-llm-chatbot-training-dataset",
   "hf_split": "train",
+  "jsonl_mode": false,
+  "jsonl_input_files": [],
+  "jsonl_input_dir": null,
+  "jsonl_glob": "*.jsonl",
+  "jsonl_files_resolved": [],
+  "jsonl_line_issues": {},
+  "label2id_path": "D:\\ai_ws\\projects\\BitBot\\training\\data\\label2id.json",
   "bitext_only": false,
   "input_dir": "D:\\ai_ws\\projects\\BitBot\\data\\raw\\synthetic\\no_issue",
   "synthetic_glob": "no_issue_*.json",
@@ -29,12 +36,12 @@
     "DELIVERY": 1645,
     "FEEDBACK": 1990,
     "INVOICE": 1801,
+    "NO_ISSUE": 5000,
     "ORDER": 3067,
     "PAYMENT": 1986,
     "REFUND": 2577,
     "SHIPPING": 1951,
-    "SUBSCRIPTION": 992,
-    "no_issue": 5000
+    "SUBSCRIPTION": 992
   },
   "train_size": 20486,
   "eval_size": 4385,
@@ -51,7 +58,8 @@
     "REFUND": 8,
     "SHIPPING": 9,
     "SUBSCRIPTION": 10,
-    "no_issue": 11
+    "PRODUCT": 11,
+    "NO_ISSUE": 12
   },
   "class_distribution_train": {
     "ACCOUNT": 3750,
@@ -60,12 +68,12 @@
     "DELIVERY": 1151,
     "FEEDBACK": 1393,
     "INVOICE": 1260,
+    "NO_ISSUE": 3500,
     "ORDER": 2146,
     "PAYMENT": 1390,
     "REFUND": 1803,
     "SHIPPING": 1365,
-    "SUBSCRIPTION": 694,
-    "no_issue": 3500
+    "SUBSCRIPTION": 694
   },
   "class_distribution_eval": {
     "ACCOUNT": 803,
@@ -74,12 +82,12 @@
     "DELIVERY": 246,
     "FEEDBACK": 298,
     "INVOICE": 270,
+    "NO_ISSUE": 750,
     "ORDER": 460,
     "PAYMENT": 297,
     "REFUND": 386,
     "SHIPPING": 292,
-    "SUBSCRIPTION": 148,
-    "no_issue": 750
+    "SUBSCRIPTION": 148
   },
   "class_distribution_test": {
     "ACCOUNT": 805,
@@ -88,12 +96,12 @@
     "DELIVERY": 248,
     "FEEDBACK": 299,
     "INVOICE": 271,
+    "NO_ISSUE": 750,
     "ORDER": 461,
     "PAYMENT": 299,
     "REFUND": 388,
     "SHIPPING": 294,
-    "SUBSCRIPTION": 150,
-    "no_issue": 750
+    "SUBSCRIPTION": 150
   },
   "label_id_distribution_train": {
     "0": 3750,
@@ -107,7 +115,7 @@
     "8": 1803,
     "9": 1365,
     "10": 694,
-    "11": 3500
+    "12": 3500
   },
   "label_id_distribution_eval": {
     "0": 803,
@@ -121,7 +129,7 @@
     "8": 386,
     "9": 292,
     "10": 148,
-    "11": 750
+    "12": 750
   },
   "label_id_distribution_test": {
     "0": 805,
@@ -135,6 +143,6 @@
     "8": 388,
     "9": 294,
     "10": 150,
-    "11": 750
+    "12": 750
   }
 }

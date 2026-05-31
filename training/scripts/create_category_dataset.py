@@ -1,16 +1,72 @@
 #!/usr/bin/env python3
 """
-Combine Hugging Face Bitext with synthetic no-issue JSON and emit train/eval/test JSONL.
+Build train/eval/test JSONL for BitBot category routing from Hugging Face Bitext,
+synthetic no-issue JSON, or simulated category JSONL.
 
-Modes (--mode):
-  - binary: Bitext rows -> label "issue", synthetic -> "no_issue"; JSONL uses 0=no_issue, 1=issue.
-  - category: Bitext rows use HF `category`; synthetic -> "no_issue"; JSONL uses integer ids from label2id.json.
-  - intent: Bitext rows use HF `intent`; synthetic -> "no_issue"; JSONL uses integer ids from label2id.json.
+Output files (under ``--output-dir``):
+  train.jsonl, eval.jsonl, test.jsonl — ``{"text": "...", "label": <int>}``
+  dataset_stats.json — counts, class distribution, skip reasons
+  label2id.json — copy of the canonical mapping (``--mode category`` only)
+  dataset_full.json — optional deduped rows with string labels (``--write-dataset-full``)
 
-Synthetic: only samples with is_issue=false from files matching --synthetic-glob under --input-dir,
-  text = user_message, label = "no_issue".
+JSONL schema:
+  Category mode uses integer label ids from ``training/data/label2id.json`` (override with
+  ``--label2id-path``). Rows whose category is not in the mapping are dropped.
 
-Defaults: 70% / 15% / 15% train/eval/test (stratified), configurable via --train-ratio and --eval-ratio.
+Modes (``--mode``):
+  binary   — Bitext rows -> ``issue``, synthetic -> ``no_issue``; JSONL uses 0=no_issue, 1=issue.
+  category — Bitext/simulated rows use HF or JSONL ``category``; synthetic no-issue -> ``NO_ISSUE``;
+             JSONL uses integer ids from the canonical label2id mapping.
+
+Ingestion paths (mutually exclusive):
+  Default — Hugging Face Bitext (``--hf-dataset``) plus synthetic no-issue JSON under
+            ``--input-dir`` (``no_issue_*.json`` by default). Use ``--bitext-only`` to skip synthetic.
+  JSONL   — ``--jsonl-input-dir`` and/or ``--input-files`` with ``--jsonl-glob``; reads ``text`` and
+            ``category`` fields. JSONL mode requires ``--mode category``.
+
+Synthetic JSON: only samples with ``is_issue=false``; text = ``user_message``.
+
+Default split: 70% / 15% / 15% train/eval/test (stratified per label), via ``--train-ratio`` and
+``--eval-ratio``.
+
+Local examples (from repo root)::
+
+    # Phase 1 — Bitext + synthetic category dataset (default label2id)
+    python training/scripts/create_category_dataset.py --mode category \\
+        --input-dir data/raw/synthetic/no_issue \\
+        --output-dir training/data/bitext_category
+
+    # Bitext-only category dataset
+    python training/scripts/create_category_dataset.py --mode category --bitext-only \\
+        --output-dir training/data/bitext_category
+
+    # Phase 2 — simulated category JSONL (same canonical label2id, no extra flag needed)
+    python training/scripts/create_category_dataset.py --mode category \\
+        --jsonl-input-dir data/raw/simulated \\
+        --jsonl-glob "category_intent*.jsonl" \\
+        --output-dir training/data/simulated
+
+    # Binary issue vs no_issue dataset
+    python training/scripts/create_category_dataset.py --mode binary \\
+        --input-dir data/raw/synthetic/no_issue \\
+        --output-dir training/data/bitext_binary
+
+CLI parameters:
+  --mode              Required. ``binary`` or ``category``.
+  --hf-dataset        Hugging Face dataset id (default: bitext/Bitext-customer-support-llm-chatbot-training-dataset).
+  --hf-split          HF split to load (default: train).
+  --input-dir         Directory for synthetic no-issue JSON (alias: ``--synthetic-dir``).
+  --synthetic-glob    Glob for synthetic files under ``--input-dir`` (default: no_issue_*.json).
+  --jsonl-input-dir   Directory of JSONL files with ``text``/``category`` (enables JSONL ingestion).
+  --input-files       Explicit JSONL file paths (also enables JSONL ingestion).
+  --jsonl-glob        Glob with ``--jsonl-input-dir`` (default: *.jsonl).
+  --label2id-path     Canonical category label mapping (default: training/data/label2id.json).
+  --output-dir        Output directory for splits and stats.
+  --train-ratio       Training fraction per label, stratified (default: 0.7).
+  --eval-ratio        Eval fraction per label; test gets remainder (default: 0.15).
+  --seed              Random seed for shuffle and split (default: 42).
+  --bitext-only       Skip synthetic no-issue merge (HF Bitext path only).
+  --write-dataset-full  Also write ``dataset_full.json`` with string labels.
 """
 
 from __future__ import annotations
@@ -29,7 +85,7 @@ try:
 except Exception:  # pragma: no cover
     load_dataset = None  # type: ignore[assignment]
 
-Mode = Literal["binary", "category", "intent"]
+Mode = Literal["binary", "category"]
 
 DEFAULT_HF_DATASET = "bitext/Bitext-customer-support-llm-chatbot-training-dataset"
 DEFAULT_HF_SPLIT = "train"
@@ -38,11 +94,13 @@ _REPO_ROOT = _REPO_TRAINING.parent
 DEFAULT_INPUT_DIR = _REPO_ROOT / "data" / "raw" / "synthetic" / "no_issue"
 DEFAULT_SYNTHETIC_GLOB = "no_issue_*.json"
 DEFAULT_OUTPUT_DIR = _REPO_TRAINING / "data" / "bitext"
+DEFAULT_LABEL2ID_PATH = _REPO_TRAINING / "data" / "label2id.json"
 DEFAULT_SEED = 42
 DEFAULT_JSONL_GLOB = "*.jsonl"
 
 BINARY_NO_ISSUE = "no_issue"
 BINARY_ISSUE = "issue"
+CATEGORY_NO_ISSUE = "NO_ISSUE"
 
 
 def normalize_text_key(text: str) -> str:
@@ -53,10 +111,10 @@ def normalize_text_key(text: str) -> str:
 
 
 def normalize_category_label(label: str) -> str:
-    """Normalize category labels to existing mapping convention."""
+    """Normalize category labels to canonical label2id.json key convention."""
     s = label.strip()
-    if s == "no_issue":
-        return s
+    if s.lower() == "no_issue":
+        return CATEGORY_NO_ISSUE
     return s.upper()
 
 
@@ -106,12 +164,11 @@ def collect_jsonl_files(
 
 
 def load_jsonl_rows(
-    jsonl_files: list[Path], mode: Mode, skip_reasons: Counter[str]
+    jsonl_files: list[Path], skip_reasons: Counter[str]
 ) -> tuple[list[dict[str, Any]], Counter[str]]:
-    """Load rows from category/intent JSONL sources."""
+    """Load rows from category JSONL sources."""
     line_errors: Counter[str] = Counter()
     out: list[dict[str, Any]] = []
-    label_key = "category" if mode == "category" else "intent"
 
     for path in jsonl_files:
         if not path.is_file():
@@ -137,14 +194,12 @@ def load_jsonl_rows(
                         line_errors["jsonl_missing_or_empty_text"] += 1
                         continue
 
-                    label_raw = obj.get(label_key)
+                    label_raw = obj.get("category")
                     if label_raw is None or not isinstance(label_raw, str) or not label_raw.strip():
-                        line_errors[f"jsonl_missing_or_empty_{label_key}"] += 1
+                        line_errors["jsonl_missing_or_empty_category"] += 1
                         continue
 
-                    label = label_raw.strip()
-                    if mode == "category":
-                        label = normalize_category_label(label)
+                    label = normalize_category_label(label_raw.strip())
 
                     out.append(
                         {
@@ -257,13 +312,12 @@ def apply_mode_labels(
     for r in bitext_rows:
         if mode == "binary":
             lab = BINARY_ISSUE
-        elif mode == "category":
-            lab = r["category"]
         else:
-            lab = r["intent"]
+            lab = normalize_category_label(r["category"])
         out.append({"text": r["text"], "label": lab})
     for r in synth_rows:
-        out.append({"text": r["text"], "label": BINARY_NO_ISSUE})
+        lab = BINARY_NO_ISSUE if mode == "binary" else normalize_category_label(BINARY_NO_ISSUE)
+        out.append({"text": r["text"], "label": lab})
     return out
 
 
@@ -302,11 +356,6 @@ def label_distribution_int_binary(rows: list[dict[str, Any]]) -> dict[str, int]:
     for r in rows:
         c[int(r["label"])] += 1
     return {str(k): c[k] for k in sorted(c.keys())}
-
-
-def build_label2id(all_labels_sorted: list[str]) -> dict[str, int]:
-    """Deterministic mapping: sorted label -> 0..n-1."""
-    return {lab: i for i, lab in enumerate(all_labels_sorted)}
 
 
 def stratified_train_eval_test_split_by_label(
@@ -481,14 +530,14 @@ def write_json_array(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build Bitext + synthetic no_issue train/eval/test JSONL (binary, category, or intent).",
+        description="Build Bitext + synthetic no_issue train/eval/test JSONL (binary or category).",
     )
     parser.add_argument(
         "--mode",
         type=str,
-        choices=("binary", "category", "intent"),
+        choices=("binary", "category"),
         required=True,
-        help="Dataset type: binary (issue vs no_issue), category (HF category + no_issue), intent (HF intent + no_issue).",
+        help="Dataset type: binary (issue vs no_issue) or category (HF category + NO_ISSUE).",
     )
     parser.add_argument(
         "--hf-dataset",
@@ -507,14 +556,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         nargs="+",
         default=None,
-        help="Optional explicit JSONL files with fields: text/category/intent. "
+        help="Optional explicit JSONL files with fields: text/category. "
         "When provided (or --jsonl-input-dir is set), script uses JSONL ingestion mode.",
     )
     parser.add_argument(
         "--jsonl-input-dir",
         type=Path,
         default=None,
-        help="Optional directory containing JSONL category/intent files.",
+        help="Optional directory containing JSONL category files.",
     )
     parser.add_argument(
         "--jsonl-glob",
@@ -525,8 +574,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--label2id-path",
         type=Path,
-        default=None,
-        help="Optional path to existing label2id.json to use as authoritative mapping in non-binary modes.",
+        default=DEFAULT_LABEL2ID_PATH,
+        help="Authoritative category label mapping for --mode category (default: training/data/label2id.json). "
+        "Rows with labels not in the mapping are dropped.",
     )
     parser.add_argument(
         "--input-dir",
@@ -601,7 +651,7 @@ def main() -> int:
 
     if jsonl_mode:
         if mode == "binary":
-            print("Error: JSONL ingestion mode only supports --mode category or --mode intent", file=sys.stderr)
+            print("Error: JSONL ingestion mode only supports --mode category", file=sys.stderr)
             return 1
 
         input_files = collect_jsonl_files(args.input_files, args.jsonl_input_dir, args.jsonl_glob)
@@ -613,7 +663,7 @@ def main() -> int:
             return 1
         jsonl_files_used = input_files
         try:
-            rows, jsonl_line_issues = load_jsonl_rows(jsonl_files_used, mode, skip_reasons)
+            rows, jsonl_line_issues = load_jsonl_rows(jsonl_files_used, skip_reasons)
         except RuntimeError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
@@ -656,7 +706,8 @@ def main() -> int:
         return 1
 
     all_labels = sorted({str(r["label"]) for r in rows})
-    if mode != "binary" and args.label2id_path is not None:
+    label2id: dict[str, int] = {}
+    if mode == "category":
         try:
             label2id = load_label2id_mapping(args.label2id_path)
         except RuntimeError as e:
@@ -678,8 +729,6 @@ def main() -> int:
             )
             return 1
         all_labels = sorted({str(r["label"]) for r in rows})
-    else:
-        label2id = build_label2id(all_labels)
 
     test_ratio_effective = 1.0 - args.train_ratio - args.eval_ratio
     try:
@@ -720,7 +769,7 @@ def main() -> int:
         "jsonl_glob": args.jsonl_glob,
         "jsonl_files_resolved": [str(p.resolve()) for p in jsonl_files_used],
         "jsonl_line_issues": dict(jsonl_line_issues),
-        "label2id_path": str(args.label2id_path.resolve()) if args.label2id_path else None,
+        "label2id_path": str(args.label2id_path.resolve()) if mode == "category" else None,
         "bitext_only": bool(args.bitext_only),
         "input_dir": str(synthetic_dir.resolve()) if not args.bitext_only else None,
         "synthetic_glob": args.synthetic_glob,

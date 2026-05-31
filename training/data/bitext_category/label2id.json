@@ -5,10 +5,11 @@
   "DELIVERY": 3,
   "FEEDBACK": 4,
   "INVOICE": 5,
+  "NO_ISSUE": 12,
   "ORDER": 6,
   "PAYMENT": 7,
+  "PRODUCT": 11,
   "REFUND": 8,
   "SHIPPING": 9,
-  "SUBSCRIPTION": 10,
-  "no_issue": 11
+  "SUBSCRIPTION": 10
 }
