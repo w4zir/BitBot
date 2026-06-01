@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from backend.llm.vllm_routing import resolve_vllm_target
+
 
 def _ollama_base() -> str:
     return os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
@@ -20,8 +22,9 @@ def _cerebras_api_key() -> str:
     return os.getenv("CEREBRAS_API_KEY", "").strip()
 
 
-def _vllm_base() -> str:
-    return os.getenv("VLLM_API_BASE", "http://localhost:8000/v1").rstrip("/")
+def _vllm_base(model: str = "") -> str:
+    base, _ = resolve_vllm_target(model)
+    return base
 
 
 def _vllm_api_key() -> str:
@@ -160,9 +163,10 @@ def _vllm_chat(
     top_p: float | None,
     repeat_penalty: float | None,
 ) -> str:
-    url = f"{_vllm_base()}/chat/completions"
+    base, served_model = resolve_vllm_target(model)
+    url = f"{base}/chat/completions"
     payload: dict[str, Any] = {
-        "model": model,
+        "model": served_model,
         "messages": messages,
         "temperature": (
             float(temperature)

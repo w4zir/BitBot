@@ -243,9 +243,11 @@ def _cerebras_chat(*, model: str, messages: list[dict[str, str]]) -> tuple[str, 
 
 
 def _vllm_chat(*, model: str, messages: list[dict[str, str]]) -> tuple[str, dict[str, int | None], float]:
-    base = os.getenv("VLLM_API_BASE", "http://localhost:8000/v1").rstrip("/")
+    from backend.llm.vllm_routing import resolve_vllm_target
+
+    base, served_model = resolve_vllm_target(model)
     payload = {
-        "model": model,
+        "model": served_model,
         "messages": messages,
         "temperature": float(os.getenv("VLLM_TEMPERATURE", "0.2")),
     }

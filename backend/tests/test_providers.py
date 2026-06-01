@@ -9,6 +9,7 @@ from backend.llm.providers import chat_completion
 
 def test_chat_completion_vllm_posts_openai_shape_without_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VLLM_API_BASE", "http://vllm:8000/v1")
+    monkeypatch.setenv("VLLM_SERVED_NAME", "gemma4:e4b")
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
 
     mock_resp = MagicMock()
@@ -24,7 +25,7 @@ def test_chat_completion_vllm_posts_openai_shape_without_bearer(monkeypatch: pyt
     with patch("backend.llm.providers.httpx.Client", return_value=mock_client):
         out = chat_completion(
             provider="vllm",
-            model="m1",
+            model="gemma4:e4b",
             messages=[{"role": "user", "content": "x"}],
             temperature=0.5,
             top_p=0.9,
@@ -36,7 +37,7 @@ def test_chat_completion_vllm_posts_openai_shape_without_bearer(monkeypatch: pyt
     url = call_kw[0][0]
     assert url == "http://vllm:8000/v1/chat/completions"
     body = call_kw[1]["json"]
-    assert body["model"] == "m1"
+    assert body["model"] == "gemma4:e4b"
     assert body["messages"] == [{"role": "user", "content": "x"}]
     assert body["temperature"] == 0.5
     assert body["top_p"] == 0.9
