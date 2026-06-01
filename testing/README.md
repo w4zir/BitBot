@@ -26,7 +26,7 @@ Copy `.env.example` → `.env` (and `.env.local` for host-side overrides). Impor
 | `MODERNBERT_MODEL_DIR` | Local eval (`evaluate_modernbert_category.py`) — path to `.../winner` |
 | `CLASSIFIER_BENTOML_URL` | Bento eval (`evaluate_category_n_intent.py`) — e.g. `http://localhost:3000/classify` when port-forwarded |
 | `CLASSIFIER_BENTOML_TIMEOUT_SECONDS` | HTTP timeout (default `5`) |
-| `INTENT_MODEL_PROVIDER`, `INTENT_MODEL`, `OLLAMA_BASE_URL` | Full pipeline eval (intent step) |
+| `INTENT_MODEL_PROVIDER`, `INTENT_MODEL`, `OLLAMA_BASE_URL` | Full pipeline eval (intent step; use `VLLM_*` when provider is `vllm`) |
 | `POSTGRES_HOST`, … | Intent allowlist lookup via DB |
 
 For Bento eval, start the stack (or at least the `modernbert` service) and point `CLASSIFIER_BENTOML_URL` at a reachable classify endpoint.

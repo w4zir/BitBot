@@ -22,11 +22,6 @@ def _cerebras_api_key() -> str:
     return os.getenv("CEREBRAS_API_KEY", "").strip()
 
 
-def _vllm_base(model: str = "") -> str:
-    base, _ = resolve_vllm_target(model)
-    return base
-
-
 def _vllm_api_key() -> str:
     return os.getenv("VLLM_API_KEY", "").strip()
 

@@ -70,7 +70,9 @@ SIMULATOR_USER_LLM_TOP_P=0.9
 SIMULATOR_USER_LLM_REPEAT_PENALTY=1.1
 
 # vLLM (when SIMULATOR_*_PROVIDER or suite defaults use vllm): OpenAI-compatible base URL + optional API key
+# Compose: docker compose --profile vllm up --build  (see README)
 # VLLM_API_BASE=http://localhost:8001/v1
+# VLLM_SERVED_NAME=gemma4:e4b
 # VLLM_API_KEY=
 
 # LLM judge provider/timeout when llm_judge is enabled (ollama | cerebras | vllm)

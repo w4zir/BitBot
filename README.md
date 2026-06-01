@@ -115,7 +115,7 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
 2. **Host scripts** (Python from your machine, not inside Compose): copy [`.env.local.example`](.env.local.example) to `.env.local` so `localhost` URLs override the Docker-oriented values in `.env`. Compose does **not** read `.env.local`; repo scripts load `.env` then `.env.local` via [`backend/repo_dotenv.py`](backend/repo_dotenv.py) (skipped inside containers).
 
-3. **vLLM in Compose:** the default `docker-compose.yml` includes a `vllm` service (prebuilt `vllm/vllm-openai` image) that needs **NVIDIA GPU** support in Docker (`gpus: all`). Add **`VLLM_MODEL=<huggingface-model-id>`** to `.env` before `docker compose up` — the stack uses `${VLLM_MODEL:?…}` so Compose fails fast if it is missing. To use **host Ollama** instead, keep `*_MODEL_PROVIDER=ollama` (defaults); the backend does not need the `vllm` container to be healthy for that path, but the container still starts unless you remove or override the `vllm` service locally.
+3. **vLLM (optional):** the Compose file defines a `vllm` service behind the **`vllm` profile** (prebuilt `vllm/vllm-openai` image, **NVIDIA GPU** required). It does **not** start with the default stack. To use it, set **`VLLM_MODEL=<huggingface-model-id>`** in `.env`, set `*_MODEL_PROVIDER=vllm` (and matching `*_MODEL` / `VLLM_SERVED_NAME`), then run **`docker compose --profile vllm up --build`**. For **host Ollama** (default), keep `*_MODEL_PROVIDER=ollama` and use **`docker compose up --build`** — no GPU or vLLM config needed.
 
 4. **Train and export** a model to `training/models/modernbert_finetuned/` (see [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md)). The `modernbert` container mounts this path read-only; without valid tokenizer + model files, that service will not start.
 
@@ -123,6 +123,12 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
    ```bash
    docker compose up --build
+   ```
+
+   With vLLM:
+
+   ```bash
+   docker compose --profile vllm up --build
    ```
 
 6. Open the UI at **http://localhost:8501** (backend API: **http://localhost:8000**).
@@ -133,7 +139,7 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"My order is late\",\"full_flow\":false}"
    ```
 
-8. Full conversation flow (Postgres + LangGraph + LLM): choose **Ollama** (local), **Cerebras** (cloud API key), or **vLLM** (OpenAI-compatible; default Compose wires `VLLM_API_BASE=http://vllm:8000/v1`). Set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `INTENT_MODEL_PROVIDER` / `INTENT_MODEL` in `.env` (see `.env.example`). For **Ollama**, set `OLLAMA_BASE_URL` and ensure the server is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). For **vLLM**, set providers to `vllm` and `*_MODEL` to the same HuggingFace model id as `VLLM_MODEL` on the server. Then:
+8. Full conversation flow (Postgres + LangGraph + LLM): choose **Ollama** (local), **Cerebras** (cloud API key), or **vLLM** (OpenAI-compatible; with `--profile vllm`, Compose wires `VLLM_API_BASE=http://vllm:8000/v1`). Set `NO_ISSUE_MODEL_*`, `VALIDATION_MODEL_*`, and `INTENT_MODEL_PROVIDER` / `INTENT_MODEL` in `.env` (see `.env.example`). For **Ollama**, set `OLLAMA_BASE_URL` and ensure the server is reachable from the backend (e.g. `host.docker.internal:11434` on Docker Desktop). For **vLLM**, set providers to `vllm` and `*_MODEL` to `VLLM_SERVED_NAME` (or the HuggingFace id — routing maps both). Then:
 
    ```bash
    docker compose exec -T elasticsearch curl -s -X POST http://backend:8000/classify -H "Content-Type: application/json" -d "{\"text\":\"Hello\",\"full_flow\":true}"

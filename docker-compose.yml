@@ -46,8 +46,10 @@ services:
       - ${MODERNBERT_MODELS_HOST_DIR:-./training/models}:${MODERNBERT_MODELS_CONTAINER_DIR:-/training/models}:ro
 
   # OpenAI-compatible vLLM server (NVIDIA GPU + driver required).
+  # Opt-in: docker compose --profile vllm up --build
   # Set VLLM_MODEL / VLLM_SERVED_NAME in `.env`; use VLLM_REASONING_PARSER=qwen3 for Qwen3.
   vllm:
+    profiles: [vllm]
     image: vllm/vllm-openai:latest
     gpus: all
     shm_size: "4g"
@@ -123,8 +125,6 @@ services:
       elasticsearch:
         condition: service_started
       modernbert:
-        condition: service_started
-      vllm:
         condition: service_started
     healthcheck:
       test:
