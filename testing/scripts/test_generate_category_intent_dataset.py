@@ -16,21 +16,21 @@ import pytest
 
 from testing.simulator.config import SeedConfig
 
+from testing.scripts import generate_category_intent_dataset as gen_mod
 from testing.scripts.generate_category_intent_dataset import (
-
     GenerationResult,
-
     _build_parser,
-
     _count_jsonl_rows,
-
     _default_output_path,
-
+    _preflight_persona_llm,
     build_fake_scenario_instance,
-
     run_generation,
-
 )
+
+
+@pytest.fixture(autouse=True)
+def _skip_persona_llm_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gen_mod, "_preflight_persona_llm", lambda **_kwargs: None)
 
 
 
@@ -953,5 +953,140 @@ def test_run_generation_resume_noop_when_already_at_limit(tmp_path: Path) -> Non
     assert result.total_rows == 1
 
     assert len(out.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_preflight_vllm_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm.test:8001/v1")
+    monkeypatch.setenv("VLLM_SERVED_NAME", "gemma4:e4b")
+    monkeypatch.setenv("VLLM_MODEL", "google/gemma-4-E4B-it")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict:
+            return {"data": [{"id": "gemma4:e4b"}, {"id": "other"}]}
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, headers: dict | None = None) -> FakeResponse:
+            assert url == "http://vllm.test:8001/v1/models"
+            return FakeResponse()
+
+    monkeypatch.setattr(gen_mod.httpx, "Client", FakeClient)
+    _preflight_persona_llm(provider="vllm", model="gemma4:e4b", timeout_seconds=5.0)
+
+
+def test_preflight_vllm_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm.test:8001/v1")
+    monkeypatch.setenv("VLLM_SERVED_NAME", "gemma4:e4b")
+
+    def fail_get(*args: object, **kwargs: object) -> None:
+        raise gen_mod.httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        get = fail_get
+
+    monkeypatch.setattr(gen_mod.httpx, "Client", FakeClient)
+    with pytest.raises(RuntimeError, match="Persona LLM preflight failed"):
+        _preflight_persona_llm(provider="vllm", model="gemma4:e4b", timeout_seconds=5.0)
+
+
+def test_preflight_vllm_model_not_served(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm.test:8001/v1")
+    monkeypatch.setenv("VLLM_SERVED_NAME", "gemma4:e4b")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict:
+            return {"data": [{"id": "other-model"}]}
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, headers: dict | None = None) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(gen_mod.httpx, "Client", FakeClient)
+    with pytest.raises(RuntimeError, match="configured model not served"):
+        _preflight_persona_llm(provider="vllm", model="gemma4:e4b", timeout_seconds=5.0)
+
+
+def test_run_generation_calls_preflight_before_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def capture_preflight(*, provider: str, model: str, timeout_seconds: float = 15.0) -> None:
+        calls.append((provider, model))
+
+    monkeypatch.setattr(gen_mod, "_preflight_persona_llm", capture_preflight)
+
+    sim_root = tmp_path / "simulator"
+    suite_path = _write_minimal_simulator_tree(
+        sim_root,
+        suite_yaml="""
+run_id: mini
+scenarios:
+  - seed_id: s1
+""",
+        seed_yaml=MINI_SEEDS,
+        persona_yaml=MINI_PERSONAS,
+    )
+
+    from testing.simulator import persona as persona_mod
+
+    monkeypatch.setattr(
+        persona_mod.PersonaEngine,
+        "generate_opening",
+        lambda self: f"ok {self.scenario.entity.get('order_id')}",
+    )
+
+    run_generation(
+        output_path=tmp_path / "out.jsonl",
+        max_limit=1,
+        suite_path=suite_path,
+        seed_override=None,
+        persona_filters=[],
+        randomize=False,
+        stderr_print=lambda _m: None,
+        skip_preflight=False,
+    )
+
+    assert calls == [("ollama", "llama3.2")]
 
 

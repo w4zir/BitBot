@@ -15,6 +15,9 @@ Prerequisites (from repo ``.env`` or environment):
 - ``SIMULATOR_USER_LLM_PROVIDER`` / ``SIMULATOR_USER_LLM_MODEL`` — persona LLM backend
 - ``SIMULATOR_USER_LLM_TIMEOUT_SECONDS``, ``SIMULATOR_USER_LLM_TEMPERATURE``, etc. — optional tuning
 
+Before generating, the script preflights the persona LLM (``GET /v1/models`` for vLLM/Cerebras,
+``GET /api/tags`` for Ollama) and fails fast if the server is unreachable or the model is missing.
+
 CLI options:
 
 - ``--max-limit N`` — number of examples to generate (required)
@@ -70,10 +73,13 @@ from itertools import cycle
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from backend.llm.vllm_routing import resolve_vllm_target
 from backend.repo_dotenv import load_repo_dotenv
 
 from testing.simulator.config import SeedConfig, SuiteConfig
@@ -260,6 +266,100 @@ def _apply_user_llm_env_overrides(suite: SuiteConfig) -> None:
         suite.defaults.user_llm_repeat_penalty = float(simulator_user_llm_repeat_penalty)
 
 
+def _normalize_model_id(name: str) -> str:
+    return name.strip().lower().replace("_", "-").replace(" ", "")
+
+
+def _model_id_listed(requested: str, available: set[str]) -> bool:
+    if not requested:
+        return bool(available)
+    norm_req = _normalize_model_id(requested)
+    for name in available:
+        if not name:
+            continue
+        norm_name = _normalize_model_id(name)
+        if norm_req == norm_name or norm_name.startswith(f"{norm_req}:"):
+            return True
+    return False
+
+
+def _preflight_persona_llm(
+    *,
+    provider: str,
+    model: str,
+    timeout_seconds: float = 15.0,
+) -> None:
+    """Verify the persona LLM server is reachable and exposes the configured model."""
+    p = (provider or "").strip().lower()
+    m = (model or "").strip()
+    headers: dict[str, str] = {}
+
+    if p == "vllm":
+        base, served = resolve_vllm_target(m)
+        url = f"{base}/models"
+        key = os.getenv("VLLM_API_KEY", "").strip()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        logical_model = served or m
+    elif p == "ollama":
+        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        url = f"{base}/api/tags"
+        logical_model = m
+    elif p == "cerebras":
+        base = os.getenv("CEREBRAS_API_BASE", "https://api.cerebras.ai/v1").rstrip("/")
+        url = f"{base}/models"
+        key = os.getenv("CEREBRAS_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError(
+                "CEREBRAS_API_KEY must be set for cerebras provider (persona LLM preflight)."
+            )
+        headers["Authorization"] = f"Bearer {key}"
+        logical_model = m
+    else:
+        raise RuntimeError(f"Unsupported persona LLM provider: {provider!r}")
+
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(url, headers=headers or None)
+            response.raise_for_status()
+            payload = response.json() or {}
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"Persona LLM preflight failed: cannot reach {p} server "
+            f"(provider={p}, model={m!r}, url={url}): {exc}"
+        ) from exc
+
+    if p == "ollama":
+        models = payload.get("models") or []
+        available = {str(item.get("name") or "").strip() for item in models}
+    else:
+        models = payload.get("data") or []
+        available = {str(item.get("id") or "").strip() for item in models}
+
+    available = {name for name in available if name}
+    if not available:
+        raise RuntimeError(
+            f"Persona LLM preflight failed: {p} server returned no models "
+            f"(provider={p}, model={m!r}, url={url})."
+        )
+
+    check_name = logical_model if p == "vllm" else m
+    if check_name and not _model_id_listed(check_name, available):
+        sample = ", ".join(sorted(available)[:8])
+        more = "" if len(available) <= 8 else f" (+{len(available) - 8} more)"
+        raise RuntimeError(
+            f"Persona LLM preflight failed: configured model not served "
+            f"(provider={p}, model={check_name!r}, url={url}, "
+            f"available=[{sample}{more}])."
+        )
+
+    print(
+        f"Persona LLM preflight OK (provider={p}, model={check_name or m!r}, "
+        f"url={url}, served_count={len(available)})",
+        flush=True,
+    )
+
+
 def _default_output_path(output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -382,6 +482,7 @@ def run_generation(
     existing_rows: int = 0,
     stderr_print: Callable[[str], None] | None = None,
     max_attempt_multiplier: int = 50,
+    skip_preflight: bool = False,
 ) -> GenerationResult:
     """Generate JSONL rows until the file reaches max_limit total rows."""
     err = stderr_print or (lambda m: print(m, file=sys.stderr))
@@ -423,6 +524,13 @@ def run_generation(
     persona_candidates = _persona_candidates(personas, persona_filters)
     if not persona_candidates:
         raise ValueError("No personas matched the requested --persona filter.")
+
+    if not skip_preflight:
+        _preflight_persona_llm(
+            provider=suite.defaults.user_llm_provider,
+            model=suite.defaults.user_llm_model,
+            timeout_seconds=min(float(suite.defaults.user_llm_timeout_seconds), 30.0),
+        )
 
     if randomize:
 

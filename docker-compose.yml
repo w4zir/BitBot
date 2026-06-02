@@ -53,34 +53,22 @@ services:
     image: vllm/vllm-openai:latest
     gpus: all
     shm_size: "4g"
-    env_file:
-      - path: .env
-        required: false
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
-      VLLM_MODEL: ${VLLM_MODEL:?Set VLLM_MODEL in .env (HuggingFace model id)}
-      VLLM_SERVED_NAME: ${VLLM_SERVED_NAME:-}
-      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-512}
-      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.85}
-      VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-1}
-      VLLM_REASONING_PARSER: ${VLLM_REASONING_PARSER:-}
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        set -- "$$VLLM_MODEL" \
-          --served-model-name "$${VLLM_SERVED_NAME:-$$VLLM_MODEL}" \
-          --max-model-len "$${VLLM_MAX_MODEL_LEN:-512}" \
-          --gpu-memory-utilization "$${VLLM_GPU_MEMORY_UTILIZATION:-0.85}" \
-          --max-num-seqs "$${VLLM_MAX_NUM_SEQS:-1}" \
-          --enforce-eager
-        if [ -n "$${VLLM_REASONING_PARSER:-}" ]; then
-          set -- "$$@" --reasoning-parser "$$VLLM_REASONING_PARSER"
-        fi
-        exec vllm serve "$$@"
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
+      BITBOT_VLLM_MODEL: ${VLLM_MODEL:?Set VLLM_MODEL in .env (HuggingFace model id)}
+      BITBOT_VLLM_SERVED_NAME: ${VLLM_SERVED_NAME:-}
+      BITBOT_VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-512}
+      BITBOT_VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.85}
+      BITBOT_VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-1}
+      BITBOT_VLLM_REASONING_PARSER: ${VLLM_REASONING_PARSER:-}
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /opt/bitbot/vllm-entrypoint.sh | exec /bin/sh -s"]
     ports:
       - "${VLLM_HOST_PORT:-8001}:8000"
     volumes:
       - hf_cache:/root/.cache/huggingface
+      - ./infra/vllm/entrypoint.sh:/opt/bitbot/vllm-entrypoint.sh:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 15s
