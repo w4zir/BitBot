@@ -2,6 +2,8 @@
 
 Step-by-step guide to evaluate a fine-tuned **ModernBERT** category classifier on **Bitext holdout** data, then on **simulated** utterances, and interpret the metrics written under `testing/results/`.
 
+**Canonical reference:** [docs/finetuning-modernbert.md](../docs/finetuning-modernbert.md) (full pipeline, Bento serving, dataset prep).
+
 Two evaluation paths:
 
 | Script | Inference | Use when |
@@ -28,8 +30,9 @@ Copy `.env.example` → `.env` (and `.env.local` for host-side overrides). Impor
 | `CLASSIFIER_BENTOML_TIMEOUT_SECONDS` | HTTP timeout (default `5`) |
 | `INTENT_MODEL_PROVIDER`, `INTENT_MODEL`, `OLLAMA_BASE_URL` | Full pipeline eval (intent step; use `VLLM_*` when provider is `vllm`) |
 | `POSTGRES_HOST`, … | Intent allowlist lookup via DB |
+| `CATEGORY_CONFIDENCE_THRESHOLD` | Agent routes low-confidence predictions to `no_issue_direct` (default `0.5`) |
 
-For Bento eval, start the stack (or at least the `modernbert` service) and point `CLASSIFIER_BENTOML_URL` at a reachable classify endpoint.
+For Bento eval, start the stack (or at least the `modernbert` service) and point `CLASSIFIER_BENTOML_URL` at a reachable classify endpoint. Confirm `MODERNBERT_MODEL_DIR` in `.env` matches the checkpoint you intend to test.
 
 ---
 
@@ -178,7 +181,7 @@ python testing/scripts/evaluate_modernbert_category.py \
   -o testing/results/modernbert_category
 ```
 
-Compare `run_*.jsonl` from phase 1 vs phase 2 on the same metric block — simulated eval usually exposes persona phrasing and edge cases Bitext does not cover.
+Compare `run_*.jsonl` from phase 1 vs phase 2 on the same metric block — simulated eval usually exposes persona phrasing and edge cases Bitext does not cover. A Bitext-only checkpoint may score ~99% on Bitext test but ~40% on simulated holdout; a phase-2 continue-finetuned checkpoint typically recovers to ~97%+.
 
 ### Step 2.3 — Full stack eval (category + intent)
 
@@ -238,6 +241,19 @@ Output file: testing/results/modernbert_category/run_20260521_161911.jsonl
 | Bento eval worse than local HF | Serving checkpoint differs from `MODERNBERT_MODEL_DIR`; rebuild/restart `modernbert` service |
 | Intent metrics only in full eval | Category errors mask intent; fix category first, then re-run without `--category-only` |
 
+### Example observed run (June 2026)
+
+`testing/results/category_n_intent/run_20260602_091816.jsonl` on 525 simulated test rows via Bento (`http://localhost:3000/classify`):
+
+| Metric | Value |
+|--------|-------|
+| Category accuracy | ~97.5% |
+| Category macro F1 | ~0.88 |
+| Intent-on-category-correct accuracy | ~98.0% |
+| Intent-on-category-correct macro F1 | ~0.87 |
+
+Notable weak spots in that run: `order`↔`delivery` category confusion; `get_refund`↔`track_refund` intent mix-ups. Treat as an example run, not a guaranteed benchmark.
+
 ### Debugging individual failures
 
 ```bash
@@ -282,5 +298,5 @@ python testing/scripts/evaluate_category_n_intent.py --category-only --max-limit
 ## Related documentation
 
 - [training/README.md](../training/README.md) — dataset build and fine-tune workflow
-- [docs/finetuning-modernbert.md](../docs/finetuning-modernbert.md) — serving and agent routing notes
+- [docs/finetuning-modernbert.md](../docs/finetuning-modernbert.md) — canonical pipeline (dataset, training, serving, routing)
 - [specs/simulator-spec.md](../specs/simulator-spec.md) — simulator architecture

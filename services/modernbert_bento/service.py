@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
 import bentoml
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, PreTrainedTokenizerFast
+
+logger = logging.getLogger(__name__)
 
 MODEL_DIR = os.getenv("MODERNBERT_MODEL_DIR", "").strip()
 
@@ -56,28 +60,25 @@ def _load_tokenizer(model_dir: str) -> Any:
         return tokenizer
 
 
-def _load_model_artifacts() -> tuple[Any, Any]:
-    model_dir = _resolve_model_dir()
-    tokenizer = _load_tokenizer(model_dir)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_dir,
-        trust_remote_code=True,
-    )
-    model.eval()
-    return tokenizer, model
-
-
-TOKENIZER, MODEL = _load_model_artifacts()
-
-
-def _resolve_label(idx: int) -> str:
-    id2label = getattr(MODEL.config, "id2label", {}) or {}
-    raw = id2label.get(idx, str(idx))
-    return str(raw)
-
-
 @bentoml.service
 class ModernBertClassifier:
+    def __init__(self) -> None:
+        model_dir = _resolve_model_dir()
+        logger.info("Loading ModernBERT model from directory: %s", model_dir)
+        print(f"Loading ModernBERT model from directory: {model_dir}", file=sys.stderr, flush=True)
+        self.model_dir = model_dir
+        self.tokenizer = _load_tokenizer(model_dir)
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_dir,
+            trust_remote_code=True,
+        )
+        self.model.eval()
+
+    def _resolve_label(self, idx: int) -> str:
+        id2label = getattr(self.model.config, "id2label", {}) or {}
+        raw = id2label.get(idx, str(idx))
+        return str(raw)
+
     @bentoml.api(route="/classify")
     def classify(self, text: str = "") -> Dict[str, Any]:
         text = (text or "").strip()
@@ -87,19 +88,19 @@ class ModernBertClassifier:
                 "confidence": 0.0,
             }
 
-        encoded = TOKENIZER(
+        encoded = self.tokenizer(
             text,
             truncation=True,
             max_length=256,
             return_tensors="pt",
         )
         with torch.no_grad():
-            logits = MODEL(**encoded).logits
+            logits = self.model(**encoded).logits
             probs = torch.softmax(logits, dim=-1)[0]
 
         predicted_idx = int(torch.argmax(probs).item())
         confidence = float(probs[predicted_idx].item())
-        category = _resolve_label(predicted_idx)
+        category = self._resolve_label(predicted_idx)
 
         return {
             "category": category,
@@ -107,6 +108,5 @@ class ModernBertClassifier:
         }
 
     @bentoml.api(route="/health")
-    def health(self, payload: Dict[str, Any]) -> Dict[str, str]:
-        _ = payload
+    def health(self) -> Dict[str, str]:
         return {"status": "ok"}

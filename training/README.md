@@ -5,7 +5,9 @@ Step-by-step guide to fine-tune **ModernBERT** (`MoritzLaurer/ModernBERT-base-ze
 1. **Bitext** — build a multiclass dataset from Hugging Face Bitext (+ optional synthetic `no_issue` rows) and run an initial fine-tune.
 2. **Simulated data** — generate persona-driven utterances from the conversation simulator, convert them to the same label space, then **continue** fine-tuning from the Bitext checkpoint.
 
-Production routing expects a **`no_issue`** label (see `backend/agent/issue_graph.py`). Use `--mode category` unless you are experimenting with binary issue detection.
+Production routing expects a **`NO_ISSUE`** label in the 13-class mapping (see [`training/data/label2id.json`](data/label2id.json) and `backend/agent/issue_graph.py`). Use `--mode category` unless you are experimenting with binary issue detection.
+
+**Canonical reference:** [docs/finetuning-modernbert.md](../docs/finetuning-modernbert.md) (dataset stats interpretation, Bento serving, evaluation, troubleshooting).
 
 ---
 
@@ -62,7 +64,15 @@ python training/scripts/create_category_dataset.py --mode category \
 | `label2id.json` | String label → integer id (keep this for phase 2) |
 | `dataset_stats.json` | Counts, class distribution, skip reasons |
 
-Review `dataset_stats.json` for skipped rows and class balance before training.
+Review `dataset_stats.json` before training:
+
+| Field | What to check |
+|-------|----------------|
+| `skipped_rows` / `label_missing_in_label2id` | Non-zero → labels outside canonical mapping were dropped |
+| `class_distribution_all` | Imbalance is expected; verify `NO_ISSUE` and rare classes have enough support |
+| `duplicates_removed` | Large dedup count may indicate overlapping Bitext and synthetic text |
+
+Canonical label mapping: [`training/data/label2id.json`](data/label2id.json) (13 labels including `PRODUCT` and `NO_ISSUE`).
 
 **Bitext-only** (no synthetic merge):
 
@@ -71,7 +81,7 @@ python training/scripts/create_category_dataset.py --mode category --bitext-only
   --output-dir training/data/bitext_category
 ```
 
-Other modes: `--mode binary` (issue vs `no_issue`), `--mode intent` (HF intent labels). Category mode is the production default.
+Other mode: `--mode binary` (experimental issue vs `no_issue` only). Category mode is the production default.
 
 ### Step 1.3 — Fine-tune on Bitext
 
@@ -80,6 +90,7 @@ Script: [`experiments/src/train_multiclass_modernbert.py`](experiments/src/train
 ```bash
 python training/experiments/src/train_multiclass_modernbert.py \
   --dataset-dir training/data/bitext_category \
+  --label2id-file training/data/label2id.json \
   --num-epochs 5 \
   --output-dir training/models/bitext_multiclass_finetuned
 ```
@@ -144,7 +155,7 @@ Reuse the **phase 1** label mapping so ids match the Bitext model:
 python training/scripts/create_category_dataset.py --mode category \
   --jsonl-input-dir data/raw/simulated \
   --jsonl-glob "category_intent*.jsonl" \
-  --label2id-path training/data/bitext_category/label2id.json \
+  --label2id-path training/data/label2id.json \
   --output-dir training/data/simulated
 ```
 
@@ -159,12 +170,14 @@ Point `--local-base-model-dir` at your phase 1 `winner/` directory:
 ```bash
 python training/experiments/src/train_multiclass_modernbert.py \
   --dataset-dir training/data/simulated \
-  --label2id-file training/data/bitext_category/label2id.json \
+  --label2id-file training/data/label2id.json \
   --local-base-model-dir training/models/bitext_multiclass_finetuned_<UTC_TIMESTAMP>/winner \
   --output-dir training/models/simulated_multiclass_continue \
   --num-epochs 2 \
   --learning-rate 5e-5
 ```
+
+A Bitext-only model can score strongly on Bitext test but poorly on simulated holdout; phase 2 continue fine-tuning typically closes that gap. Evaluate before and after — see [testing/README.md](../testing/README.md).
 
 If you only have `train.jsonl` (no separate eval/test yet), you can reuse `train.jsonl` for eval/test temporarily — see the commented variables in:
 
@@ -181,11 +194,15 @@ After training, update `MODERNBERT_MODEL_DIR` to the new `winner/` if this check
 
 BentoML service: [`services/modernbert_bento/service.py`](../services/modernbert_bento/service.py)
 
-Docker Compose mounts `training/models` and reads `MODERNBERT_MODEL_DIR` (see `.env.example`). The backend calls `CLASSIFIER_BENTOML_URL` for `POST /classify`.
+1. Set `MODERNBERT_MODEL_DIR` in `.env` to your `winner/` directory (container path, e.g. `/training/models/<run>/winner`).
+2. Docker Compose mounts `training/models` read-only and starts the `modernbert` service on port **3000**.
+3. If `MODERNBERT_MODEL_DIR` is unset, the service falls back to the newest valid `/training/models/*/winner` by modification time.
 
 ```bash
 docker compose up --build
 ```
+
+The backend calls `CLASSIFIER_BENTOML_URL` (default `http://modernbert:3000/classify`) for `POST /classify`. See [docs/finetuning-modernbert.md](../docs/finetuning-modernbert.md#serve-with-bentoml) for health checks and troubleshooting.
 
 ---
 
@@ -204,6 +221,6 @@ docker compose up --build
 
 ## Related documentation
 
-- [docs/finetuning-modernbert.md](../docs/finetuning-modernbert.md) — extended notes (binary mode, Bento serving)
+- [docs/finetuning-modernbert.md](../docs/finetuning-modernbert.md) — canonical end-to-end guide (binary mode, Bento serving, eval interpretation)
 - [testing/README.md](../testing/README.md) — evaluate checkpoints on Bitext and simulated holdouts
 - [scripts/README.md](scripts/README.md) — script index

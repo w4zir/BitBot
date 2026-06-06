@@ -208,6 +208,7 @@ Use this sequence:
 - Validation loops: missing fields stay unresolved across turns.
 - Coverage gaps: add seeds or document intentional holes in `testing/simulator/seeds/gaps.yaml`.
 - Intent-name mismatch: keep DB `category_intents` names aligned with procedure YAML `intent` names.
+- Category misroutes: evaluate the ModernBERT checkpoint on simulated holdout — see [testing/README.md](../testing/README.md) and [docs/finetuning-modernbert.md](finetuning-modernbert.md).
 
 ## Suggested workflow
 
@@ -215,3 +216,4 @@ Use this sequence:
 2. Fix structural/policy failures before enabling LLM judge.
 3. Re-run failing seed with `--seed`.
 4. Use randomized `--iterations`/`--forever` mode for broader scenario sampling.
+5. Generate training data from seeds: `python testing/scripts/generate_category_intent_dataset.py --max-limit 1000` — see [training/README.md](../training/README.md#step-21--generate-simulated-categoryintent-jsonl) for the full phase-2 dataset pipeline.

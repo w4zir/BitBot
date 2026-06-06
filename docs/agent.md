@@ -44,7 +44,10 @@ flowchart TD
 ## Stage contracts (implemented)
 
 ### 1. `classify_category`
-- Uses ModernBERT via [`backend/rag/query_classifier.py`](../backend/rag/query_classifier.py).
+- Uses ModernBERT via [`backend/rag/query_classifier.py`](../backend/rag/query_classifier.py) → BentoML `POST CLASSIFIER_BENTOML_URL` with `{"text":"..."}`.
+- Returns `category` and `confidence` from the fine-tuned multiclass checkpoint (13 labels including `no_issue`; see [`training/data/label2id.json`](../training/data/label2id.json)).
+- Routes to `no_issue_direct` when category is `no_issue` **or** confidence is below `CATEGORY_CONFIDENCE_THRESHOLD` (default `0.5` in `.env.example`).
+- On classifier timeout/unavailability: deterministic fallback with `category=no_issue`, `confidence=0.0`, and `assistant_metadata.classifier_error`.
 - Honors session lock (reuses locked issue values).
 
 ### 2. `no_issue_direct`
@@ -148,6 +151,10 @@ Current procedure-backed intents in `backend/procedures/`:
 - `AGENT_CHECKPOINT_DB`: sqlite path for LangGraph checkpoint persistence (default `agent_checkpoints.db`).
 - `AGENT_PERSISTENT_MODE`: `1/true` enables persistent runner for `/classify full_flow`; `0/false` uses non-persistent graph.
 - `POLICY_CONSTRAINTS_DIR`: optional override for policy constraints artifact directory.
+- `CLASSIFIER_BENTOML_URL`: ModernBERT Bento classify endpoint (Compose default: `http://modernbert:3000/classify`).
+- `CLASSIFIER_BENTOML_TIMEOUT_SECONDS`: HTTP timeout for classifier calls (default `5`).
+- `CATEGORY_CONFIDENCE_THRESHOLD`: below this confidence, route to `no_issue_direct` (default `0.5`).
+- `MODERNBERT_MODEL_DIR`: active `winner/` checkpoint path inside the Bento container.
 
 ## Related routes
 
@@ -177,3 +184,10 @@ All routes are served from [`backend/api/routes/tools.py`](../backend/api/routes
 | POST | `/tools/contact-handoff` | Human handoff ticket (`summary`) |
 | POST | `/tools/complaint` | Complaint ticket (`complaint`) |
 | POST | `/tools/delivery-period` | Delivery window by `order_or_tracking` |
+
+## Related documentation
+
+- [docs/finetuning-modernbert.md](finetuning-modernbert.md) — dataset prep, fine-tuning, Bento serving, evaluation
+- [training/README.md](../training/README.md) — phase 1 + 2 training walkthrough
+- [testing/README.md](../testing/README.md) — category eval and metric interpretation
+- [specs/agent.md](../specs/agent.md) — normative stage contracts

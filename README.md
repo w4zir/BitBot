@@ -39,7 +39,9 @@ flowchart LR
 | Topic | Document |
 |-------|----------|
 | LangGraph issue agent (nodes, procedures, session flow) | [docs/agent.md](docs/agent.md) |
-| Dataset creation, binary split, fine-tuning, evaluation, serving | [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md) |
+| ModernBERT pipeline (canonical: dataset, training, eval, serving) | [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md) |
+| ModernBERT training walkthrough (phase 1 + 2) | [training/README.md](training/README.md) |
+| ModernBERT evaluation and result interpretation | [testing/README.md](testing/README.md) |
 | Index Foodpanda policy Markdown in Elasticsearch | [docs/elasticsearch-foodpanda-policy-docs.md](docs/elasticsearch-foodpanda-policy-docs.md) |
 | Run the agent testing simulator (CLI, env, evaluators) | [docs/how_to_simulate.md](docs/how_to_simulate.md) |
 | Simulator contracts (schemas, modules, CLI reference) | [specs/simulator-spec.md](specs/simulator-spec.md) |
@@ -117,7 +119,7 @@ If `ES_HOST` is unset, retrieval returns no documents. The readiness endpoint on
 
 3. **vLLM (optional):** the Compose file defines a `vllm` service behind the **`vllm` profile** (prebuilt `vllm/vllm-openai` image, **NVIDIA GPU** required). It does **not** start with the default stack. To use it, set **`VLLM_MODEL=<huggingface-model-id>`** in `.env`, set `*_MODEL_PROVIDER=vllm` (and matching `*_MODEL` / `VLLM_SERVED_NAME`), then run **`docker compose --profile vllm up --build`**. Follow first-run model download progress with **`docker compose --profile vllm logs -f vllm`**; the service prints **`[vllm] Model download complete: ...`** before starting the API server. For **host Ollama** (default), keep `*_MODEL_PROVIDER=ollama` and use **`docker compose up --build`** — no GPU or vLLM config needed.
 
-4. **Train and export** a model to `training/models/modernbert_finetuned/` (see [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md)). The `modernbert` container mounts this path read-only; without valid tokenizer + model files, that service will not start.
+4. **Train and export** a multiclass checkpoint to `training/models/<run>/winner/` (see [docs/finetuning-modernbert.md](docs/finetuning-modernbert.md) and [training/README.md](training/README.md)). Set `MODERNBERT_MODEL_DIR` in `.env` to the container path (e.g. `/training/models/bitext_multiclass_finetuned_<UTC_TIMESTAMP>/winner`). The `modernbert` service mounts `training/models` read-only; without valid `config.json` + model weights in `winner/`, that service will not start.
 
 5. Start services:
 
@@ -218,8 +220,8 @@ docker compose run --rm simulator
 |------|---------|
 | `backend/` | FastAPI app, LangGraph flow, classifier HTTP client |
 | `frontend/` | Streamlit demo |
-| `services/modernbert_bento/` | BentoML ModernBERT binary classifier |
-| `training/scripts/` | Dataset preparation scripts (`create_bitext_dataset.py`, `build_is_issue_dataset.py`) |
+| `services/modernbert_bento/` | BentoML ModernBERT multiclass category classifier |
+| `training/scripts/` | Dataset preparation scripts (`create_category_dataset.py`, `build_is_issue_dataset.py`) |
 | `training/experiments/src/` | ModernBERT training entrypoints (`train_multiclass_modernbert.py`, `train_modernbert.py`) |
 | `training/data/samples/` | Small committed examples for smoke tests |
 | `infra/postgres/` | Postgres init SQL (core tables) used by **Docker Compose** |

@@ -53,9 +53,10 @@ Each stage defines purpose, input contract, output contract, hard rules, and fai
 
 **Rules**
 - No LLM usage in this stage.
-- Category labels are a closed enum sourced from model training labels.
-- Confidence threshold is mandatory and configurable.
-- If `confidence < category_confidence_threshold`, route as `no_issue`.
+- Category labels are a closed enum from [`training/data/label2id.json`](../training/data/label2id.json): `ACCOUNT`, `CANCEL`, `CONTACT`, `DELIVERY`, `FEEDBACK`, `INVOICE`, `ORDER`, `PAYMENT`, `REFUND`, `SHIPPING`, `SUBSCRIPTION`, `PRODUCT`, `NO_ISSUE` (served lowercase, e.g. `no_issue`).
+- Served via BentoML (`CLASSIFIER_BENTOML_URL`); checkpoint selected by `MODERNBERT_MODEL_DIR` or newest `*/winner` fallback.
+- Confidence threshold (`CATEGORY_CONFIDENCE_THRESHOLD`, default `0.5`) is mandatory and configurable.
+- Route to chitchat when `category == "no_issue"` **or** `confidence < category_confidence_threshold`.
 
 **Failure Modes**
 - Model unavailable or timeout: return deterministic fallback category `no_issue` with `confidence=0.0` and set `assistant_metadata.classifier_error`.
