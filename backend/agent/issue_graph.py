@@ -125,25 +125,93 @@ def _stage_name_from_state(state: IssueGraphState) -> str:
     return str((state.get("agent_state") or {}).get("stage") or "unknown_stage")
 
 
+_TOOL_CALL_INPUT_KEYS = (
+    "order_id",
+    "order_id_extracted",
+    "invoice_id",
+    "account_email",
+    "transaction_id",
+    "product_name",
+    "tracking_id",
+    "order_or_tracking",
+)
+
+_TOOL_CALL_RESULT_KEYS = (
+    "refund_tracking_found",
+    "order_found",
+    "payment_found",
+    "invoice_found",
+    "subscription_found",
+    "cancel_succeeded",
+    "refund_request_created",
+    "refund_context_found",
+    "shipping_address_updated",
+    "unsubscribe_succeeded",
+    "product_found",
+    "delivery_info_found",
+    "handoff_created",
+    "complaint_created",
+    "payment_issue_ticket_created",
+)
+
+
+def _extract_tool_call_input(output: dict[str, Any]) -> dict[str, Any]:
+    return {k: output[k] for k in _TOOL_CALL_INPUT_KEYS if k in output and output[k] is not None}
+
+
+def _infer_tool_call_result(output: dict[str, Any]) -> str:
+    for key in _TOOL_CALL_RESULT_KEYS:
+        if key in output:
+            return "success" if bool(output[key]) else "failure"
+    return "success"
+
+
+def _build_tool_call_trace(
+    tool_name: str,
+    *,
+    tool_output: dict[str, Any] | None = None,
+    tool_error: str | None = None,
+) -> dict[str, Any]:
+    output = dict(tool_output or {})
+    payload: dict[str, Any] = {
+        "tool_call_name": tool_name,
+        "tool_call_input": _extract_tool_call_input(output),
+        "tool_call_output": output,
+    }
+    if tool_error:
+        payload["tool_call_result"] = "failure"
+        payload["tool_call_error"] = tool_error
+    else:
+        payload["tool_call_result"] = _infer_tool_call_result(output)
+    return payload
+
+
 def _with_stage_metadata(
     state: IssueGraphState,
     stage_name: str,
     details: dict[str, Any] | None = None,
     *,
     llm_call: dict[str, Any] | None = None,
+    tool_call: dict[str, Any] | None = None,
 ) -> IssueGraphState:
     stage_metadata = dict(state.get("stage_metadata") or {})
     ts = _utc_now_iso()
     detail_map = {k: v for k, v in dict(details or {}).items() if v is not None}
     llm_payload = dict(llm_call or {}) if isinstance(llm_call, dict) else None
+    tool_payload = dict(tool_call or {}) if isinstance(tool_call, dict) else None
     step_entry = {
         "timestamp": ts,
         "step_id": str(detail_map.get("step_id") or ""),
-        "step_type": str(detail_map.get("step_type") or ("llm_call" if llm_payload else "node_operation")),
+        "step_type": str(
+            detail_map.get("step_type")
+            or ("llm_call" if llm_payload else "tool_call" if tool_payload else "node_operation")
+        ),
         "details": detail_map,
     }
     if llm_payload:
         step_entry["llm_call"] = llm_payload
+    if tool_payload:
+        step_entry["tool_call"] = tool_payload
     existing = stage_metadata.get(stage_name)
     prior_steps = []
     if isinstance(existing, dict):
@@ -354,6 +422,9 @@ def build_agent_trace(
             llm_call = step.get("llm_call")
             if isinstance(llm_call, dict):
                 formatted["llm_call"] = llm_call
+            tool_call = step.get("tool_call")
+            if isinstance(tool_call, dict):
+                formatted["tool_call"] = tool_call
             formatted_steps.append(formatted)
         nodes[node_name] = {"steps": formatted_steps}
     return {
@@ -2018,8 +2089,16 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
                     "error": meta["tool_error"],
                     "executor_turn_count": turn_count,
                 },
+                tool_call=_build_tool_call_trace(tool_name, tool_error=meta["tool_error"]),
             )
-        context.update(runner(step, state))
+        tool_output = runner(step, state)
+        context.update(tool_output)
+        return _with_stage_metadata(
+            {**state, "context_data": context, "current_step_index": idx + 1, "executor_turn_count": turn_count},
+            "structured_executor",
+            {"step_id": step.get("id"), "step_type": step_type, "executor_turn_count": turn_count},
+            tool_call=_build_tool_call_trace(tool_name, tool_output=tool_output),
+        )
     elif step_type == "logic_gate":
         cond = step.get("condition") or {}
         gate_eval = _evaluate_condition(

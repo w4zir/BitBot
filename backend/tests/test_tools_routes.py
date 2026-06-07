@@ -59,6 +59,23 @@ def test_tool_payment_track_refund_route(client: TestClient, monkeypatch: pytest
     assert out["data"]["order_id"] == "ORD-1"
 
 
+def test_tool_payment_track_refund_route_not_found(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "backend.api.routes.tools.get_refund_tracking",
+        lambda _oid: {
+            "found": False,
+            "reason": "refund_request_not_found",
+            "order_id": _oid,
+            "order_status": "delivered",
+        },
+    )
+    r = client.post("/tools/payment-track-refund", json={"order_id": "ORD-9999"})
+    assert r.status_code == 200
+    out = r.json()
+    assert out["ok"] is False
+    assert out["data"]["reason"] == "refund_request_not_found"
+
+
 def test_tool_subscription_unsubscribe_route(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "backend.api.routes.tools.unsubscribe_subscription",

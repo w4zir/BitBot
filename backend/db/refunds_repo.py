@@ -64,14 +64,22 @@ def get_refund_tracking(order_id: str) -> dict[str, Any]:
             )
             row = cur.fetchone()
 
+    if not row:
+        return {
+            "found": False,
+            "reason": "refund_request_not_found",
+            "order_id": oid,
+            "order_status": order.get("status"),
+        }
+
     return {
         "found": True,
         "order_id": oid,
         "order_status": order.get("status"),
-        "refund_id": row[0] if row else None,
-        "refund_decision": row[1] if row else None,
-        "refund_decision_reason": row[2] if row else None,
-        "refund_requested_at": row[3].isoformat() if row and row[3] else None,
+        "refund_id": row[0],
+        "refund_decision": row[1],
+        "refund_decision_reason": row[2],
+        "refund_requested_at": row[3].isoformat() if row[3] else None,
     }
 
 

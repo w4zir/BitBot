@@ -283,6 +283,61 @@ def test_build_agent_trace_includes_structured_executor_steps(monkeypatch) -> No
     assert steps[0].get("step_id") == "lookup_order"
     assert steps[0].get("step_type") == "tool_call"
     assert isinstance(steps[0].get("details"), dict)
+    tool_call = steps[0].get("tool_call") or {}
+    assert tool_call.get("tool_call_name") == "check_order_status"
+    assert tool_call.get("tool_call_result") == "success"
+    assert isinstance(tool_call.get("tool_call_output"), dict)
+
+
+def test_tool_call_trace_includes_input_and_output(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.agent.issue_graph.get_refund_tracking",
+        lambda order_id: {
+            "found": False,
+            "reason": "refund_request_not_found",
+            "order_id": order_id,
+            "order_status": "delivered",
+        },
+    )
+    state = {
+        "text": "refund status ORD-4453",
+        "messages": [{"role": "user", "content": "refund status ORD-4453"}],
+        "todo_list": [
+            {"id": "lookup_refund_status", "type": "tool_call", "tool": "payment_refund_status"}
+        ],
+        "current_step_index": 0,
+        "context_data": {"order_id": "ORD-4453"},
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    stage = (out.get("stage_metadata") or {}).get("structured_executor") or {}
+    steps = stage.get("steps") or []
+    assert steps
+    tool_call = steps[0].get("tool_call") or {}
+    assert tool_call.get("tool_call_name") == "payment_refund_status"
+    assert tool_call.get("tool_call_input") == {"order_id": "ORD-4453"}
+    assert tool_call.get("tool_call_result") == "failure"
+    assert tool_call.get("tool_call_output", {}).get("refund_tracking_found") is False
+    assert tool_call.get("tool_call_output", {}).get("refund_tracking_reason") == "refund_request_not_found"
+    assert out["context_data"]["refund_tracking_found"] is False
+
+
+def test_tool_call_trace_for_unknown_tool() -> None:
+    state = {
+        "text": "test",
+        "messages": [{"role": "user", "content": "test"}],
+        "todo_list": [{"id": "bad_tool", "type": "tool_call", "tool": "does_not_exist"}],
+        "current_step_index": 0,
+        "context_data": {},
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    stage = (out.get("stage_metadata") or {}).get("structured_executor") or {}
+    steps = stage.get("steps") or []
+    tool_call = steps[0].get("tool_call") or {}
+    assert tool_call.get("tool_call_name") == "does_not_exist"
+    assert tool_call.get("tool_call_result") == "failure"
+    assert "Unknown tool" in str(tool_call.get("tool_call_error") or "")
 
 
 def test_classify_intent_stage_keeps_llm_messages(monkeypatch) -> None:
