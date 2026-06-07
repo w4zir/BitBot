@@ -15,19 +15,6 @@ steps:
   - id: check_policy_constraints
     type: policy_check
     policy_phase: runtime
-    policy_rules:
-      - subscription_must_exist
-    on_true: branch_subscription_found
-    on_false: subscription_not_found
-  - id: branch_subscription_found
-    type: logic_gate
-    condition:
-      {
-        op: eq,
-        field: subscription_found,
-        value: true,
-        failure_reason: We could not find an active subscription for that account.
-      }
     on_true: share_subscription_status
     on_false: subscription_not_found
   - id: share_subscription_status

@@ -16,19 +16,6 @@ steps:
   - id: check_policy_constraints
     type: policy_check
     policy_phase: runtime
-    policy_rules:
-      - delivery_record_exists
-    on_true: branch_delivery_info_found
-    on_false: delivery_period_not_found
-  - id: branch_delivery_info_found
-    type: logic_gate
-    condition:
-      {
-        op: eq,
-        field: delivery_info_found,
-        value: true,
-        failure_reason: Delivery timing information could not be found for this order or route.
-      }
     on_true: share_delivery_period
     on_false: delivery_period_not_found
   - id: share_delivery_period

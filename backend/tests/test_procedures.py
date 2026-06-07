@@ -39,12 +39,13 @@ def test_track_order_no_longer_maps_to_order_status() -> None:
     assert bp is None
 
 
-def test_logic_gate_condition_failure_reason_preserved_on_blueprint() -> None:
-    procedures.load_blueprints.cache_clear()
-    bp = procedures.load_blueprints()["order_cancel"]
-    step = next(s for s in bp.steps if s.id == "branch_order_within_cancel_window")
-    assert step.condition is not None
-    assert "expired" in (step.condition.failure_reason or "").lower()
+def test_cancel_order_policy_window_rule_preserved_in_constraints() -> None:
+    clear_policy_constraints_cache()
+    from backend.agent.policy_constraints import load_policy_constraints_for_intent
+
+    model = load_policy_constraints_for_intent("order", "cancel_order")
+    window_rule = next(r for r in model.eligibility_rules if r.id == "order_within_time_limit")
+    assert "expired" in (window_rule.failure_reason or "").lower()
 
 
 def test_blueprints_validate() -> None:

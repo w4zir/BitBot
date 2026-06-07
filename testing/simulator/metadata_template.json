@@ -1,0 +1,193 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "agent_debug_trace",
+  "run_id": "run_identifier",
+  "suite": "path_or_suite_name",
+  "started_at": "ISO-8601 timestamp",
+  "completed_at": "ISO-8601 timestamp",
+  "run_loop_status": "completed | failed | interrupted",
+  "run_error": null,
+  "environment": {
+    "agent_url": "http://host:port/classify",
+    "db_snapshot": "snapshot_identifier",
+    "git_sha": "optional_git_commit_sha",
+    "config": {
+      "max_turns": 0,
+      "timeout_seconds": 0,
+      "model_provider": "provider_name",
+      "model": "model_name"
+    }
+  },
+  "summary": {
+    "total_scenarios": 0,
+    "passed": 0,
+    "failed": 0,
+    "skipped": 0
+  },
+  "scenarios": [
+    {
+      "run_scenario_id": "seed_id#attempt_number",
+      "scenario_no": 1,
+      "seed_id": "seed_identifier",
+      "entity_id": "entity_identifier",
+      "session_id": "agent_session_identifier",
+      "persona_id": "persona_identifier",
+      "category": "category_name",
+      "intent": "intent_name",
+      "expected_outcome": "resolved | needs_more_data | policy_ineligible | tool_error | step_error | unresolvable | pending_escalation",
+      "final_outcome_status": "resolved | needs_more_data | policy_ineligible | tool_error | step_error | unresolvable | pending_escalation",
+      "outcome_status_reason": "short explanation of the final outcome",
+      "terminated_by": "resolved | escalated | persona_accepted | max_turns | error",
+      "seed_snapshot": {},
+      "persona_snapshot": {},
+      "entity_snapshot": {},
+      "procedure_snapshot": {
+        "procedure_id": "procedure_identifier",
+        "procedure_path": "path/to/procedure.yaml",
+        "procedure_version": "optional_version"
+      },
+      "policy_snapshot": {
+        "policy_path": "path/to/policy.yaml",
+        "policy_schema_version": "optional_version"
+      },
+      "evaluation": {
+        "structural": {
+          "passed": null,
+          "checks": {},
+          "failures": []
+        },
+        "policy": {
+          "passed": null,
+          "checks": {},
+          "failures": []
+        },
+        "llm_judge": null,
+        "regression": null
+      },
+      "metrics": {
+        "turns": 0,
+        "total_latency_ms": 0,
+        "total_tokens_used": 0
+      },
+      "trace": [
+        {
+          "turn_number": 1,
+          "request_started_at": "ISO-8601 timestamp",
+          "response_received_at": "ISO-8601 timestamp",
+          "latency_ms": 0,
+          "user_message": "user message text",
+          "agent_response": "assistant response text",
+          "outcome_status": "turn outcome status",
+          "category": "category_name",
+          "intent": "intent_name",
+          "procedure_id": "procedure_identifier",
+          "request_payload": {
+            "text": "user message text",
+            "full_flow": true,
+            "session_id": "agent_session_identifier"
+          },
+          "response_payload": {
+            "assistant_reply": "assistant response text",
+            "assistant_metadata": {}
+          },
+          "assistant_metadata": {
+            "category": "category_name",
+            "intent": "intent_name",
+            "problem_to_solve": "concise problem statement",
+            "procedure_id": "procedure_identifier",
+            "confidence": 0,
+            "outcome_status": "turn outcome status",
+            "eligibility_ok": null,
+            "validation_ok": null,
+            "validation_missing": [],
+            "validation_wait_count": 0,
+            "validation_wait_limit": 0,
+            "failure_reasons": [],
+            "tool_error": null,
+            "step_error": null,
+            "pending_human_action": null,
+            "escalation_decision": null
+          },
+          "agent_state": {
+            "stage": "current_node_or_stage",
+            "category": "category_name",
+            "intent": "intent_name",
+            "problem_to_solve": "concise problem statement",
+            "procedure_id": "procedure_identifier",
+            "validation_ok": null,
+            "validation_missing": [],
+            "eligibility_ok": null,
+            "outcome_status": "turn outcome status",
+            "current_step_index": 0,
+            "validation_wait_count": 0,
+            "validation_wait_limit": 0,
+            "classify_intent_attempts": 0,
+            "policy_load_attempts": 0,
+            "executor_turn_count": 0,
+            "max_node_turns": 0
+          },
+          "context_data": {},
+          "context_summary": {},
+          "policy_constraints": {
+            "eligible": null,
+            "reason": "",
+            "variables": {},
+            "validation_results": {}
+          },
+          "policy_check_results": [],
+          "output_validation": {
+            "valid": null,
+            "checks": {},
+            "failures": []
+          },
+          "token_usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_tokens": 0,
+            "total_tokens": 0
+          },
+          "nodes": {
+            "node_name": {
+              "steps": [
+                {
+                  "step_no": 1,
+                  "step_id": "step_identifier",
+                  "step_type": "node_operation | llm_call | tool_call | policy_check | logic_gate",
+                  "timestamp": "ISO-8601 timestamp",
+                  "details": {},
+                  "state_before": {},
+                  "state_after": {},
+                  "state_delta": {},
+                  "llm_call": {
+                    "provider": "provider_name",
+                    "model": "model_name",
+                    "messages": [],
+                    "raw_response": "",
+                    "parsed_output": {},
+                    "attempts": 0,
+                    "error": ""
+                  },
+                  "tool_call": {
+                    "tool_call_id": "tool_call_identifier",
+                    "tool_call_name": "tool_name",
+                    "tool_call_input": {},
+                    "tool_call_output": {},
+                    "tool_call_result": "success | failure",
+                    "failure_reason": ""
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "skipped_scenarios": [
+    {
+      "run_scenario_id": "seed_id#attempt_number",
+      "seed_id": "seed_identifier",
+      "reason": "skip reason"
+    }
+  ]
+}

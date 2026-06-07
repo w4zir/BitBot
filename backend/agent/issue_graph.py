@@ -907,6 +907,8 @@ def _policy_load_node(state: IssueGraphState) -> IssueGraphState:
     )
     constraints["eligible"] = eligible
     constraints["reason"] = reason
+    constraints.setdefault("variables", {})
+    constraints.setdefault("validation_results", {})
 
     out: IssueGraphState = {
         **state,
@@ -1446,7 +1448,8 @@ def _check_order_status(step: dict[str, Any], state: IssueGraphState) -> dict[st
     order_age_hours: float | None = None
     parsed_order_date = _parse_iso_datetime(order_date)
     if parsed_order_date is not None:
-        order_age_hours = (datetime.now(timezone.utc) - parsed_order_date).total_seconds() / 3600.0
+        raw_age_hours = (datetime.now(timezone.utc) - parsed_order_date).total_seconds() / 3600.0
+        order_age_hours = max(0.0, raw_age_hours)
     return {
         **base,
         "order_found": True,
@@ -2091,26 +2094,33 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             or str(constraints.get("default_ineligible_reason") or "").strip()
         )
         target = str(step.get("on_true") if eligibility_ok else step.get("on_false") or "")
+        validation_results = {
+            str(check.get("check_id") or f"rule_{i}"): bool(check.get("passed"))
+            for i, check in enumerate(normalized_checks)
+        }
+        policy_step_state: IssueGraphState = {
+            **state,
+            "eligibility_ok": eligibility_ok,
+            "context_data": {
+                **context,
+                "policy_eligible": eligibility_ok,
+                "policy_ineligibility_reason": "" if eligibility_ok else reason,
+                "policy_check_results": combined_checks,
+            },
+            "policy_constraints": {
+                **constraints,
+                "eligible": eligibility_ok,
+                "reason": "" if eligibility_ok else reason,
+                "variables": dict(constraints.get("variables") or {}),
+                "validation_results": validation_results,
+            },
+            "policy_check_results": combined_checks,
+            "executor_turn_count": turn_count,
+        }
+        if not eligibility_ok:
+            policy_step_state["outcome_status"] = "policy_ineligible"
         return _with_stage_metadata(
-            _jump_to_step(
-                {
-                    **state,
-                    "context_data": {
-                        **context,
-                        "policy_eligible": eligibility_ok,
-                        "policy_ineligibility_reason": "" if eligibility_ok else reason,
-                        "policy_check_results": combined_checks,
-                    },
-                    "policy_constraints": {
-                        **constraints,
-                        "eligible": eligibility_ok,
-                        "reason": "" if eligibility_ok else reason,
-                    },
-                    "policy_check_results": combined_checks,
-                    "executor_turn_count": turn_count,
-                },
-                target,
-            ),
+            _jump_to_step(policy_step_state, target),
             "structured_executor",
             {
                 "step_id": step.get("id"),
@@ -2146,7 +2156,7 @@ def _structured_executor_node(state: IssueGraphState) -> IssueGraphState:
             **state,
             "context_data": context,
             "final_response": reply,
-            "current_step_index": idx + 1,
+            "current_step_index": len(todo),
             "executor_turn_count": turn_count,
             },
             "structured_executor",

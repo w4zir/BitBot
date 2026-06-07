@@ -443,6 +443,83 @@ def test_logic_gate_failure_reason_survives_in_policy_check_results() -> None:
     assert "could not find" in str(failed[-1].get("reason") or "").lower()
 
 
+def test_llm_response_is_terminal_and_does_not_fall_through_to_sibling_branch() -> None:
+    """Success llm_response must halt the executor instead of advancing to a sibling failure branch."""
+    state = {
+        "text": "status ORD-1",
+        "messages": [{"role": "user", "content": "status ORD-1"}],
+        "todo_list": [
+            {
+                "id": "share_status",
+                "type": "llm_response",
+                "message": "Share order status.",
+            },
+            {
+                "id": "order_not_found",
+                "type": "llm_response",
+                "message": "Order not found.",
+            },
+        ],
+        "current_step_index": 0,
+        "context_data": {"order_found": True, "order_status": "shipped", "order_id_extracted": "ORD-1"},
+        "policy_constraints": {},
+        "policy_check_results": [],
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 2
+    assert "ORD-1" in str(out.get("final_response") or "")
+    assert "shipped" in str(out.get("final_response") or "").lower()
+
+
+def test_policy_check_without_policy_rules_evaluates_all_runtime_rules() -> None:
+    state = {
+        "todo_list": [
+            {
+                "id": "check_policy_constraints",
+                "type": "policy_check",
+                "policy_phase": "runtime",
+                "on_true": "allowed",
+                "on_false": "blocked",
+            },
+            {"id": "allowed", "type": "llm_response", "message": "allowed"},
+            {"id": "blocked", "type": "llm_response", "message": "blocked"},
+        ],
+        "current_step_index": 0,
+        "context_data": {"order_found": True, "order_status": "processing", "order_age_hours": 1.0},
+        "policy_constraints": {
+            "eligible": True,
+            "reason": "",
+            "default_ineligible_reason": "Not eligible.",
+            "time_limits": {"order_age_hours_max": 24},
+            "eligibility_rules": [
+                {
+                    "id": "order_must_exist",
+                    "field": "order_found",
+                    "op": "eq",
+                    "value": True,
+                    "failure_reason": "Order not found.",
+                    "applies_to": "runtime",
+                },
+                {
+                    "id": "order_not_delivered",
+                    "field": "order_status",
+                    "op": "neq",
+                    "value": "delivered",
+                    "failure_reason": "Delivered orders cannot be cancelled.",
+                    "applies_to": "runtime",
+                },
+            ],
+        },
+        "policy_check_results": [],
+        "assistant_metadata": {},
+    }
+    out = _structured_executor_node(state)
+    assert out["current_step_index"] == 1
+    assert out["context_data"]["policy_eligible"] is True
+    assert isinstance((out.get("policy_constraints") or {}).get("validation_results"), dict)
+
+
 def test_policy_check_step_passes_and_branches_true() -> None:
     state = {
         "todo_list": [
@@ -450,7 +527,6 @@ def test_policy_check_step_passes_and_branches_true() -> None:
                 "id": "check_policy_constraints",
                 "type": "policy_check",
                 "policy_phase": "runtime",
-                "policy_rules": ["must_be_eligible"],
                 "on_true": "allowed",
                 "on_false": "blocked",
             },
@@ -493,7 +569,6 @@ def test_policy_check_step_fails_and_branches_false() -> None:
                 "id": "check_policy_constraints",
                 "type": "policy_check",
                 "policy_phase": "runtime",
-                "policy_rules": ["must_be_eligible"],
                 "on_true": "allowed",
                 "on_false": "blocked",
             },
@@ -522,6 +597,7 @@ def test_policy_check_step_fails_and_branches_false() -> None:
     }
     out = _structured_executor_node(state)
     assert out["current_step_index"] == 2
+    assert out["outcome_status"] == "policy_ineligible"
     assert out["context_data"]["policy_eligible"] is False
     assert out["context_data"]["policy_ineligibility_reason"] == "Policy denied request."
     checks = out.get("policy_check_results") or []

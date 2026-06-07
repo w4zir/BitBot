@@ -129,6 +129,7 @@ testing/
     │   └── gaps.yaml                # known coverage gaps (paired with coverage checker)
     ├── personas/
     │   └── personas.yaml            # Persona definitions
+    ├── metadata_template.json       # Canonical debug-trace artifact schema reference
     ├── test_*.py                    # unit tests for runner, persona, evaluators, persistence (co-located)
     └── results/                     # Generated run artifacts (typically gitignored)
         └── run_<timestamp>.json
@@ -801,16 +802,30 @@ python -m testing.simulator.runner --suite testing/simulator/suites/regression.y
 
 ## 9. Run Artifact Schema
 
-Every run writes a JSON artifact to `testing/simulator/results/run_<timestamp>.json`.
+Every run writes a curated debug artifact to `testing/simulator/results/run_<timestamp>.json`.
+The canonical schema reference is `testing/simulator/metadata_template.json` (`schema_version: "1.0"`, `artifact_type: "agent_debug_trace"`).
 
 ```json
 {
+  "schema_version": "1.0",
+  "artifact_type": "agent_debug_trace",
   "run_id": "regression_sprint_42",
   "suite": "testing/simulator/suites/regression.yaml",
   "started_at": "2026-04-25T10:00:00Z",
   "completed_at": "2026-04-25T10:12:34Z",
-  "db_snapshot": "live",
-  "agent_url": "http://localhost:8000/classify",
+  "run_loop_status": "completed",
+  "run_error": null,
+  "environment": {
+    "agent_url": "http://localhost:8000/classify",
+    "db_snapshot": "live",
+    "git_sha": "optional_git_commit_sha",
+    "config": {
+      "max_turns": 6,
+      "timeout_seconds": 120,
+      "model_provider": "ollama",
+      "model": "llama3.2"
+    }
+  },
   "coverage": {
     "total_intents": 18,
     "covered": 14,
@@ -821,12 +836,15 @@ Every run writes a JSON artifact to `testing/simulator/results/run_<timestamp>.j
     "total_scenarios": 12,
     "passed": 10,
     "failed": 2,
+    "skipped": 0,
     "structural_failures": 1,
+    "policy_failures": 0,
     "llm_judge_failures": 1,
+    "scenarios_skipped": 0,
     "regressions": 0
   },
   "per_category": {
-    "order_cancellation": {
+    "order": {
       "resolution_rate": 0.80,
       "escalation_rate": 0.10,
       "avg_turns": 3.2,
@@ -835,35 +853,74 @@ Every run writes a JSON artifact to `testing/simulator/results/run_<timestamp>.j
   },
   "scenarios": [
     {
+      "run_scenario_id": "cancel_order_easy#1",
+      "scenario_no": 1,
       "seed_id": "cancel_order_easy",
-      "entity_id": "order_9821",
+      "entity_id": 9821,
+      "session_id": "sess_abc",
       "persona_id": "polite_first_timer",
-      "turns": 2,
-      "final_outcome_status": "resolved",
+      "category": "order",
+      "intent": "cancel_order",
       "expected_outcome": "resolved",
-      "structural": {"passed": true, "checks": {...}},
-      "policy": {"passed": true, "checks": {...}},
-      "llm_judge": {
-        "passed": true,
-        "scores": {"tone": 5, "completeness": 4, "groundedness": 5, "resolution_clarity": 5}
+      "final_outcome_status": "needs_more_data",
+      "outcome_status_reason": "Expected outcome 'resolved' but got 'needs_more_data'.",
+      "terminated_by": "max_turns",
+      "entity_snapshot": {"entity_type": "order", "order_id": 9821},
+      "procedure_snapshot": {"procedure_id": "order/cancel_order"},
+      "policy_snapshot": {"policy_path": "order/cancel_order.yaml", "policy_schema_version": "1.0"},
+      "evaluation": {
+        "structural": {"passed": false, "checks": {}, "failures": []},
+        "policy": {"passed": true, "checks": {}, "failures": []},
+        "llm_judge": null,
+        "regression": null
       },
-      "regression": {"passed": true, "deltas": {}},
+      "metrics": {"turns": 2, "total_latency_ms": 3640, "total_tokens_used": 120},
       "trace": [
         {
-          "turn": 1,
-          "user": "Hi I need to cancel my order #9821",
-          "agent": "...",
+          "turn_number": 1,
+          "request_started_at": "2026-04-25T10:00:01Z",
+          "response_received_at": "2026-04-25T10:00:03Z",
+          "latency_ms": 1820,
+          "user_message": "Hi I need to cancel my order #9821",
+          "agent_response": "...",
           "outcome_status": "needs_more_data",
-          "procedure_id": "cancel_order_before_delivery",
-          "validation_missing": [],
-          "eligibility_ok": true,
-          "latency_ms": 1820
+          "category": "order",
+          "intent": "cancel_order",
+          "procedure_id": "order/cancel_order",
+          "request_payload": {"text": "...", "full_flow": true, "session_id": null},
+          "response_payload": {"assistant_reply": "...", "assistant_metadata": {}},
+          "assistant_metadata": {
+            "validation_missing": [],
+            "eligibility_ok": true
+          },
+          "agent_state": {"stage": "validate_required"},
+          "policy_constraints": {},
+          "policy_check_results": [],
+          "token_usage": {"input_tokens": 40, "output_tokens": 20, "total_tokens": 60},
+          "nodes": {
+            "classify_intent": {
+              "steps": [
+                {
+                  "step_no": 1,
+                  "step_id": "classify_intent_1",
+                  "step_type": "llm_call",
+                  "details": {},
+                  "llm_call": {"provider": "ollama", "model": "gemma4:e4b", "parsed_output": {}, "attempts": 1}
+                }
+              ]
+            }
+          }
         }
       ]
     }
+  ],
+  "skipped_scenarios": [
+    {"run_scenario_id": "seed_x#2", "seed_id": "seed_x", "reason": "persona generation failed"}
   ]
 }
 ```
+
+Trace entries intentionally omit full `/classify` response dumps and bulky LLM prompt/raw-response payloads. Postgres persistence (`--persist-db`) may still store the fuller in-memory trace separately.
 
 ---
 

@@ -1,43 +1,41 @@
-schema_version: '1.0'
+schema_version: "1.0"
 category: order
 intent: cancel_order
 policy_doc_names:
-- 07_order_cancellation_policy
+  - 07_order_cancellation_policy
 source_query: order cancel_order policy
 auto_resolvable: true
 requires_evidence: true
-default_ineligible_reason: The order status is currently shipped, delivered, or already
-  cancelled.
-time_limits: {}
+default_ineligible_reason: The order status is currently shipped, delivered, or already cancelled.
+time_limits:
+  order_age_hours_max: 24
 eligibility_rules:
-- id: CXL_001
-  description: The order must be in a status allowing cancellation, meaning it cannot
-    be shipped, delivered, or already cancelled.
-  field: order_status
-  op: nin
-  value:
-  - shipped
-  - delivered
-  - cancelled
-  value_from: null
-  failure_reason: Order is in a terminal status and cannot be cancelled.
-  applies_to: order
-required_conditions:
-- id: CXL_002
-  description: Check if payment was successfully captured or already processed to
-    determine if a refund needs to be generated upon cancellation.
-  field: payment_status
-  op: exists
-  value: null
-  value_from: null
-  failure_reason: ''
-  applies_to: order_details
+  - id: order_must_exist
+    description: Order must exist before cancellation workflow.
+    field: order_found
+    op: eq
+    value: true
+    failure_reason: We could not find that order in our system.
+    applies_to: runtime
+  - id: order_not_delivered
+    description: Delivered orders cannot be cancelled.
+    field: order_status
+    op: neq
+    value: delivered
+    failure_reason: Delivered orders cannot be cancelled.
+    applies_to: runtime
+  - id: order_within_time_limit
+    description: Cancellation must be within the allowed time window.
+    field: order_age_hours
+    op: lte
+    value_from: policy.time_limits.order_age_hours_max
+    failure_reason: Cancellation window has expired.
+    applies_to: runtime
+required_conditions: []
 escalation_conditions: []
 response_guidance:
-- If the order meets all eligibility criteria, initiate the cancellation request.
-- After cancellation, check the 'payment_status'. If payment was already made, immediately
-  trigger the refund process.
-- If the order fails eligibility rules, inform the customer clearly stating why the
-  cancellation cannot be processed.
+  - If the order meets all eligibility criteria, initiate the cancellation request.
+  - If the order fails eligibility rules, inform the customer clearly stating why the cancellation cannot be processed.
 metadata:
   policy_focus: Order Status & Refund Handling
+  artifact: order/cancel_order

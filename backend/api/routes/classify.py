@@ -246,6 +246,18 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
             "outcome_status": str(graph_out.get("outcome_status") or ""),
             "validation_wait_count": int(graph_out.get("validation_wait_count") or 0),
             "validation_wait_limit": int(graph_out.get("validation_wait_limit") or 0),
+            "context_data": graph_out.get("context_data")
+            if isinstance(graph_out.get("context_data"), dict)
+            else {},
+            "policy_constraints": graph_out.get("policy_constraints")
+            if isinstance(graph_out.get("policy_constraints"), dict)
+            else {},
+            "output_validation": graph_out.get("output_validation")
+            if isinstance(graph_out.get("output_validation"), dict)
+            else {},
+            "context_summary": graph_out.get("context_summary")
+            if isinstance(graph_out.get("context_summary"), dict)
+            else {},
             **(meta if isinstance(meta, dict) else {}),
         }
         if val_ok is not None:

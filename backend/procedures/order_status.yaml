@@ -17,19 +17,6 @@ steps:
   - id: check_policy_constraints
     type: policy_check
     policy_phase: runtime
-    policy_rules:
-      - order_must_exist
-    on_true: branch_lookup
-    on_false: order_not_found
-  - id: branch_lookup
-    type: logic_gate
-    condition:
-      {
-        op: eq,
-        field: order_found,
-        value: true,
-        failure_reason: We could not find that order in our system.
-      }
     on_true: share_status
     on_false: order_not_found
   - id: share_status
@@ -47,4 +34,4 @@ expected_outcomes:
     field: order_found
     op: exists
     failure_reason: Missing order lookup outcome.
-fallback_response: I can check your order status once you share your order number.
+fallback_response: I am facing technical issue in getting order status for you.

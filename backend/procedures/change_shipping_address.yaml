@@ -19,36 +19,6 @@ steps:
   - id: check_policy_constraints
     type: policy_check
     policy_phase: runtime
-    policy_rules:
-      - order_must_exist
-      - order_not_delivered
-    on_true: branch_order_found
-    on_false: already_delivered
-  - id: branch_order_found
-    type: logic_gate
-    condition:
-      {
-        op: eq,
-        field: order_found,
-        value: true,
-        failure_reason: We could not find that order in our system.
-      }
-    on_true: branch_order_delivered
-    on_false: order_not_found
-  - id: order_not_found
-    type: llm_response
-    message: >
-      The order was not found. Tell the customer we could not find this order in our system and ask
-      them to validate the order ID and try again.
-  - id: branch_order_delivered
-    type: logic_gate
-    condition:
-      {
-        op: neq,
-        field: order_status,
-        value: delivered,
-        failure_reason: The order is already delivered, so the shipping address cannot be changed.
-      }
     on_true: apply_shipping_address_change
     on_false: already_delivered
   - id: apply_shipping_address_change

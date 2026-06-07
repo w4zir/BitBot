@@ -161,7 +161,12 @@ def test_classify_full_flow_refund_path_is_deterministic(
     monkeypatch.setattr("backend.api.routes.classify.get_session", lambda sid: {"id": sid})
     monkeypatch.setattr(
         "backend.agent.issue_graph.get_order_status",
-        lambda order_id: {"order_id": order_id, "status": "shipped", "total_amount": 120.0},
+        lambda order_id: {
+            "order_id": order_id,
+            "status": "shipped",
+            "total_amount": 120.0,
+            "order_date": "2026-06-05T12:00:00+00:00",
+        },
     )
     monkeypatch.setattr(
         "backend.agent.issue_graph.get_refund_context",
@@ -476,7 +481,8 @@ def test_classify_persists_compact_assistant_metadata(
     assert "stage_metadata" not in md
     assert isinstance(md.get("agent_trace"), dict)
     assert md.get("agent_trace")
-    assert "policy_constraints" not in md
+    assert isinstance(md.get("policy_constraints"), dict)
+    assert isinstance(md.get("context_data"), dict)
     assert "failure_reasons" in md
     assert isinstance(md["failure_reasons"], list)
 

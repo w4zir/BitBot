@@ -23,31 +23,6 @@ steps:
   - id: check_policy_constraints
     type: policy_check
     policy_phase: runtime
-    policy_rules:
-      - order_must_exist
-      - refund_window_open
-    on_true: branch_order_found
-    on_false: refund_not_created
-  - id: branch_order_found
-    type: logic_gate
-    condition:
-      {
-        op: eq,
-        field: order_found,
-        value: true,
-        failure_reason: We could not find that order in our system.
-      }
-    on_true: branch_refund_window_open
-    on_false: order_not_found
-  - id: order_not_found
-    type: llm_response
-    message: >
-      The order was not found (order_found is false). Tell the customer we could not find this
-      order in our system, and ask them to validate their order ID and try again.
-  - id: branch_refund_window_open
-    type: logic_gate
-    condition:
-      {op: lte, field: order_age_hours, value_from: policy.time_limits.order_age_hours_max, failure_reason: Refund window has expired.}
     on_true: assess_eligibility_and_refund
     on_false: refund_not_created
   - id: assess_eligibility_and_refund

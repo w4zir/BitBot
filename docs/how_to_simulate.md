@@ -151,14 +151,20 @@ python -m testing.simulator.runner --suite testing/simulator/suites/regression.y
 
 ## Artifacts and persistence
 
-Every run writes:
+Every run writes a curated debug artifact:
 
 - `testing/simulator/results/run_<timestamp>.json`
+- schema reference: `testing/simulator/metadata_template.json`
+
+Top-level fields include `schema_version`, `artifact_type`, `environment` (agent URL, DB snapshot, run config), `coverage`, `summary`, `per_category`, `scenarios`, and `skipped_scenarios`.
+
+Each scenario includes `session_id`, `terminated_by`, `outcome_status_reason`, `entity_snapshot`, optional `procedure_snapshot` / `policy_snapshot`, nested `evaluation`, `metrics`, and a per-turn `trace[]` with only debugging-useful fields (no full LLM prompts or raw model responses).
 
 Console output includes:
 
 - category/intent coverage table
 - per-scenario PASS/FAIL lines
+- per-turn curated agent trace JSON (same shape as artifact `trace[]`)
 - artifact path
 
 When DB persistence is enabled (default behavior, or `--persist-db`), the simulator writes:
@@ -192,14 +198,14 @@ docker compose run --rm simulator
 
 Use this sequence:
 
-1. Check artifact `summary` (`structural_failures`, `policy_failures`, `llm_judge_failures`).
-2. Open failing `scenarios[]` entries (`seed_id`, `expected_outcome`, `final_outcome_status`).
+1. Check artifact `summary` (`structural_failures`, `policy_failures`, `llm_judge_failures`, `skipped`).
+2. Open failing `scenarios[]` entries (`seed_id`, `expected_outcome`, `final_outcome_status`, `outcome_status_reason`, `evaluation`).
 3. Inspect `trace[]` turn-by-turn for:
-   - `outcome_status`, `procedure_id`, `validation_missing`
-   - `eligibility_ok`, `policy_constraints`, `context_data`
-   - `policy_check_results` and policy artifact metadata (`policy_constraints_path`, `policy_schema_version`)
-   - `agent_state`, `stage_metadata`, `output_validation`, `context_summary`
-4. Validate hydration assumptions (`entity_id` and selected entity fields) against seed `db_filter`.
+   - `outcome_status`, `procedure_id`, `latency_ms`, `assistant_metadata.validation_missing`
+   - `assistant_metadata.eligibility_ok`, `policy_constraints`, `context_data`
+   - `policy_check_results` and scenario-level `policy_snapshot`
+   - `agent_state`, `output_validation`, `context_summary`, pruned `nodes` (step details + parsed LLM output, no prompt dumps)
+4. Validate hydration assumptions (`entity_id`, `entity_snapshot`) against seed `db_filter`.
 
 ## Common failure patterns
 

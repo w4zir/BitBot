@@ -195,6 +195,12 @@ def main() -> int:
         started_at=started_at,
         run_error=run_error,
         run_loop_status=loop_status,
+        environment_config={
+            "max_turns": suite.defaults.max_turns,
+            "timeout_seconds": driver.timeout_seconds,
+            "model_provider": suite.defaults.user_llm_provider,
+            "model": suite.defaults.user_llm_model,
+        },
     )
     print("")
     print(
